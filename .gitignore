@@ -55,3 +55,4 @@ apps/desktop/dist-app/
 # 本地推广草稿与素材（docs/promo/README.md 自述不入公共 repo）
 docs/promo/
 docs/images/devto-cover.*
+.opencode/
