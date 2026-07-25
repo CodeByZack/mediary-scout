@@ -1,0 +1,226 @@
+# Scout Connect 原子化 .env 操作设计
+
+## 问题
+当前 agent 直接修改 .env，风险：
+1. 操作失败时用户环境被破坏
+2. 没有自动回滚机制
+3. 用户无法撤销
+
+## 解决方案：原子化操作 + 自动验证 + 一键回滚
+
+### 流程
+
+**第 1 步：完整备份**
+```bash
+# 加 PID 后缀：同一秒内跑两次（或并发跑）会撞名，把上一份备份覆盖掉，
+# 那就违背了「所有 .env.bak-* 都保留」的承诺。
+BACKUP_FILE=".env.bak-$(date +%Y%m%d-%H%M%S)-$$"
+# 极端情况下仍撞名就别覆盖，直接换一个
+while [ -e "$BACKUP_FILE" ]; do
+  BACKUP_FILE="$BACKUP_FILE-1"
+done
+# 必须检查 cp 退出码：磁盘满/IO 错误会写出截断文件，光看"文件存在"会漏
+if ! cp .env "$BACKUP_FILE"; then
+  echo "❌ 备份失败（cp 返回非零），停止"
+  exit 1
+fi
+# 验证本次备份是否成功（不依赖旧备份）
+if [ ! -f "$BACKUP_FILE" ]; then
+  echo "❌ 备份失败，停止"
+  exit 1
+fi
+# 比对字节数，确认不是被截断的半个文件——回滚到截断的 .env 等于毁掉配置
+if [ "$(wc -c < .env)" != "$(wc -c < "$BACKUP_FILE")" ]; then
+  echo "❌ 备份不完整（大小与原文件不一致），停止"
+  rm -f "$BACKUP_FILE"
+  exit 1
+fi
+echo "✓ 备份到 $BACKUP_FILE"
+```
+
+**第 2 步：原子化写入（不是 sed -i）**
+```bash
+# 用 cp -p 建立 .env.new，直接继承原文件权限/属主。
+# 不要用 stat 解析权限位：GNU coreutils 的 -f 是"文件系统信息"，
+# `stat -f %Lp` 会打印文件系统垃圾且退出码为 0，导致 `|| stat -c %a` 兜底
+# 永不触发，chmod 拿到垃圾值失败后被 `|| true` 吞掉，
+# 结果 600 的 .env 静默变成 644——token 对同机其他用户可读。
+# 必须检查 cp -p 退出码：失败就意味着权限没继承，不能硬着头皮往下走。
+if ! cp -p .env .env.new; then
+  echo "❌ 创建 .env.new 失败（cp -p 非零），已中止，.env 未被改动"
+  rm -f .env.new
+  exit 1
+fi
+# docker compose 认这些写法都算 TUNNEL_TOKEN：前导空格、= 两侧空格、export 前缀。
+# 只匹配 '^TUNNEL_TOKEN=' 会漏掉它们，留下一条含旧密钥的重复行，
+# 而且下面的行数自检也会跟着算错。三处（过滤/计数/校验）必须用同一个正则。
+TOKEN_RE='^[[:space:]]*(export[[:space:]]+)?TUNNEL_TOKEN[[:space:]]*='
+# 读取原 .env，保留所有非 TUNNEL_TOKEN 的行（'>' 截断写入，不改动已有权限）
+# grep 退出码：0=有匹配行，1=没有保留行（.env 只有 TUNNEL_TOKEN，合法），
+# >=2 才是真错误。必须区分——若 grep 报错，'>' 已把 .env.new 截断成空，
+# 继续 mv 会用「只剩 token」的文件覆盖 .env，静默清空 API_KEY/DB 等全部配置。
+grep -Ev "$TOKEN_RE" .env > .env.new
+GREP_RC=$?
+if [ "$GREP_RC" -ge 2 ]; then
+  echo "❌ 读取 .env 失败（grep 退出码 ${GREP_RC}），已中止，.env 未被改动"
+  rm -f .env.new
+  exit 1
+fi
+# 追加新 token。用「带引号的 heredoc」承载 token：内容完全按字面处理，
+# 不做任何展开。绝不要写成 printf ... '<token>'——token 里只要有一个单引号
+# 就会闭合引号，后面的内容会被 shell 当命令执行（这是真实存在过的注入）。
+TOKEN_VALUE=$(cat <<'MEDIARY_TUNNEL_TOKEN_EOF'
+新token
+MEDIARY_TUNNEL_TOKEN_EOF
+)
+if ! printf 'TUNNEL_TOKEN=%s\n' "$TOKEN_VALUE" >> .env.new; then
+  echo "❌ 写入 token 失败，已中止，.env 未被改动"
+  rm -f .env.new
+  exit 1
+fi
+# 替换前自检：非 token 行数必须与原文件一致，且新文件含 TUNNEL_TOKEN
+OLD_KEPT=$(grep -Ecv "$TOKEN_RE" .env || true)
+NEW_KEPT=$(grep -Ecv "$TOKEN_RE" .env.new || true)
+if [ "$OLD_KEPT" != "$NEW_KEPT" ]; then
+  echo "❌ 新文件丢了配置行（原 $OLD_KEPT 行 → 新 $NEW_KEPT 行），已中止"
+  rm -f .env.new
+  exit 1
+fi
+if ! grep -Eq "$TOKEN_RE" .env.new; then
+  echo "❌ 新文件里没有 TUNNEL_TOKEN，已中止"
+  rm -f .env.new
+  exit 1
+fi
+# 原子替换（mv 也要查退出码：只读文件系统/权限问题会让 token 根本没写进去，
+# 却继续往下验证，最后得出「已写入」的错误结论）
+if ! mv .env.new .env; then
+  echo "❌ 替换 .env 失败（mv 非零），已中止，.env 未被改动"
+  rm -f .env.new
+  exit 1
+fi
+# 真的比对权限：备份是替换前的原样，两者权限必须一致。
+# 只 echo 不比对会让保证听起来比实际检查更强。
+ENV_MODE=$(ls -l .env | cut -c1-10)
+BAK_MODE=$(ls -l "$BACKUP_FILE" | cut -c1-10)
+if [ "$ENV_MODE" != "$BAK_MODE" ]; then
+  echo "⚠️ .env 权限($ENV_MODE) 与备份($BAK_MODE) 不一致，请报告这一行"
+else
+  echo "✓ .env 权限保持 $ENV_MODE"
+fi
+```
+
+**第 3 步：立刻验证**
+```bash
+# 必须先 stop + rm -f 再 up -d：
+# 1) up -d 可能复用已有容器，不会重读新的 TUNNEL_TOKEN
+# 2) 旧容器的日志里已有 Registered 行，会让坏 token 假装验证通过
+docker compose --profile tunnel stop cloudflared 2>/dev/null || true
+docker compose --profile tunnel rm -f cloudflared 2>/dev/null || true
+docker compose --profile tunnel up -d --force-recreate cloudflared
+# 等待最多 60 秒，每 5 秒检查一次（首次拉镜像可能较慢）
+# cloudflared 正常会建立 4 条连接（connIndex=0..3），健康标准是 4 条
+MAX_WAIT=60
+ELAPSED=0
+REGISTERED=0
+while [ $ELAPSED -lt $MAX_WAIT ]; do
+  sleep 5
+  ELAPSED=$((ELAPSED + 5))
+  # grep -c 无匹配时退出码为 1，用 || true 防止 set -e 提前中断
+  REGISTERED=$(docker compose --profile tunnel logs cloudflared --tail 50 2>/dev/null | grep -c "Registered tunnel connection" || true)
+  if [ "$REGISTERED" -ge 4 ]; then
+    echo "✅ Tunnel 连接成功（Registered ×${REGISTERED}）"
+    break
+  fi
+done
+
+# 只有 0 条才算失败回滚：1~3 条说明 token 有效、隧道已在转发流量，
+# 回滚一个能用的隧道比连接数不满更糟
+if [ "$REGISTERED" -eq 0 ]; then
+  echo "❌ 验证失败，自动回滚"
+  # 第 4 步：自动回滚
+  # 优先用本次运行创建的备份，避免并发/其他备份把 ls -t 带偏
+  if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
+    RESTORE_FROM="$BACKUP_FILE"
+  else
+    RESTORE_FROM=$(ls -t .env.bak-* 2>/dev/null | head -1)
+  fi
+  if [ -z "$RESTORE_FROM" ]; then
+    echo "❌ 找不到备份文件"
+    exit 1
+  fi
+  # 回滚本身也要校验，否则「回滚完 .env 还是坏的」而且没人知道
+  if ! cp "$RESTORE_FROM" .env; then
+    echo "❌ 回滚失败（cp 非零）！请手动执行: cp $RESTORE_FROM .env"
+    exit 1
+  fi
+  if [ "$(wc -c < "$RESTORE_FROM")" != "$(wc -c < .env)" ]; then
+    echo "❌ 回滚不完整！请手动执行: cp $RESTORE_FROM .env"
+    exit 1
+  fi
+  echo "✓ 已从 $RESTORE_FROM 恢复"
+  # 必须用 stop + rm + up -d（重读 .env），down 不支持指定服务名
+  docker compose --profile tunnel stop cloudflared 2>/dev/null || true
+  docker compose --profile tunnel rm -f cloudflared 2>/dev/null || true
+  docker compose --profile tunnel up -d --force-recreate cloudflared
+  # 回滚后必须再验一次：容器可能仍然起不来，这时候说「已恢复」是骗人的
+  RB_ELAPSED=0
+  RB_REGISTERED=0
+  while [ $RB_ELAPSED -lt 30 ]; do
+    sleep 5
+    RB_ELAPSED=$((RB_ELAPSED + 5))
+    RB_REGISTERED=$(docker compose --profile tunnel logs cloudflared --tail 50 2>/dev/null | grep -c "Registered tunnel connection" || true)
+    if [ "$RB_REGISTERED" -ge 1 ]; then break; fi
+  done
+  if [ "$RB_REGISTERED" -ge 1 ]; then
+    echo "✅ 已回滚，服务恢复到配置前状态（Registered ×${RB_REGISTERED}）"
+  else
+    echo "❌ 已还原 .env，但 cloudflared 仍未连上，请把日志发给支持"
+    docker compose --profile tunnel logs cloudflared --tail 30 2>/dev/null || true
+  fi
+  exit 1
+fi
+
+if [ "$REGISTERED" -lt 4 ]; then
+  echo "⚠️ 只建立了 $REGISTERED/4 条连接（隧道可用但冗余不足），请报告这个数字"
+fi
+```
+
+## 关键改进
+
+1. **原子操作** — mv 是原子的，不会"写了一半"
+2. **备份可信** — 检查 cp 退出码 + 字节数，杜绝回滚到截断文件；文件名带 PID
+   防同秒撞名覆盖
+3. **token 不可注入** — 用带引号的 heredoc 传 token，绝不写进单引号参数里
+   （token 含单引号会闭合引号并执行后面的内容）
+4. **写入不丢配置** — 区分 grep 退出码 1（合法）与 >=2（错误），替换前比对
+   非 token 行数，并检查 cp -p / printf / mv 的退出码。否则 grep 出错时 '>'
+   已清空临时文件，mv 会把 .env 变成「只剩 token」
+5. **旧 token 一定清干净** — compose 也认 ` TUNNEL_TOKEN = x` 和 `export TUNNEL_TOKEN=x`，
+   过滤/计数/校验统一用 `$TOKEN_RE`，否则会残留一行旧密钥
+6. **回滚也校验** — 恢复后比对字节数，并重新确认 Registered 才敢说「已恢复」
+7. **权限不外泄** — 用 `cp -p` 继承权限，绝不用 `stat` 解析（GNU 的 `-f` 语义不同，
+   会让含 token 的 600 文件静默变 644）
+8. **强制验证** — 写完必须检查 Registered，健康标准 4 条
+9. **容器强制重建** — 先 stop + rm -f 再 `up -d --force-recreate`，
+   否则复用旧容器会读不到新 token，且旧日志的 Registered 行会让坏 token 假装通过
+10. **自动回滚** — 验证失败立刻恢复，优先用本次运行的备份而非 `ls -t`
+11. **用户永远有备份** — 所有 .env.bak-* 文件保留
+
+## 用户体验
+
+### 成功
+```
+✓ 备份 → .env.bak-20260725-105030
+✓ 写入新 token
+✓ 验证：Registered ×4
+→ 配置成功！
+```
+
+### 失败（自动恢复）
+```
+✓ 备份 → .env.bak-20260725-105030
+✓ 写入新 token
+✗ 验证：无 Registered
+→ 自动回滚
+✓ 服务已恢复
+```
