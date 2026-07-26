@@ -2,9 +2,11 @@
 
 Invite-only remote access for self-hosted Mediary Scout instances. The control
 plane provisions, per invitee, a Cloudflare Tunnel + public hostname
-(`<slug>.mediaryconnect.app`) + Cloudflare Access email-OTP gate, and hands the
-home side a one-time `TUNNEL_TOKEN`. Content and credentials never leave the
-user's own machines — this worker only brokers the tunnel/dns/access setup.
+(`<slug>.mediaryconnect.app`), and hands the home side a one-time
+`TUNNEL_TOKEN`. The entry gate is the app's own access password, set in the
+browser on first open (remote requests require login afterwards; LAN stays
+open). Content and credentials never leave the user's own machines — this
+worker only brokers the tunnel/dns setup.
 
 Deployed at `https://mediaryconnect.app` (custom domain).
 
@@ -14,17 +16,21 @@ Deployed at `https://mediaryconnect.app` (custom domain).
 admin ──► mediaryconnect.app (this worker)
             ├─ GET  /            intro
             ├─ GET  /admin       admin page (bearer token in sessionStorage)
+            ├─ GET  /api/admin/invites                     list invites
             ├─ POST /api/admin/invites                     create invite
-            ├─ POST /api/admin/invites/:id/provision       tunnel+ingress+access+dns
-            ├─ POST /api/admin/endpoints/:id/revoke        delete all three
+            ├─ POST /api/admin/invites/:id/provision       tunnel+ingress+dns
+            ├─ GET  /api/admin/endpoints                   list endpoints (public
+            │                                              shape, incl. last_seen_at)
+            ├─ POST /api/admin/endpoints/:id/revoke        delete dns+tunnel
+            │                                              (+Access app, legacy rows)
             ├─ GET  /i/:code     invitee page (state machine, never pre-burns)
-            └─ POST /api/i/:code/reveal                    one-time token reveal
+            ├─ POST /api/i/:code/reveal                    one-time token reveal
+            └─ POST /api/instance/status                   heartbeat (see below)
                  │
                  ▼ Cloudflare API
             tunnel (scout-<slug>, config_src=cloudflare)
             ingress → http://web:3000 (fixed) + catch-all 404
             DNS CNAME <slug> → <tunnel-id>.cfargotunnel.com
-            Access self_hosted app, email allow policy (OTP)
                  │
                  ▼ invitee home
             docker compose --profile tunnel up -d   (TUNNEL_TOKEN in .env)
@@ -51,6 +57,16 @@ Ranking counts every row in the batch regardless of `waitlist.status`. Only
 `'pending'` exists today and nothing reads the column; if that changes, see the
 TRIPWIRE tests in `src/schema.test.ts` and `src/db.test.ts`.
 
+### Instance heartbeat (connector-token auth)
+
+`POST /api/instance/status` — the home instance's liveness beat.
+`Authorization: Bearer <connector token>` (the same `TUNNEL_TOKEN` handed out
+at provision/reveal — NOT the admin token). The token's sha256 must match an
+`active` endpoint; on success the worker stamps `endpoints.last_seen_at`
+(surfaced on `GET /api/admin/endpoints` and the admin page's 最近心跳 column)
+and returns `204 No Content`. Unknown or revoked token → `401`. The body is
+never read, so it needs no size cap.
+
 Token secrecy: the connector token is returned to the caller exactly once (at
 provision to the admin, or at `/api/i/:code/reveal` to the invitee). D1 stores
 AES-GCM ciphertext (`TOKEN_WRAP_KEY`) until the first reveal, then only a
@@ -61,7 +77,7 @@ sha256. After `token_shown_at` is set, the plaintext is unrecoverable.
 | Name | What |
 | --- | --- |
 | `ADMIN_TOKEN` | Bearer for all `/api/admin/*` + `/admin` page JS |
-| `CF_API_TOKEN` | Cloudflare API token — Tunnel:Edit, Access Apps & Policies:Edit (account), DNS:Edit (mediaryconnect.app zone only) |
+| `CF_API_TOKEN` | Cloudflare API token — Tunnel:Edit, Access Apps & Policies:Edit (account), DNS:Edit (mediaryconnect.app zone only). The Access scope is still required WHILE legacy rows with Access apps exist: revoke deletes them. Once no legacy rows remain (`SELECT COUNT(*) FROM endpoints WHERE cf_access_app_id IS NOT NULL` → 0), it can be dropped from the token. |
 | `CF_ACCOUNT_ID` | account holding Zero Trust / tunnels |
 | `CF_ZONE_ID` | mediaryconnect.app zone |
 | `TOKEN_WRAP_KEY` | `openssl rand -hex 32` — AES-256-GCM key for token-at-rest |
@@ -134,10 +150,12 @@ run deploy/secret commands as `env -u CF_API_TOKEN npx wrangler ...`.
    into their home `.env` as `TUNNEL_TOKEN=...`, then
    `docker compose --profile tunnel up -d`. The page offers a
    「复制给 Agent」 prompt that does this for them.
-4. Their `https://<slug>.mediaryconnect.app` is live behind Access email OTP.
+4. Their `https://<slug>.mediaryconnect.app` is live, gated by the app's own
+   access password (set-password page on first open).
 
-**Revoke**: admin page → 吊销. Deletes Access app + DNS + tunnel (connections
-closed first; CF error 1022 retried automatically). Idempotent.
+**Revoke**: admin page → 吊销. Deletes DNS + tunnel — plus the Access app for
+legacy rows provisioned before Access was removed (connections closed first;
+CF error 1022 retried automatically). Idempotent.
 
 **Home-side network issues**: if the tunnel won't register or keeps dropping
 on a UDP-restricted network, tell the invitee to add

@@ -211,6 +211,7 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
       hostname: ep.hostname,
       status: ep.status,
       token_shown_at: ep.token_shown_at,
+      last_seen_at: ep.last_seen_at,
       created_at: ep.created_at,
       revoked_at: ep.revoked_at,
       cf_tunnel_id: ep.cf_tunnel_id,
@@ -370,9 +371,28 @@ async function provisionInvite(
   } catch (e) {
     // Domain conflicts (TOCTOU races past the pre-checks above) are client
     // errors, not 500s. Everything else (CF/D1 failures) stays a 500.
+    // The actual race loser dies on the UNIQUE constraint — "UNIQUE
+    // constraint failed: endpoints.slug" (same wording in D1 and the memory
+    // mock) — which contains neither pre-check message, so map it explicitly.
     const msg = e instanceof Error ? e.message : "";
     if (msg.includes("invite not pending") || msg.includes("already in use")) {
       throw new HttpError(409, msg);
+    }
+    // The actual race loser dies on the UNIQUE constraint — same wording in D1
+    // and the memory mock. Translate to user-facing text: echoing the raw
+    // "UNIQUE constraint failed: endpoints.<column>" string would leak internal
+    // schema details to the client (this file's contract is to never leak
+    // internal error text) and make the response brittle across runtimes.
+    // Messages match the pre-check path's format ("…: <value>") so callers see
+    // the same text whether the conflict was caught by the pre-check or the race.
+    if (msg.includes("UNIQUE constraint failed: endpoints.slug")) {
+      throw new HttpError(409, `slug already in use: ${slug}`);
+    }
+    if (msg.includes("UNIQUE constraint failed: endpoints.hostname")) {
+      throw new HttpError(409, `hostname already in use: ${slug}.${deps.rootDomain}`);
+    }
+    if (msg.includes("UNIQUE constraint failed: endpoints.invite_id")) {
+      throw new HttpError(409, "invite already provisioned");
     }
     throw e;
   }

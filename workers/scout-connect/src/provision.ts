@@ -158,13 +158,25 @@ export async function provisionEndpoint(input: {
     // If updateInviteStatus already flipped the invite to `provisioned` before
     // a later write (insertAudit) failed, the invite would be stuck forever
     // (not pending → no re-provision; no endpoint → nothing to revoke). Roll
-    // it back so the admin can retry.
+    // it back so the admin can retry — but ONLY when the surviving endpoint
+    // row is NOT ours. In a same-invite double-provision race (admin
+    // double-clicks 开通) the winner's row has a different endpointId; reverting
+    // the invite would orphan that live endpoint (invitee link shows "waiting"
+    // forever, reveal 409s, re-provision dies on UNIQUE). When the survivor is
+    // OUR OWN row (our deleteEndpoint compensation failed above), roll back
+    // anyway: the row points at CF resources the compensation below is about
+    // to delete, so a provisioned invite would let reveal hand out a token for
+    // a dead tunnel. The phantom row stays visible in the admin endpoints list
+    // and revoke is 404-idempotent.
     try {
-      await db.updateInviteStatus(invite.id, {
-        status: "pending",
-        slug: null,
-        provisioned_at: null,
-      });
+      const surviving = await db.getEndpointByInviteId(invite.id);
+      if (surviving === null || surviving.id === endpointId) {
+        await db.updateInviteStatus(invite.id, {
+          status: "pending",
+          slug: null,
+          provisioned_at: null,
+        });
+      }
     } catch {
       // D1 may be the failing component — nothing more we can do
     }

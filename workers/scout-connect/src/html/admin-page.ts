@@ -47,7 +47,7 @@ h1{font-size:1.3rem}h2{font-size:1.05rem;margin-top:2rem}
 
 <h2>端点列表</h2>
 <table>
-<thead><tr><th>hostname</th><th>状态</th><th>token 显示时间</th><th>创建时间</th><th>吊销时间</th><th>操作</th></tr></thead>
+<thead><tr><th>hostname</th><th>状态</th><th>token 显示时间</th><th>最近心跳</th><th>创建时间</th><th>吊销时间</th><th>操作</th></tr></thead>
 <tbody id="endpoints"></tbody>
 </table>
 
@@ -109,16 +109,27 @@ async function refresh(){
   }).join("");
   for(const b of document.querySelectorAll("[data-provision]")){
     b.onclick=guard(async()=>{
+      // Disable on click: a double-click fires two provisions for the same
+      // invite (the loser dies on UNIQUE endpoints.invite_id server-side).
+      b.disabled=true;
       const input=$("slug-"+b.getAttribute("data-provision"));
       const slug=input?input.value.trim():"";
-      const r=await api("/api/admin/invites/"+b.getAttribute("data-provision")+"/provision",{method:"POST",body:slug?{slug}:{}});
-      showProvision(r);
-      await refresh();
+      try {
+        const r=await api("/api/admin/invites/"+b.getAttribute("data-provision")+"/provision",{method:"POST",body:slug?{slug}:{}});
+        showProvision(r);
+        await refresh();
+      } catch(e) {
+        // Failure leaves the DOM untouched (no refresh), so re-enable for retry —
+        // the success path doesn't need this because refresh() re-renders the
+        // table and the provisioned invite no longer gets a 开通 button at all.
+        b.disabled=false;
+        throw e;
+      }
     });
   }
   $("endpoints").innerHTML=endpoints.map((e)=>{
     const action=e.status==="active"||e.status==="revoke_failed"?'<button data-revoke="'+esc(e.id)+'">吊销</button>':"";
-    return '<tr><td><a href="https://'+esc(e.hostname)+'" target="_blank" rel="noopener">'+esc(e.hostname)+'</a></td><td>'+esc(e.status)+'</td><td>'+esc(e.token_shown_at||"")+'</td><td>'+esc(e.created_at)+'</td><td>'+esc(e.revoked_at||"")+'</td><td>'+action+'</td></tr>';
+    return '<tr><td><a href="https://'+esc(e.hostname)+'" target="_blank" rel="noopener">'+esc(e.hostname)+'</a></td><td>'+esc(e.status)+'</td><td>'+esc(e.token_shown_at||"")+'</td><td>'+esc(e.last_seen_at||"从未报到")+'</td><td>'+esc(e.created_at)+'</td><td>'+esc(e.revoked_at||"")+'</td><td>'+action+'</td></tr>';
   }).join("");
   for(const b of document.querySelectorAll("[data-revoke]")){
     b.onclick=guard(async()=>{

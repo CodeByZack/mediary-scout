@@ -324,6 +324,57 @@ describe("provisionEndpoint", () => {
     expect((await db.getInviteById("inv_2"))?.status).toBe("pending");
   });
 
+  // Same-invite double-provision race (admin double-clicks 开通 — the button
+  // was never disabled): both requests pass the prechecks while the invite is
+  // still pending, both create CF resources, the winner commits, and the loser
+  // dies on `UNIQUE … endpoints.invite_id`. The loser's compensation must NOT
+  // flip the invite back to pending — that would orphan the winner's live
+  // endpoint (invite page shows "waiting" forever, reveal 409s, re-provision
+  // 500s on UNIQUE). The existing race tests above use a DIFFERENT invite;
+  // this one pins the same-invite case.
+  it("same-invite race: loser's compensation leaves the winner's invite provisioned", async () => {
+    const db = createMemoryConnectDb();
+    await db.insertInvite(makePendingInvite());
+    const calls: string[] = [];
+    const deps = makeDeps(db, makeFakeCf(calls));
+
+    // Winner runs to completion.
+    await provisionEndpoint({ inviteId: "inv_1", slug: "alice", deps });
+    expect((await db.getInviteById("inv_1"))?.status).toBe("provisioned");
+
+    // Loser: its precheck reads happened BEFORE the winner committed — model
+    // the race window with stale reads (invite still pending, slug still free).
+    // Everything else goes to the real db, so the INSERT hits the winner's row.
+    const staleDb: ConnectDb = {
+      ...db,
+      async getInviteById(id) {
+        const row = await db.getInviteById(id);
+        return row === null ? null : { ...row, status: "pending" };
+      },
+      async findEndpointBySlugOrHostname() {
+        return null;
+      },
+    };
+    const loserDeps = {
+      ...makeDeps(db, makeFakeCf(calls)),
+      newEndpointId: () => "ep_loser",
+      newAuditId: () => "aud_loser",
+    };
+    await expect(
+      provisionEndpoint({ inviteId: "inv_1", slug: "alice", deps: { ...loserDeps, db: staleDb } }),
+    ).rejects.toThrow(/UNIQUE/i);
+
+    // The winner's state must survive the loser's compensation untouched.
+    const invite = await db.getInviteById("inv_1");
+    expect(invite?.status).toBe("provisioned");
+    expect(invite?.slug).toBe("alice");
+    expect(invite?.provisioned_at).toBe(NOW);
+    expect(await db.getEndpointByInviteId("inv_1")).not.toBeNull();
+    // The loser's own CF resources were still cleaned up.
+    expect(countCalls(calls, "del-dns:")).toBe(1);
+    expect(countCalls(calls, "del-tunnel:")).toBe(1);
+  });
+
   it("D1 failure compensation still throws the original error when cf deletes also fail", async () => {
     const db = createMemoryConnectDb();
     await db.insertInvite(makePendingInvite());
@@ -413,6 +464,45 @@ describe("provisionEndpoint", () => {
     expect(await db.listEndpoints()).toHaveLength(0);
     const audits = await db.listAudits();
     expect(audits.some((a) => a.action === "provision.orphan")).toBe(true);
+  });
+
+  it("insertAudit fails AND deleteEndpoint also fails: invite STILL rolls back (phantom row is revocable)", async () => {
+    // The rollback guard exists to protect the RACE WINNER's row (a different
+    // endpointId). It must not protect OUR OWN attempt's row: when our own
+    // deleteEndpoint compensation fails, the surviving row points at CF
+    // resources the compensation is about to delete — leaving the invite
+    // provisioned would let reveal hand out a token for a dead tunnel.
+    // Rolling the invite back is strictly better: the phantom row stays
+    // visible in the admin endpoints list and revoke is 404-idempotent.
+    const db = createMemoryConnectDb();
+    await db.insertInvite(makePendingInvite());
+    const calls: string[] = [];
+    const deps = makeDeps(db, makeFakeCf(calls));
+
+    const inner = db;
+    const failingDb: ConnectDb = {
+      ...inner,
+      async insertAudit() {
+        throw new Error("d1 audit boom");
+      },
+      async deleteEndpoint() {
+        throw new Error("d1 delete boom");
+      },
+    };
+    await expect(
+      provisionEndpoint({ inviteId: "inv_1", slug: "alice", deps: { ...deps, db: failingDb } }),
+    ).rejects.toThrow(/d1 audit boom/);
+
+    // invite rolled back (NOT stuck provisioned pointing at deleted resources)
+    const invite = await db.getInviteById("inv_1");
+    expect(invite?.status).toBe("pending");
+    expect(invite?.slug).toBeNull();
+    expect(invite?.provisioned_at).toBeNull();
+    // our own phantom row survives (delete failed) — visible, revocable later
+    expect(await db.listEndpoints()).toHaveLength(1);
+    // cf resources still cleaned up
+    expect(countCalls(calls, "del-dns:")).toBe(1);
+    expect(countCalls(calls, "del-tunnel:")).toBe(1);
   });
 
   it("insertAudit failure after invite flip: invite rolled back to pending, endpoint row gone, retry succeeds", async () => {
