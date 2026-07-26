@@ -1,6 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { cache } from "react";
 import {
+  checkLoginAllowed,
+  recordLoginFailure,
+  recordLoginSuccess,
+  normalizeThrottleKey,
+} from "./login-throttle";
+import {
   PanSouResourceProvider,
   createProtectedPan115CookieStorageExecutorFromEnv,
   createBootstrapPan115CookieStorageExecutor,
@@ -189,17 +195,38 @@ export async function registerAccount(username: string, password: string): Promi
   }
 }
 
-/** Authenticate username+password and start a session. */
-export async function loginAccount(username: string, password: string): Promise<AuthOutcome> {
+/** Authenticate username+password and start a session. Throttled against brute force. */
+export async function loginAccount(
+  username: string,
+  password: string,
+  throttleKey?: string,
+): Promise<AuthOutcome> {
+  // 无显式 throttleKey 时（库级调用，无请求上下文）退化为仅按 username。
+  // 不做 toLowerCase()：账号查询是精确匹配，折叠大小写会让不同账号共用一个桶。
+  // 一律过 normalizeThrottleKey()——显式传入的 key 也必须有界，否则调用方
+  // 传超长键就能撑大内存。
+  const key = normalizeThrottleKey(throttleKey ?? username);
+  const now = Date.now();
+  const verdict = checkLoginAllowed(key, now);
+  if (!verdict.allowed) {
+    return { ok: false, error: `尝试过于频繁，请 ${verdict.retryAfterSec} 秒后再试。` };
+  }
   const account = await getWorkflowRepository().getAccountByUsername(username.trim());
-  // Verify even when the account is missing-ish to avoid trivial username probing
-  // (the empty-hash default account has no password and can't be logged into).
-  const hash = account?.passwordHash ?? "";
-  const valid = hash.length > 0 && (await verifyPassword(password, hash));
-  if (!account || !valid) {
+  // Always verify to avoid timing oracle. Missing accounts get a dummy scrypt hash that will fail.
+  // (The empty-hash default account has no password and can't be logged into.)
+  const DUMMY_HASH = "scrypt:a2448ef076990b889ef0540720bccce2:4fdc41afebb4560f4a638b4225d8325904894d18d2df1c7a95c50a65c141b926dc252e99b63e681e15e2d6e008acc845b02c9a2fc99a4888749226ab262c6978";
+  const hash = account?.passwordHash || DUMMY_HASH;
+  const valid = await verifyPassword(password, hash);
+  if (!account || !valid || account.passwordHash.length === 0) {
+    recordLoginFailure(key, now);
     return { ok: false, error: "用户名或密码不正确。" };
   }
-  return { ok: true, accountId: account.id, signedCookie: await createLoginSession(account.id) };
+  // 先建 session 再清限流桶：建 session 可能抛（DB 故障、取密钥失败），
+  // 那种情况下这次登录并未成功，桶必须保留，否则服务端间歇故障期间
+  // 反复尝试就能一直重置退避。
+  const signedCookie = await createLoginSession(account.id);
+  recordLoginSuccess(key);
+  return { ok: true, accountId: account.id, signedCookie };
 }
 
 /** Destroy the session behind a signed cookie (logout). Best-effort. */
