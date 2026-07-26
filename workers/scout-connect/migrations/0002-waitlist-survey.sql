@@ -1,0 +1,42 @@
+-- Migration 0002 — add waitlist.survey_json for the optional post-signup
+-- survey served by GET /beta and stored by POST /waitlist/survey.
+--
+-- ⚠️ RUN THIS BEFORE DEPLOYING the Worker version that reads/writes
+-- survey_json. As a safety net the code degrades in the wrong order —
+-- insertWaitlist falls back to the legacy column list, and the survey route
+-- answers 503 — but degraded means exactly that: signups land WITHOUT the
+-- survey column (their later survey submit fails) until this migration runs.
+-- Correct order is always: migrate first, deploy second.
+--
+-- How to run:
+--   cd workers/scout-connect
+--   npx wrangler d1 execute scout-connect --local \
+--     --file=./migrations/0002-waitlist-survey.sql
+--   npx wrangler d1 execute scout-connect --remote \
+--     --file=./migrations/0002-waitlist-survey.sql
+--   # then, and only then:
+--   npx wrangler deploy
+--
+-- (If CF_API_TOKEN is exported in your shell, prefix with `env -u CF_API_TOKEN`
+-- — see README. There is no `migrations_dir` / `d1 migrations apply` wiring for
+-- this Worker; the file is applied explicitly with `d1 execute --file`.)
+--
+-- On transactions: this file deliberately has NO explicit transaction
+-- statements. D1 rejects them outright. `wrangler d1 execute --file` already
+-- applies the statements as one atomic unit: a mid-file failure leaves the
+-- database untouched.
+--
+-- Do NOT write the two words BEGIN and TRANSACTION adjacently anywhere in this
+-- file, including inside a comment: wrangler's SQL splitter string-matches for
+-- them and refuses the file with "contains several transactions" before any SQL
+-- is parsed. schema.test.ts pins this.
+--
+-- On re-running: SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so
+-- this migration is abort-safe rather than idempotent. A second application
+-- fails with "duplicate column name: survey_json" and, because the file is
+-- atomic, changes nothing.
+
+-- Additive only: nullable, no default — most signups never answer the survey,
+-- and rows queued before this migration must read back NULL. Being additive,
+-- no table rebuild is needed and existing rows are untouched.
+ALTER TABLE waitlist ADD COLUMN survey_json TEXT;

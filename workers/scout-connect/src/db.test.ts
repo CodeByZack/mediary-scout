@@ -319,6 +319,34 @@ describe("D1 ConnectDb SQL", () => {
     expect(calls[0]?.query).not.toContain("s3cret-ciphertext");
     expect(calls[0]?.binds).toContain("s3cret-ciphertext");
   });
+
+  it("insertWaitlist binds survey_json without leaking it into SQL text", async () => {
+    const { d1, calls } = createSpyD1();
+    const db = createD1ConnectDb(d1);
+    await db.insertWaitlist({
+      id: "w1",
+      email: "a@x.com",
+      batch: 1,
+      status: "pending",
+      created_at: "2026-07-26T00:00:00.000Z",
+      survey_json: `{"willing_to_pay":"愿意"}`,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.query).toContain("survey_json");
+    expect(calls[0]?.query).not.toContain("willing_to_pay");
+    expect(calls[0]?.binds).toContain(`{"willing_to_pay":"愿意"}`);
+  });
+
+  it("updateWaitlistSurvey binds the JSON without leaking it into SQL text", async () => {
+    const { d1, calls } = createSpyD1();
+    const db = createD1ConnectDb(d1);
+    await db.updateWaitlistSurvey("w1", `{"feedback":"加长版"}`);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("run");
+    expect(calls[0]?.query).toBe("UPDATE waitlist SET survey_json = ? WHERE id = ?");
+    expect(calls[0]?.query).not.toContain("加长版");
+    expect(calls[0]?.binds).toEqual([`{"feedback":"加长版"}`, "w1"]);
+  });
 });
 
 describe("waitlist", () => {
@@ -330,6 +358,7 @@ describe("waitlist", () => {
       batch: 1,
       status: "pending",
       created_at: "2026-07-25T00:00:00Z",
+      survey_json: null,
     });
     await expect(
       db.insertWaitlist({
@@ -338,6 +367,7 @@ describe("waitlist", () => {
         batch: 1,
         status: "pending",
         created_at: "2026-07-25T00:00:01Z",
+        survey_json: null,
       }),
     ).rejects.toThrow(/UNIQUE/);
     expect(await db.countWaitlist(1)).toBe(1);
@@ -352,9 +382,49 @@ describe("waitlist", () => {
       batch: 1,
       status: "pending",
       created_at: "2026-07-25T00:00:00Z",
+      survey_json: null,
     });
     expect(await db.getWaitlistByEmail("b@y.com", 1)).toMatchObject({ email: "b@y.com" });
     expect(await db.getWaitlistByEmail("missing@z.com", 1)).toBeNull();
+  });
+
+  it("getWaitlistById 返回匹配行或 null", async () => {
+    const db = createMemoryConnectDb();
+    await db.insertWaitlist({
+      id: "w1",
+      email: "b@y.com",
+      batch: 1,
+      status: "pending",
+      created_at: "2026-07-25T00:00:00Z",
+      survey_json: null,
+    });
+    expect(await db.getWaitlistById("w1")).toMatchObject({ id: "w1", email: "b@y.com" });
+    expect(await db.getWaitlistById("missing")).toBeNull();
+  });
+
+  it("updateWaitlistSurvey persists survey_json and overwrites on re-submit", async () => {
+    const db = createMemoryConnectDb();
+    await db.insertWaitlist({
+      id: "w1",
+      email: "b@y.com",
+      batch: 1,
+      status: "pending",
+      created_at: "2026-07-25T00:00:00Z",
+      survey_json: null,
+    });
+    expect((await db.getWaitlistById("w1"))?.survey_json).toBeNull();
+
+    await db.updateWaitlistSurvey("w1", `{"donate":true}`);
+    expect((await db.getWaitlistById("w1"))?.survey_json).toBe(`{"donate":true}`);
+
+    await db.updateWaitlistSurvey("w1", `{"donate":false,"feedback":"x"}`);
+    expect((await db.getWaitlistById("w1"))?.survey_json).toBe(`{"donate":false,"feedback":"x"}`);
+  });
+
+  it("updateWaitlistSurvey on a nonexistent id is a silent no-op (D1 UPDATE parity)", async () => {
+    const db = createMemoryConnectDb();
+    await expect(db.updateWaitlistSurvey("nope", `{}`)).resolves.toBeUndefined();
+    expect(await db.getWaitlistById("nope")).toBeNull();
   });
 
   // The memory backend must rank identically to the D1 backend, or route tests
@@ -369,7 +439,7 @@ describe("waitlist", () => {
       { id: "wl_c", email: "c@x.com" },
       { id: "wl_a", email: "a@x.com" },
     ]) {
-      await db.insertWaitlist({ id, email, batch: 1, status: "pending", created_at: ts });
+      await db.insertWaitlist({ id, email, batch: 1, status: "pending", created_at: ts, survey_json: null });
     }
 
     const ranks = await Promise.all(
@@ -386,6 +456,7 @@ describe("waitlist", () => {
       batch: 1,
       status: "pending",
       created_at: "2026-07-25T00:00:00.000Z",
+      survey_json: null,
     });
     await db.insertWaitlist({
       id: "wl_late",
@@ -393,6 +464,7 @@ describe("waitlist", () => {
       batch: 1,
       status: "pending",
       created_at: "2026-07-27T00:00:00.000Z",
+      survey_json: null,
     });
     await db.insertWaitlist({
       id: "wl_zzz_other",
@@ -400,6 +472,7 @@ describe("waitlist", () => {
       batch: 2,
       status: "pending",
       created_at: "2026-07-25T00:00:00.000Z",
+      survey_json: null,
     });
 
     expect(await db.waitlistRankOf(1, "2026-07-25T00:00:00.000Z", "wl_early")).toBe(1);
@@ -421,6 +494,7 @@ describe("waitlist", () => {
       batch: 1,
       status: "removed",
       created_at: "2026-07-25T00:00:00.000Z",
+      survey_json: null,
     });
     await db.insertWaitlist({
       id: "wl_here",
@@ -428,6 +502,7 @@ describe("waitlist", () => {
       batch: 1,
       status: "pending",
       created_at: TS,
+      survey_json: null,
     });
 
     expect(await db.waitlistRankOf(1, TS, "wl_here")).toBe(2);
@@ -447,7 +522,7 @@ describe("waitlist", () => {
       { id: "wl_a", email: "a@x.com" },
       { id: "wl_b", email: "b@x.com" },
     ]) {
-      await db.insertWaitlist({ id, email, batch: 1, status: "pending", created_at: TS });
+      await db.insertWaitlist({ id, email, batch: 1, status: "pending", created_at: TS, survey_json: null });
     }
   }
 
@@ -479,7 +554,7 @@ describe("waitlist", () => {
       { id: "wl_a", email: "a@x.com", created_at: TS, batch: 1 },
       { id: "wl_aaa_other", email: "o@x.com", created_at: TS, batch: 2 },
     ]) {
-      await db.insertWaitlist({ id, email, batch, status: "pending", created_at });
+      await db.insertWaitlist({ id, email, batch, status: "pending", created_at, survey_json: null });
     }
 
     const rows = await db.listWaitlist(1);
@@ -487,6 +562,126 @@ describe("waitlist", () => {
 
     const ranks = await Promise.all(rows.map((r) => db.waitlistRankOf(1, r.created_at, r.id)));
     expect(ranks).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe("insertWaitlist 迁移窗口降级", () => {
+  /** D1 stub：含 survey_json 的 INSERT 抛 "no such column"，legacy INSERT 放行。 */
+  function createPreMigrationD1() {
+    const calls: { query: string; binds: unknown[] }[] = [];
+    const d1: D1Database = {
+      prepare(query: string): D1PreparedStatement {
+        const binds: unknown[] = [];
+        const stmt: D1PreparedStatement = {
+          bind(...values: unknown[]) {
+            binds.push(...values);
+            return stmt;
+          },
+          async first<T>(): Promise<T | null> { return null as T | null; },
+          async all<T>(): Promise<{ results: T[] }> { return { results: [] as T[] }; },
+          async run(): Promise<unknown> {
+            calls.push({ query, binds: [...binds] });
+            if (query.includes("survey_json")) {
+              throw new Error("no such column: survey_json");
+            }
+            return {};
+          },
+        };
+        return stmt;
+      },
+    };
+    return { d1, calls };
+  }
+
+  it("列不存在时退化为 legacy INSERT，报名不挂", async () => {
+    const { d1, calls } = createPreMigrationD1();
+    const db = createD1ConnectDb(d1);
+    const row = await db.insertWaitlist({
+      id: "w1", email: "a@x.com", batch: 1, status: "pending",
+      created_at: "2026-07-25T00:00:00Z", survey_json: null,
+    });
+    expect(row.id).toBe("w1");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.query).toContain("survey_json");
+    expect(calls[1]!.query).not.toContain("survey_json");
+    expect(calls[1]!.binds).toEqual(["w1", "a@x.com", 1, "pending", "2026-07-25T00:00:00Z"]);
+  });
+
+  it("另一种缺列措辞（no column named）同样触发降级", async () => {
+    // SQLite/D1 不同版本的报错文案可能是 "no such column" 或 "no column named"——
+    // 匹配过窄会让降级在它唯一存在的窗口期失灵（Copilot PR #181 round 4）。
+    const calls: string[] = [];
+    const d1: D1Database = {
+      prepare(query: string): D1PreparedStatement {
+        const stmt: D1PreparedStatement = {
+          bind() { return stmt; },
+          async first<T>(): Promise<T | null> { return null as T | null; },
+          async all<T>(): Promise<{ results: T[] }> { return { results: [] as T[] }; },
+          async run(): Promise<unknown> {
+            calls.push(query);
+            if (query.includes("survey_json")) {
+              throw new Error("no column named survey_json");
+            }
+            return {};
+          },
+        };
+        return stmt;
+      },
+    };
+    const db = createD1ConnectDb(d1);
+    const row = await db.insertWaitlist({
+      id: "w1", email: "a@x.com", batch: 1, status: "pending",
+      created_at: "t", survey_json: null,
+    });
+    expect(row.id).toBe("w1");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("其它错误（如 UNIQUE 冲突）原样上抛，绝不降级吞掉", async () => {
+    const d1: D1Database = {
+      prepare(): D1PreparedStatement {
+        const stmt: D1PreparedStatement = {
+          bind() { return stmt; },
+          async first<T>(): Promise<T | null> { return null as T | null; },
+          async all<T>(): Promise<{ results: T[] }> { return { results: [] as T[] }; },
+          async run(): Promise<unknown> {
+            throw new Error("UNIQUE constraint failed: waitlist.email");
+          },
+        };
+        return stmt;
+      },
+    };
+    const db = createD1ConnectDb(d1);
+    await expect(
+      db.insertWaitlist({
+        id: "w1", email: "a@x.com", batch: 1, status: "pending",
+        created_at: "t", survey_json: null,
+      }),
+    ).rejects.toThrow(/UNIQUE/);
+  });
+});
+
+describe("waitlist survey_json 兼容", () => {
+  it("老 schema（无 survey_json 列）的行映射为 null 而非 undefined", async () => {
+    // 迁移 0002 执行前的窗口期：老表 SELECT * 根本不会返回 survey_json 列。
+    // 用 spy D1 直接喂一个「缺键」的原始行（memory backend 测不到这条路径——
+    // 它的行总是带键）。映射必须落成 null：undefined 会破坏 WaitlistRow 契约，
+    // 且 JSON.stringify 会把整个键丢掉（API 响应形状在迁移前后不一致）。
+    const legacyRow = {
+      id: "w1",
+      email: "a@x.com",
+      batch: 1,
+      status: "pending",
+      created_at: "2026-07-25T00:00:00Z",
+      // 故意没有 survey_json 键 —— 这就是迁移前的行形状
+    };
+    const { d1 } = createSpyD1({ first: legacyRow });
+    const db = createD1ConnectDb(d1);
+    const row = await db.getWaitlistByEmail("a@x.com", 1);
+    expect(row).not.toBeNull();
+    expect(row!.survey_json).toBeNull(); // 不是 undefined
+    expect("survey_json" in row!).toBe(true);
+    expect(JSON.parse(JSON.stringify(row))).toHaveProperty("survey_json", null);
   });
 });
 

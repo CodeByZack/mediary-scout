@@ -9,6 +9,7 @@ import { assertSlug } from "./slug.js";
 import { homePage } from "./html/home-page.js";
 import { adminPage } from "./html/admin-page.js";
 import { invitePage, type InvitePageState } from "./html/invite-page.js";
+import { betaPage } from "./html/beta-page.js";
 import { EMAIL_MAX_LENGTH, EMAIL_RE } from "./validation.js";
 import { newId } from "./ids.js";
 import { sha256Hex } from "./crypto-token.js";
@@ -187,6 +188,9 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
   if (method === "GET" && path === "/admin") {
     return htmlPage(adminPage());
   }
+  if (method === "GET" && path === "/beta") {
+    return htmlPage(betaPage());
+  }
 
   // ---- admin api (bearer required) ----
   if (path === "/api/admin/invites") {
@@ -272,6 +276,9 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
   // ---- public waitlist ----
   if (path === "/waitlist" && method === "POST") {
     return await addToWaitlist(request, deps);
+  }
+  if (path === "/waitlist/survey" && method === "POST") {
+    return await saveWaitlistSurvey(request, deps);
   }
 
   // ---- instance status reporting (bearer token auth) ----
@@ -568,6 +575,7 @@ async function addToWaitlist(request: Request, deps: RouteDeps): Promise<Respons
     batch,
     status: WAITLIST_PENDING,
     created_at: deps.now(),
+    survey_json: null,
   };
   try {
     await deps.db.insertWaitlist(row);
@@ -615,6 +623,85 @@ async function waitlistPosition(
   row: { batch: number; created_at: string; id: string },
 ): Promise<number> {
   return deps.db.waitlistRankOf(row.batch, row.created_at, row.id);
+}
+
+/** Server-side twin of the /beta textarea's maxlength="500". */
+const SURVEY_FEEDBACK_MAX = 500;
+
+/**
+ * POST /waitlist/survey — the optional post-signup survey from GET /beta.
+ * Public and unauthenticated like POST /waitlist; the same 8 KB capped body
+ * reader applies.
+ *
+ * Request: `{ id: string, willing_to_pay?: string, price_point?: string,
+ *            use_cases?: string[], donate?: boolean, feedback?: string }`
+ *
+ * Responses:
+ *   204 — stored (or nothing to store); no body
+ *   400 `{ error: "id required" }` (plus "invalid json" / "invalid body"
+ *        from the shared body reader)
+ *   404 `{ error: "waitlist entry not found" }`
+ *   413 `{ error: "body too large" }`
+ *   503 `{ error: "survey temporarily unavailable" }` — only in the migration
+ *        window (survey_json column missing); any other db error stays a
+ *        generic 500 and must never be masked as a 503
+ *
+ * Only keys actually answered are persisted, under their contract names —
+ * unknown body keys are dropped, wrong-typed values are dropped, and
+ * `feedback` is capped at SURVEY_FEEDBACK_MAX chars. A submit with zero
+ * answered fields is a 204 WITHOUT touching survey_json, so a skipped/empty
+ * re-submit can never clobber answers already stored.
+ */
+async function saveWaitlistSurvey(request: Request, deps: RouteDeps): Promise<Response> {
+  const body = await readJsonBody(request);
+  const id = optString(body.id);
+  if (id === null) {
+    throw new HttpError(400, "id required");
+  }
+  if ((await deps.db.getWaitlistById(id)) === null) {
+    throw new HttpError(404, "waitlist entry not found");
+  }
+
+  const survey: Record<string, unknown> = {};
+  const willingToPay = optString(body.willing_to_pay);
+  if (willingToPay !== null) {
+    survey.willing_to_pay = willingToPay;
+  }
+  const pricePoint = optString(body.price_point);
+  if (pricePoint !== null) {
+    survey.price_point = pricePoint;
+  }
+  if (Array.isArray(body.use_cases)) {
+    const useCases = body.use_cases.filter((u): u is string => typeof u === "string");
+    if (useCases.length > 0) {
+      survey.use_cases = useCases;
+    }
+  }
+  if (typeof body.donate === "boolean") {
+    survey.donate = body.donate;
+  }
+  const feedback = optString(body.feedback);
+  if (feedback !== null) {
+    survey.feedback = feedback.slice(0, SURVEY_FEEDBACK_MAX);
+  }
+
+  if (Object.keys(survey).length > 0) {
+    try {
+      await deps.db.updateWaitlistSurvey(id, JSON.stringify(survey));
+    } catch (e) {
+      // Migration window: 0002 not yet applied → the column doesn't exist and
+      // the raw D1 error would surface as an unobservable 500 outside this
+      // route's declared contract. Answer in-contract instead: 503 tells the
+      // client "not you, us, try later" (the signup itself already succeeded).
+      const msg = e instanceof Error ? e.message : "";
+      const isMissingColumn =
+        msg.includes("survey_json") &&
+        (msg.includes("no such column") || msg.includes("no column named"));
+      if (!isMissingColumn) throw e;
+      throw new HttpError(503, "survey temporarily unavailable");
+    }
+  }
+  return new Response(null, { status: 204 });
 }
 
 async function reportInstanceStatus(request: Request, deps: RouteDeps): Promise<Response> {

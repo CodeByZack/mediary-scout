@@ -350,6 +350,24 @@ describe("handleRequest", () => {
     expect(await res.text()).toContain("链接无效");
   });
 
+  it("GET /beta → 200 signup page, CSP permits its same-origin fetch", async () => {
+    const { deps } = setup();
+    const res = await handleRequest(new Request(`${BASE}/beta`), deps);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    const body = await res.text();
+    expect(body).toContain("Scout Connect 远程访问 · 内测");
+    expect(body).toContain('<form id="signup"');
+    // The page's inline script POSTs fetch("/waitlist") same-origin. Under the
+    // old CSP (default-src 'none', no connect-src) a real browser REFUSES that
+    // fetch (connect-src falls back to default-src) — verified empirically:
+    // "FETCH_BLOCKED Failed to fetch" without the directive, "FETCH_OK" with
+    // it. The invite page's reveal and the admin console needed it too.
+    const csp = res.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).toContain("default-src 'none'");
+  });
+
   it("GET /i/:code with pending invite → 作者尚未开通, no reveal button", async () => {
     const { deps } = setup();
     const createRes = await createInviteViaApi(deps, { email: "alice@example.com" });
@@ -716,6 +734,7 @@ describe("GET /api/admin/waitlist", () => {
       batch: 1,
       status: "pending",
       created_at: "2026-07-24T10:00:02.000Z",
+      survey_json: null,
     });
     await db.insertWaitlist({
       id: "wl_a",
@@ -723,6 +742,7 @@ describe("GET /api/admin/waitlist", () => {
       batch: 1,
       status: "pending",
       created_at: "2026-07-24T10:00:00.000Z",
+      survey_json: null,
     });
     await db.insertWaitlist({
       id: "wl_b",
@@ -730,6 +750,7 @@ describe("GET /api/admin/waitlist", () => {
       batch: 1,
       status: "pending",
       created_at: "2026-07-24T10:00:01.000Z",
+      survey_json: null,
     });
 
     const res = await handleRequest(adminGet("/api/admin/waitlist"), deps);
@@ -1115,6 +1136,7 @@ describe("POST /waitlist hardening", () => {
       batch: 1,
       status: "pending",
       created_at: "2026-07-24T09:00:00.000Z",
+      survey_json: null,
     });
     let precheckBlinded = false;
     const broken: ConnectDb = {
@@ -1175,6 +1197,7 @@ describe("POST /waitlist seat cap (founding batch = 100)", () => {
         batch: 1,
         status: "pending",
         created_at: `2026-07-24T09:${mm}:${ss}.000Z`,
+        survey_json: null,
       });
     }
   }
@@ -1219,6 +1242,210 @@ describe("POST /waitlist seat cap (founding batch = 100)", () => {
     expect(body.already_exists).toBe(true);
     expect(body.id).toBe("wl_seed_42");
     expect(body.position).toBe(42);
+  });
+});
+
+describe("POST /waitlist/survey", () => {
+  function surveyPost(body: unknown): Request {
+    return new Request(`${BASE}/waitlist/survey`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** Signs `email` up via the real route and returns the new waitlist id. */
+  async function signup(deps: RouteDeps, email: string): Promise<string> {
+    const res = await handleRequest(
+      new Request(`${BASE}/waitlist`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
+      }),
+      deps,
+    );
+    expect(res.status).toBe(201);
+    return ((await res.json()) as { id: string }).id;
+  }
+
+  it("404 for an unknown id, nothing written", async () => {
+    const { db, deps } = setup();
+    const res = await handleRequest(
+      surveyPost({ id: "wl_nope", willing_to_pay: "willing" }),
+      deps,
+    );
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "waitlist entry not found" });
+    expect(await db.getWaitlistById("wl_nope")).toBeNull();
+  });
+
+  it("503 (not a bare 500) when the survey column does not exist yet (migration window)", async () => {
+    const { deps } = setup();
+    const id = await signup(deps, "win@example.com");
+    // Simulate the pre-0002 schema: updateWaitlistSurvey throws the missing-column error.
+    const windowDeps: RouteDeps = {
+      ...deps,
+      db: {
+        ...deps.db,
+        async updateWaitlistSurvey() {
+          throw new Error("no such column: survey_json");
+        },
+      },
+    };
+    const res = await handleRequest(
+      surveyPost({ id, willing_to_pay: "willing" }),
+      windowDeps,
+    );
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "survey temporarily unavailable" });
+  });
+
+  it("non-schema errors from updateWaitlistSurvey still propagate (not masked as 503)", async () => {
+    const { deps } = setup();
+    const id = await signup(deps, "realerr@example.com");
+    const errDeps: RouteDeps = {
+      ...deps,
+      db: {
+        ...deps.db,
+        async updateWaitlistSurvey() {
+          throw new Error("d1 connection reset");
+        },
+      },
+    };
+    // handleRequest 的兜底把未识别错误统一成 500 internal —— 关键是它绝不能
+    // 被误判成 503：只有「缺列」这种明确可恢复的情况才配 typed 状态码。
+    const res = await handleRequest(surveyPost({ id, willing_to_pay: "willing" }), errDeps);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "internal" });
+  });
+
+  it("400 when id is missing or not a string", async () => {
+    const { deps } = setup();
+    for (const body of [{}, { id: 42 }, { id: "  " }]) {
+      const res = await handleRequest(surveyPost(body), deps);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "id required" });
+    }
+  });
+
+  it("204 and stores only the answered fields as JSON (round-trip)", async () => {
+    const { db, deps } = setup();
+    const id = await signup(deps, "survey@example.com");
+
+    const res = await handleRequest(
+      surveyPost({
+        id,
+        willing_to_pay: "willing",
+        price_point: "19",
+        use_cases: ["progress", "all"],
+        donate: true,
+        feedback: "加油",
+      }),
+      deps,
+    );
+
+    expect(res.status).toBe(204);
+    const row = await db.getWaitlistById(id);
+    expect(JSON.parse(row?.survey_json ?? "")).toEqual({
+      willing_to_pay: "willing",
+      price_point: "19",
+      use_cases: ["progress", "all"],
+      donate: true,
+      feedback: "加油",
+    });
+  });
+
+  it("ignores unknown fields — only known keys are persisted", async () => {
+    const { db, deps } = setup();
+    const id = await signup(deps, "unknown-fields@example.com");
+
+    const res = await handleRequest(
+      surveyPost({ id, willing_to_pay: "willing", hacker: "x", admin: true, email: "new@x.com" }),
+      deps,
+    );
+
+    expect(res.status).toBe(204);
+    expect(JSON.parse((await db.getWaitlistById(id))?.survey_json ?? "")).toEqual({
+      willing_to_pay: "willing",
+    });
+  });
+
+  it("truncates feedback at 500 chars server-side", async () => {
+    const { db, deps } = setup();
+    const id = await signup(deps, "long-feedback@example.com");
+
+    const res = await handleRequest(
+      surveyPost({ id, feedback: "a".repeat(600) }),
+      deps,
+    );
+
+    expect(res.status).toBe(204);
+    const stored = JSON.parse((await db.getWaitlistById(id))?.survey_json ?? "") as {
+      feedback: string;
+    };
+    expect(stored.feedback).toHaveLength(500);
+  });
+
+  it("id but no survey fields → 204, survey_json stays null (nothing clobbered)", async () => {
+    const { db, deps } = setup();
+    const id = await signup(deps, "empty-survey@example.com");
+
+    expect((await handleRequest(surveyPost({ id }), deps)).status).toBe(204);
+    expect((await db.getWaitlistById(id))?.survey_json).toBeNull();
+  });
+
+  it("an empty re-submit does not clobber answers already stored", async () => {
+    const { db, deps } = setup();
+    const id = await signup(deps, "resubmit@example.com");
+    await handleRequest(surveyPost({ id, donate: true }), deps);
+
+    // Second submit with no fields at all: answers from the first survive.
+    expect((await handleRequest(surveyPost({ id }), deps)).status).toBe(204);
+    expect(JSON.parse((await db.getWaitlistById(id))?.survey_json ?? "")).toEqual({
+      donate: true,
+    });
+  });
+
+  it("wrong-typed values are dropped, not stored and not a 500", async () => {
+    const { db, deps } = setup();
+    const id = await signup(deps, "types@example.com");
+
+    const res = await handleRequest(
+      surveyPost({ id, willing_to_pay: 5, use_cases: "all", donate: "yes", feedback: {} }),
+      deps,
+    );
+
+    expect(res.status).toBe(204);
+    expect((await db.getWaitlistById(id))?.survey_json).toBeNull();
+  });
+
+  it("non-string use_cases items are filtered out", async () => {
+    const { db, deps } = setup();
+    const id = await signup(deps, "uc@example.com");
+
+    const res = await handleRequest(
+      surveyPost({ id, use_cases: ["progress", 7, null, "all"] }),
+      deps,
+    );
+
+    expect(res.status).toBe(204);
+    expect(JSON.parse((await db.getWaitlistById(id))?.survey_json ?? "")).toEqual({
+      use_cases: ["progress", "all"],
+    });
+  });
+
+  it("oversized declared body → 413 (the shared capped reader)", async () => {
+    const { deps } = setup();
+    const res = await handleRequest(
+      new Request(`${BASE}/waitlist/survey`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": String(64 * 1024) },
+        body: JSON.stringify({ id: "wl_x" }),
+      }),
+      deps,
+    );
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "body too large" });
   });
 });
 

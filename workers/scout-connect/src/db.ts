@@ -44,6 +44,8 @@ export interface WaitlistRow {
   batch: number;
   status: string;
   created_at: string;
+  /** Optional post-signup survey answers as a JSON string; null until answered. */
+  survey_json: string | null;
 }
 
 export interface InviteStatusPatch {
@@ -79,6 +81,13 @@ export interface ConnectDb {
   listAudits(): Promise<AuditRow[]>;
   insertWaitlist(row: WaitlistRow): Promise<WaitlistRow>;
   getWaitlistByEmail(email: string, batch: number): Promise<WaitlistRow | null>;
+  getWaitlistById(id: string): Promise<WaitlistRow | null>;
+  /**
+   * Stores the optional post-signup survey (a JSON string) on the row.
+   * UPDATE semantics: a nonexistent id is a silent no-op — the route is
+   * responsible for the 404 precheck.
+   */
+  updateWaitlistSurvey(id: string, surveyJson: string): Promise<void>;
   countWaitlist(batch: number): Promise<number>;
   /**
    * 1-based queue position of the row identified by (`batch`, `createdAt`,
@@ -171,6 +180,10 @@ function mapWaitlist(row: RawRow): WaitlistRow {
     batch: row.batch as number,
     status: row.status as string,
     created_at: row.created_at as string,
+    // Coalesce, don't cast: against a pre-0002 schema (migration not yet run),
+    // SELECT * returns no survey_json column at all → `undefined`, which would
+    // break the `string | null` contract and silently vanish from JSON responses.
+    survey_json: (row.survey_json as string | null | undefined) ?? null,
   };
 }
 
@@ -352,12 +365,40 @@ export function createD1ConnectDb(d1: D1Database): ConnectDb {
     },
 
     async insertWaitlist(row) {
-      await d1
-        .prepare(
-          `INSERT INTO waitlist (id, email, batch, status, created_at) VALUES (?, ?, ?, ?, ?)`,
-        )
-        .bind(row.id, row.email, row.batch, row.status, row.created_at)
-        .run();
+      try {
+        await d1
+          .prepare(
+            `INSERT INTO waitlist (id, email, batch, status, created_at, survey_json)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(row.id, row.email, row.batch, row.status, row.created_at, row.survey_json)
+          .run();
+      } catch (e) {
+        // Migration-window fallback: if the worker got deployed BEFORE
+        // migrations/0002-waitlist-survey.sql ran, the column doesn't exist and
+        // every signup would 500 — a public-funnel outage caused by deploy order.
+        // Degrade to the legacy column list instead (survey silently off until
+        // the migration runs). Match BOTH phrasings of the missing-column error:
+        // "no such column: x" and "no column named x" — the exact wording varies
+        // across SQLite/D1 versions, and a too-narrow match would silently
+        // disable the fallback in exactly the window it exists for.
+        // Only schema-mismatch errors fall back — UNIQUE violations and real
+        // outages must propagate unchanged.
+        const msg = e instanceof Error ? e.message : "";
+        const isMissingColumn =
+          msg.includes("survey_json") &&
+          (msg.includes("no such column") || msg.includes("no column named"));
+        if (!isMissingColumn) {
+          throw e;
+        }
+        await d1
+          .prepare(
+            `INSERT INTO waitlist (id, email, batch, status, created_at)
+             VALUES (?, ?, ?, ?, ?)`,
+          )
+          .bind(row.id, row.email, row.batch, row.status, row.created_at)
+          .run();
+      }
       return row;
     },
 
@@ -367,6 +408,21 @@ export function createD1ConnectDb(d1: D1Database): ConnectDb {
         .bind(email, batch)
         .first<RawRow>();
       return row ? mapWaitlist(row) : null;
+    },
+
+    async getWaitlistById(id) {
+      const row = await d1
+        .prepare(`SELECT * FROM waitlist WHERE id = ?`)
+        .bind(id)
+        .first<RawRow>();
+      return row ? mapWaitlist(row) : null;
+    },
+
+    async updateWaitlistSurvey(id, surveyJson) {
+      await d1
+        .prepare(`UPDATE waitlist SET survey_json = ? WHERE id = ?`)
+        .bind(surveyJson, id)
+        .run();
     },
 
     async countWaitlist(batch) {
@@ -608,6 +664,18 @@ export function createMemoryConnectDb(): ConnectDb {
         }
       }
       return null;
+    },
+
+    async getWaitlistById(id) {
+      const row = waitlist.get(id);
+      return row === undefined ? null : { ...row };
+    },
+
+    async updateWaitlistSurvey(id, surveyJson) {
+      const row = waitlist.get(id);
+      if (row !== undefined) {
+        row.survey_json = surveyJson;
+      }
     },
 
     async countWaitlist(batch) {
