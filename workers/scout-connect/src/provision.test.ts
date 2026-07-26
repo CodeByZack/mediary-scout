@@ -24,6 +24,10 @@ function makePendingInvite(overrides: Partial<InviteRow> = {}): InviteRow {
 }
 
 interface FakeCfOptions {
+  // "access" is retained deliberately: provisioning no longer creates an Access
+  // app, and the test that sets it asserts exactly that (a throwing
+  // createAccessApp changes nothing because it is never called). deleteAccessApp
+  // is still real API surface — revoke.ts calls it for pre-removal endpoints.
   failOn?: "ingress" | "access" | "dns";
 }
 
@@ -87,7 +91,6 @@ describe("provisionEndpoint", () => {
     expect(calls).toEqual([
       "tunnel:scout-alice",
       "ingress:tid-1:alice.mediaryconnect.app",
-      "access:alice.mediaryconnect.app:alice@example.com",
       "dns:alice:tid-1",
     ]);
 
@@ -106,8 +109,8 @@ describe("provisionEndpoint", () => {
     expect(endpoint?.slug).toBe("alice");
     expect(endpoint?.hostname).toBe("alice.mediaryconnect.app");
     expect(endpoint?.cf_tunnel_id).toBe("tid-1");
-    expect(endpoint?.cf_access_app_id).toBe("app-1");
-    expect(endpoint?.cf_access_policy_id).toBe("pol-1");
+    expect(endpoint?.cf_access_app_id).toBeNull();
+    expect(endpoint?.cf_access_policy_id).toBeNull();
     expect(endpoint?.cf_dns_record_id).toBe("rec-1");
     expect(endpoint?.created_at).toBe(NOW);
     expect(endpoint?.revoked_at).toBeNull();
@@ -130,36 +133,26 @@ describe("provisionEndpoint", () => {
     expect(audits[0]?.detail_json ?? "").toContain("alice.mediaryconnect.app");
   });
 
-  it("passes lowercased invite email to createAccessApp", async () => {
-    const db = createMemoryConnectDb();
-    await db.insertInvite(makePendingInvite({ email: "Alice@Example.COM" }));
-    const calls: string[] = [];
-    const deps = makeDeps(db, makeFakeCf(calls));
-
-    await provisionEndpoint({ inviteId: "inv_1", slug: "alice", deps });
-
-    expect(calls).toContain("access:alice.mediaryconnect.app:alice@example.com");
-  });
-
-  it("access failure: deletes tunnel exactly once, never touches dns/access deletes, persists nothing", async () => {
+  // Regression guard for the Access removal: a CfApi whose createAccessApp
+  // would throw must make no difference, because provisioning never calls it.
+  // (This test used to be "access failure: deletes tunnel exactly once, never
+  // touches dns/access deletes, persists nothing" — a name describing the
+  // pre-removal behaviour, while every assertion below checks the happy path.)
+  it("succeeds even when createAccessApp would fail, because it is never called", async () => {
     const db = createMemoryConnectDb();
     await db.insertInvite(makePendingInvite());
     const calls: string[] = [];
     const deps = makeDeps(db, makeFakeCf(calls, { failOn: "access" }));
 
-    await expect(
-      provisionEndpoint({ inviteId: "inv_1", slug: "alice", deps }),
-    ).rejects.toThrow("cf access boom");
+    const result = await provisionEndpoint({ inviteId: "inv_1", slug: "alice", deps });
 
-    expect(countCalls(calls, "del-tunnel")).toBe(1);
-    expect(countCalls(calls, "del-access")).toBe(0);
-    expect(countCalls(calls, "del-dns")).toBe(0);
-    expect(await db.listEndpoints()).toHaveLength(0);
-    expect((await db.getInviteById("inv_1"))?.status).toBe("pending");
-    expect(await db.listAudits()).toHaveLength(0);
+    expect(result.hostname).toBe("alice.mediaryconnect.app");
+    expect(countCalls(calls, "access:")).toBe(0);
+    expect(await db.listEndpoints()).toHaveLength(1);
+    expect((await db.getInviteById("inv_1"))?.status).toBe("provisioned");
   });
 
-  it("dns failure: deletes access app once and tunnel exactly once, persists nothing", async () => {
+  it("dns failure: deletes tunnel exactly once, persists nothing", async () => {
     const db = createMemoryConnectDb();
     await db.insertInvite(makePendingInvite());
     const calls: string[] = [];
@@ -169,7 +162,6 @@ describe("provisionEndpoint", () => {
       provisionEndpoint({ inviteId: "inv_1", slug: "alice", deps }),
     ).rejects.toThrow("cf dns boom");
 
-    expect(countCalls(calls, "del-access")).toBe(1);
     expect(countCalls(calls, "del-tunnel")).toBe(1);
     expect(countCalls(calls, "del-dns")).toBe(0);
     expect(await db.listEndpoints()).toHaveLength(0);
@@ -177,7 +169,7 @@ describe("provisionEndpoint", () => {
     expect(await db.listAudits()).toHaveLength(0);
   });
 
-  it("ingress failure: deletes tunnel exactly once, never creates access app or dns", async () => {
+  it("ingress failure: deletes tunnel exactly once, creates no dns (and no access app, which is never created anyway)", async () => {
     const db = createMemoryConnectDb();
     await db.insertInvite(makePendingInvite());
     const calls: string[] = [];
@@ -267,6 +259,7 @@ describe("provisionEndpoint", () => {
       token_shown_at: null,
       created_at: NOW,
       revoked_at: null,
+      last_seen_at: null,
     });
 
     await expect(
@@ -290,7 +283,7 @@ describe("provisionEndpoint", () => {
     expect(countCalls(calls, "tunnel:")).toBe(1);
   });
 
-  it("D1 write failure: best-effort deletes dns/access/tunnel and audits provision.orphan", async () => {
+  it("D1 write failure: best-effort deletes dns/tunnel and audits provision.orphan", async () => {
     const db = createMemoryConnectDb();
     await db.insertInvite(makePendingInvite());
     const calls: string[] = [];
@@ -314,7 +307,6 @@ describe("provisionEndpoint", () => {
     const secondTunnelCalls = calls.filter((c) => c.startsWith("tunnel:")).length;
     expect(secondTunnelCalls).toBe(2);
     expect(countCalls(calls, "del-dns:")).toBe(1);
-    expect(countCalls(calls, "del-access:")).toBe(1);
     expect(countCalls(calls, "del-tunnel:")).toBe(1);
 
     // orphan audit row recorded, carrying cf ids for forensics, no plaintext token
@@ -324,8 +316,8 @@ describe("provisionEndpoint", () => {
     expect(orphan?.actor).toBe("system");
     expect(orphan?.invite_id).toBe("inv_2");
     expect(orphan?.detail_json).toContain("tid-1");
-    expect(orphan?.detail_json).toContain("app-1");
     expect(orphan?.detail_json).toContain("rec-1");
+    expect(orphan?.detail_json).not.toContain("app-1");
     expect(JSON.stringify(orphan)).not.toContain(PLAIN_TOKEN);
 
     // invite stays pending so the admin can retry
@@ -368,7 +360,6 @@ describe("provisionEndpoint", () => {
       provisionEndpoint({ inviteId: "inv_2", slug: "bob", deps }),
     ).rejects.toThrow(/UNIQUE/i);
     expect(calls).toContain("del-dns:boom");
-    expect(calls).toContain("del-access:boom");
     expect(calls).toContain("del-tunnel:boom");
   });
 
@@ -394,7 +385,6 @@ describe("provisionEndpoint", () => {
     expect(await db.listEndpoints()).toHaveLength(0);
     // full cf resource set cleaned
     expect(countCalls(calls, "del-dns:")).toBe(1);
-    expect(countCalls(calls, "del-access:")).toBe(1);
     expect(countCalls(calls, "del-tunnel:")).toBe(1);
     // invite still pending, and a retry with the same slug now succeeds
     expect((await db.getInviteById("inv_1"))?.status).toBe("pending");
@@ -419,7 +409,6 @@ describe("provisionEndpoint", () => {
 
     expect(countCalls(calls, "tunnel:")).toBe(1);
     expect(countCalls(calls, "del-dns:")).toBe(1);
-    expect(countCalls(calls, "del-access:")).toBe(1);
     expect(countCalls(calls, "del-tunnel:")).toBe(1);
     expect(await db.listEndpoints()).toHaveLength(0);
     const audits = await db.listAudits();
@@ -453,7 +442,6 @@ describe("provisionEndpoint", () => {
     expect(await db.listEndpoints()).toHaveLength(0);
     // cf resources cleaned
     expect(countCalls(calls, "del-dns:")).toBe(1);
-    expect(countCalls(calls, "del-access:")).toBe(1);
     expect(countCalls(calls, "del-tunnel:")).toBe(1);
 
     // retry works end-to-end
@@ -463,25 +451,96 @@ describe("provisionEndpoint", () => {
     expect(await db.listEndpoints()).toHaveLength(1);
   });
 
-  it("dns failure + deleteAccessApp also throws: tunnel still deleted via outer catch", async () => {
+  it("dns failure + deleteTunnel also throws: ORIGINAL dns error propagates, delete still attempted", async () => {
     const db = createMemoryConnectDb();
     await db.insertInvite(makePendingInvite());
     const calls: string[] = [];
     const base = makeFakeCf(calls, { failOn: "dns" });
     const cf: CfApi = {
       ...base,
-      async deleteAccessApp() {
-        calls.push("del-access:boom");
-        throw new Error("delete access boom");
+      async deleteTunnel(tunnelId) {
+        calls.push(`del-tunnel:${tunnelId}:boom`);
+        throw new Error("delete tunnel boom");
       },
     };
     const deps = makeDeps(db, cf);
 
-    // the thrown error is the delete's, not the original dns error — but the
-    // tunnel must still be cleaned up exactly once by the outer catch
+    // Compensation is BEST EFFORT: a failing deleteTunnel must never displace
+    // the failure that triggered the rollback, or the caller is told "delete
+    // tunnel boom" when the real problem was "cf dns boom". (This test used to
+    // assert the opposite — it pinned that bug as the contract.)
     await expect(
       provisionEndpoint({ inviteId: "inv_1", slug: "alice", deps }),
-    ).rejects.toThrow(/delete access boom/);
+    ).rejects.toThrow(/cf dns boom/);
+    // ...but the delete must still have been ATTEMPTED. Twice, deliberately:
+    // deleteTunnelOnce() latches only AFTER a successful await, so the inner
+    // catch's failed attempt leaves the flag unset and the outer catch retries
+    // it (deletion is 404-idempotent, so a retry is free).
+    expect(countCalls(calls, "del-tunnel:")).toBe(2);
+  });
+
+  it("dns failure + deleteTunnel transiently failing then succeeding: latch stops after the retry", async () => {
+    const db = createMemoryConnectDb();
+    await db.insertInvite(makePendingInvite());
+    const calls: string[] = [];
+    const base = makeFakeCf(calls, { failOn: "dns" });
+    let attempts = 0;
+    const cf: CfApi = {
+      ...base,
+      async deleteTunnel(tunnelId) {
+        attempts += 1;
+        if (attempts === 1) {
+          calls.push(`del-tunnel:${tunnelId}:transient`);
+          throw new Error("delete tunnel transient");
+        }
+        calls.push(`del-tunnel:${tunnelId}`);
+      },
+    };
+    const deps = makeDeps(db, cf);
+
+    await expect(
+      provisionEndpoint({ inviteId: "inv_1", slug: "alice", deps }),
+    ).rejects.toThrow(/cf dns boom/);
+    // inner catch failed → outer catch retried → succeeded → latch set. No third call.
+    expect(countCalls(calls, "del-tunnel:")).toBe(2);
+  });
+
+  it("ingress failure + deleteTunnel also throws: ORIGINAL ingress error propagates", async () => {
+    const db = createMemoryConnectDb();
+    await db.insertInvite(makePendingInvite());
+    const calls: string[] = [];
+    const base = makeFakeCf(calls, { failOn: "ingress" });
+    const cf: CfApi = {
+      ...base,
+      async deleteTunnel(tunnelId) {
+        calls.push(`del-tunnel:${tunnelId}:boom`);
+        throw new Error("delete tunnel boom");
+      },
+    };
+    const deps = makeDeps(db, cf);
+
+    await expect(
+      provisionEndpoint({ inviteId: "inv_1", slug: "alice", deps }),
+    ).rejects.toThrow(/cf ingress boom/);
+    // ingress never reaches the inner try, so only the outer catch compensates
     expect(countCalls(calls, "del-tunnel:")).toBe(1);
+  });
+
+  it("no longer creates Access app; cf_access_app_id & cf_access_policy_id are null", async () => {
+    const db = createMemoryConnectDb();
+    await db.insertInvite(makePendingInvite());
+    const calls: string[] = [];
+    const cf = makeFakeCf(calls);
+    const deps = makeDeps(db, cf);
+
+    const result = await provisionEndpoint({ inviteId: "inv_1", slug: "alice", deps });
+
+    expect(result.hostname).toBe("alice.mediaryconnect.app");
+    expect(calls.filter((c) => c.startsWith("access:"))).toHaveLength(0);
+
+    const endpoints = await db.listEndpoints();
+    expect(endpoints).toHaveLength(1);
+    expect(endpoints[0]?.cf_access_app_id).toBeNull();
+    expect(endpoints[0]?.cf_access_policy_id).toBeNull();
   });
 });

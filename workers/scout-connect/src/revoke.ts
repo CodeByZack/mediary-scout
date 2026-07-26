@@ -59,7 +59,13 @@ export async function revokeEndpoint(input: {
     }
   };
 
-  await attempt(() => cf.deleteAccessApp(endpoint.cf_access_app_id));
+  // Old endpoints still have an Access app that needs cleanup. Hoisted to a
+  // const so the narrowing survives into the closure below — the callback is
+  // invoked later, so TS cannot prove the property is still non-null there.
+  const accessAppId = endpoint.cf_access_app_id;
+  if (accessAppId) {
+    await attempt(() => cf.deleteAccessApp(accessAppId));
+  }
   await attempt(() => cf.deleteDnsRecord(endpoint.cf_dns_record_id));
   await attempt(() => cf.deleteTunnel(endpoint.cf_tunnel_id));
 

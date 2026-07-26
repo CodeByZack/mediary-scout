@@ -16,13 +16,14 @@ export interface EndpointRow {
   slug: string;
   hostname: string;
   cf_tunnel_id: string;
-  cf_access_app_id: string;
+  cf_access_app_id: string | null;
   cf_access_policy_id: string | null;
   cf_dns_record_id: string;
   status: "active" | "revoked" | "revoke_failed";
   token_sha256: string;
   token_ciphertext: string | null;
   token_shown_at: string | null;
+  last_seen_at: string | null;
   created_at: string;
   revoked_at: string | null;
 }
@@ -35,6 +36,14 @@ export interface AuditRow {
   invite_id: string | null;
   endpoint_id: string | null;
   detail_json: string | null;
+}
+
+export interface WaitlistRow {
+  id: string;
+  email: string;
+  batch: number;
+  status: string;
+  created_at: string;
 }
 
 export interface InviteStatusPatch {
@@ -68,6 +77,31 @@ export interface ConnectDb {
   deleteEndpoint(endpointId: string): Promise<void>;
   insertAudit(row: AuditRow): Promise<void>;
   listAudits(): Promise<AuditRow[]>;
+  insertWaitlist(row: WaitlistRow): Promise<WaitlistRow>;
+  getWaitlistByEmail(email: string, batch: number): Promise<WaitlistRow | null>;
+  countWaitlist(batch: number): Promise<number>;
+  /**
+   * 1-based queue position of the row identified by (`batch`, `createdAt`,
+   * `id`), counting every row that sorts at or before it under the composite
+   * order (created_at, id).
+   *
+   * Why composite: created_at is a whole-second ISO string, so same-second
+   * signups are routine. A `created_at <= ?` count gives every tied row the
+   * SAME position (measured: three rows sharing one timestamp all reported 3).
+   * `id` is the PRIMARY KEY, so (created_at, id) is unique and the rank is
+   * distinct and stable.
+   *
+   * The predicate is deliberately spelled `created_at <= ? AND (created_at < ?
+   * OR id <= ?)` instead of the equivalent `created_at < ? OR (created_at = ?
+   * AND id <= ?)`: only the former keeps the created_at range bound on
+   * idx_waitlist_batch_created. The OR-first form still "uses the index" but
+   * degrades to `(batch=?)`, walking the whole batch on an unauthenticated
+   * path. See the query-plan assertion in schema.test.ts.
+   */
+  waitlistRankOf(batch: number, createdAt: string, id: string): Promise<number>;
+  listWaitlist(batch: number): Promise<WaitlistRow[]>;
+  getEndpointByTokenSha256(sha256: string): Promise<EndpointRow | null>;
+  updateEndpointLastSeen(endpointId: string, lastSeenAt: string): Promise<void>;
 }
 
 // Minimal ambient D1 types (intentionally not @cloudflare/workers-types).
@@ -105,13 +139,14 @@ function mapEndpoint(row: RawRow): EndpointRow {
     slug: row.slug as string,
     hostname: row.hostname as string,
     cf_tunnel_id: row.cf_tunnel_id as string,
-    cf_access_app_id: row.cf_access_app_id as string,
+    cf_access_app_id: row.cf_access_app_id as string | null,
     cf_access_policy_id: row.cf_access_policy_id as string | null,
     cf_dns_record_id: row.cf_dns_record_id as string,
     status: row.status as EndpointRow["status"],
     token_sha256: row.token_sha256 as string,
     token_ciphertext: row.token_ciphertext as string | null,
     token_shown_at: row.token_shown_at as string | null,
+    last_seen_at: row.last_seen_at as string | null,
     created_at: row.created_at as string,
     revoked_at: row.revoked_at as string | null,
   };
@@ -126,6 +161,16 @@ function mapAudit(row: RawRow): AuditRow {
     invite_id: row.invite_id as string | null,
     endpoint_id: row.endpoint_id as string | null,
     detail_json: row.detail_json as string | null,
+  };
+}
+
+function mapWaitlist(row: RawRow): WaitlistRow {
+  return {
+    id: row.id as string,
+    email: row.email as string,
+    batch: row.batch as number,
+    status: row.status as string,
+    created_at: row.created_at as string,
   };
 }
 
@@ -200,8 +245,8 @@ export function createD1ConnectDb(d1: D1Database): ConnectDb {
     async insertEndpoint(row) {
       await d1
         .prepare(
-          `INSERT INTO endpoints (id, invite_id, slug, hostname, cf_tunnel_id, cf_access_app_id, cf_access_policy_id, cf_dns_record_id, status, token_sha256, token_ciphertext, token_shown_at, created_at, revoked_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO endpoints (id, invite_id, slug, hostname, cf_tunnel_id, cf_access_app_id, cf_access_policy_id, cf_dns_record_id, status, token_sha256, token_ciphertext, token_shown_at, last_seen_at, created_at, revoked_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           row.id,
@@ -216,6 +261,7 @@ export function createD1ConnectDb(d1: D1Database): ConnectDb {
           row.token_sha256,
           row.token_ciphertext,
           row.token_shown_at,
+          row.last_seen_at,
           row.created_at,
           row.revoked_at,
         )
@@ -304,6 +350,79 @@ export function createD1ConnectDb(d1: D1Database): ConnectDb {
         .all<RawRow>();
       return results.map(mapAudit);
     },
+
+    async insertWaitlist(row) {
+      await d1
+        .prepare(
+          `INSERT INTO waitlist (id, email, batch, status, created_at) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .bind(row.id, row.email, row.batch, row.status, row.created_at)
+        .run();
+      return row;
+    },
+
+    async getWaitlistByEmail(email, batch) {
+      const row = await d1
+        .prepare(`SELECT * FROM waitlist WHERE email = ? AND batch = ?`)
+        .bind(email, batch)
+        .first<RawRow>();
+      return row ? mapWaitlist(row) : null;
+    },
+
+    async countWaitlist(batch) {
+      const row = await d1
+        .prepare(`SELECT COUNT(*) as cnt FROM waitlist WHERE batch = ?`)
+        .bind(batch)
+        .first<{ cnt: number }>();
+      return row?.cnt ?? 0;
+    },
+
+    async waitlistRankOf(batch, createdAt, id) {
+      // Intentionally status-agnostic: every row in the batch is counted,
+      // whatever its `status`. Safe only because 'pending' is the sole value
+      // that exists today (routes.ts writes it, schema.sql defaults to it,
+      // nothing reads the column). Adding a `status = 'pending'` predicate now
+      // would be a provable no-op. If a second status is ever introduced, this
+      // and the in-memory twin below must change TOGETHER; the TRIPWIRE tests
+      // in schema.test.ts and db.test.ts fail loudly if they do not.
+      const row = await d1
+        .prepare(
+          `SELECT COUNT(*) as cnt FROM waitlist
+             WHERE batch = ? AND created_at <= ? AND (created_at < ? OR id <= ?)`,
+        )
+        .bind(batch, createdAt, createdAt, id)
+        .first<{ cnt: number }>();
+      return row?.cnt ?? 0;
+    },
+
+    async listWaitlist(batch) {
+      // (created_at, id) — the SAME composite order waitlistRankOf counts
+      // under. created_at alone is not a total order (whole-second ISO
+      // strings), so ties came back in arbitrary/physical order and the row
+      // listed first could report a different position: measured wl_c wl_a
+      // wl_b here against wl_a=1 wl_b=2 wl_c=3 from the rank query. `id` is
+      // the PRIMARY KEY, so the composite is unique and the queue is total.
+      const { results } = await d1
+        .prepare(`SELECT * FROM waitlist WHERE batch = ? ORDER BY created_at ASC, id ASC`)
+        .bind(batch)
+        .all<RawRow>();
+      return results.map(mapWaitlist);
+    },
+
+    async getEndpointByTokenSha256(sha256) {
+      const row = await d1
+        .prepare(`SELECT * FROM endpoints WHERE token_sha256 = ?`)
+        .bind(sha256)
+        .first<RawRow>();
+      return row ? mapEndpoint(row) : null;
+    },
+
+    async updateEndpointLastSeen(endpointId, lastSeenAt) {
+      await d1
+        .prepare(`UPDATE endpoints SET last_seen_at = ? WHERE id = ?`)
+        .bind(lastSeenAt, endpointId)
+        .run();
+    },
   };
 }
 
@@ -314,10 +433,19 @@ function byCreatedAtDesc(a: { created_at: string; id: string }, b: { created_at:
   return b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id);
 }
 
+// Ascending counterpart for queue order (oldest first). Mirrors SQL
+// `ORDER BY created_at ASC, id ASC`, and must agree with the (created_at, id)
+// composite that waitlistRankOf counts under — same caveat about localeCompare
+// matching BINARY collation for fixed-width ISO-8601 UTC strings.
+function byCreatedAtAsc(a: { created_at: string; id: string }, b: { created_at: string; id: string }): number {
+  return a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id);
+}
+
 export function createMemoryConnectDb(): ConnectDb {
   const invites = new Map<string, InviteRow>();
   const endpoints = new Map<string, EndpointRow>();
   const audits = new Map<string, AuditRow>();
+  const waitlist = new Map<string, WaitlistRow>();
 
   return {
     async insertInvite(row) {
@@ -458,6 +586,83 @@ export function createMemoryConnectDb(): ConnectDb {
       return [...audits.values()]
         .sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id))
         .map((row) => ({ ...row }));
+    },
+
+    async insertWaitlist(row) {
+      if (waitlist.has(row.id)) {
+        throw new Error(`UNIQUE constraint failed: waitlist.id (${row.id})`);
+      }
+      for (const existing of waitlist.values()) {
+        if (existing.email === row.email && existing.batch === row.batch) {
+          throw new Error(`UNIQUE constraint failed: waitlist(email, batch) (${row.email}, ${row.batch})`);
+        }
+      }
+      waitlist.set(row.id, { ...row });
+      return { ...row };
+    },
+
+    async getWaitlistByEmail(email, batch) {
+      for (const row of waitlist.values()) {
+        if (row.email === email && row.batch === batch) {
+          return { ...row };
+        }
+      }
+      return null;
+    },
+
+    async countWaitlist(batch) {
+      let count = 0;
+      for (const row of waitlist.values()) {
+        if (row.batch === batch) count++;
+      }
+      return count;
+    },
+
+    async waitlistRankOf(batch, createdAt, id) {
+      // Must match the D1 predicate exactly, including the (created_at, id)
+      // tiebreaker — route tests run on this backend, so any drift here means
+      // they stop proving anything about production.
+      //
+      // That includes being status-agnostic: like D1, this counts every row in
+      // the batch regardless of `status`, because 'pending' is currently the
+      // only value in existence. If you add a status filter, add it to BOTH
+      // implementations — the TRIPWIRE tests (schema.test.ts for D1,
+      // db.test.ts for this mock) go red on a one-sided change.
+      let count = 0;
+      for (const row of waitlist.values()) {
+        if (row.batch !== batch) continue;
+        if (row.created_at < createdAt || (row.created_at === createdAt && row.id <= id)) {
+          count++;
+        }
+      }
+      return count;
+    },
+
+    async listWaitlist(batch) {
+      // Must match the D1 ORDER BY exactly — `(created_at ASC, id ASC)`, the
+      // same composite waitlistRankOf counts under. Sorting on created_at
+      // alone left Map insertion order to break ties, so listWaitlist[0] could
+      // be the row that reports position 3. See the cross-consistency tests.
+      return [...waitlist.values()]
+        .filter((row) => row.batch === batch)
+        .sort(byCreatedAtAsc)
+        .map((row) => ({ ...row }));
+    },
+
+    async getEndpointByTokenSha256(sha256) {
+      for (const row of endpoints.values()) {
+        if (row.token_sha256 === sha256) {
+          return { ...row };
+        }
+      }
+      return null;
+    },
+
+    async updateEndpointLastSeen(endpointId, lastSeenAt) {
+      const row = endpoints.get(endpointId);
+      if (row !== undefined) {
+        row.last_seen_at = lastSeenAt;
+      }
     },
   };
 }

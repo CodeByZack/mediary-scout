@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { handleRequest, type RouteDeps } from "./routes.js";
+import { handleRequest, MAX_JSON_BODY_BYTES, type RouteDeps } from "./routes.js";
 import { createMemoryConnectDb, type ConnectDb } from "./db.js";
 import type { CfApi } from "./cf-api.js";
+import { EMAIL_MAX_LENGTH, EMAIL_RE } from "./validation.js";
 
 const BASE = "https://mediaryconnect.app";
 const ADMIN = "test-admin-token-fixture";
@@ -250,7 +251,8 @@ describe("handleRequest", () => {
     });
 
     const methods = calls.map((c) => c.method);
-    expect(methods).toContain("deleteAccessApp");
+    // New endpoints don't have Access app (cf_access_app_id is null)
+    expect(methods).not.toContain("deleteAccessApp");
     expect(methods).toContain("deleteDnsRecord");
     expect(methods).toContain("deleteTunnel");
 
@@ -359,5 +361,756 @@ describe("handleRequest", () => {
     const res = await handleRequest(new Request(`${BASE}/nope`), deps);
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "not found" });
+  });
+
+  it("POST /waitlist with valid email → 201, id starts with wl_, position = 1", async () => {
+    const { deps } = setup();
+    const res = await handleRequest(
+      new Request(`${BASE}/waitlist`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "alice@example.com" }),
+      }),
+      deps,
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string; position: number };
+    expect(body.id).toMatch(/^wl_/);
+    expect(body.position).toBe(1);
+  });
+
+  it("POST /waitlist same email twice → 200, same id, position unchanged", async () => {
+    const { deps } = setup();
+    const first = await handleRequest(
+      new Request(`${BASE}/waitlist`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "bob@example.com" }),
+      }),
+      deps,
+    );
+    expect(first.status).toBe(201);
+    const firstBody = (await first.json()) as { id: string; position: number };
+
+    const second = await handleRequest(
+      new Request(`${BASE}/waitlist`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "bob@example.com" }),
+      }),
+      deps,
+    );
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as {
+      already_exists: boolean;
+      id: string;
+      position: number;
+    };
+    expect(secondBody.already_exists).toBe(true);
+    expect(secondBody.id).toBe(firstBody.id);
+    // The test name promises "position unchanged", so assert it. The 200 body is
+    // a strict superset of {already_exists, id} — `position` is returned on BOTH
+    // success paths on purpose (the settings form shows the user their rank, and
+    // a repeat submit is exactly when they look again). Without this the
+    // already-exists path could silently drop it and the name would still lie.
+    expect(secondBody.position).toBe(firstBody.position);
+  });
+
+  // Pins the error vocabulary documented in the addToWaitlist JSDoc and the
+  // README table. "bad encoding" was listed there for a while but is only ever
+  // thrown by decodeParam (URL components) — the body reader cannot produce it.
+  // If you add a new 4xx to this route, add it here and to both docs together.
+  it("POST /waitlist error vocabulary matches the documented contract", async () => {
+    const { deps } = setup();
+    const post = async (body: string, headers: Record<string, string> = {}) =>
+      handleRequest(
+        new Request(`${BASE}/waitlist`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...headers },
+          body,
+        }),
+        deps,
+      );
+
+    const seen = new Set<string>();
+    for (const body of [
+      JSON.stringify({}),                      // email required
+      JSON.stringify({ email: "nope" }),       // invalid email
+      "{not json",                             // invalid json
+      JSON.stringify([1, 2, 3]),               // invalid body
+      JSON.stringify({ email: `${"a".repeat(9000)}@x.com` }), // body too large
+    ]) {
+      const res = await post(body);
+      const { error } = (await res.json()) as { error: string };
+      seen.add(error);
+    }
+
+    expect([...seen].sort()).toEqual([
+      "body too large",
+      "email required",
+      "invalid body",
+      "invalid email",
+      "invalid json",
+    ]);
+    expect(seen.has("bad encoding")).toBe(false);
+  });
+
+  it("POST /waitlist invalid email → 400", async () => {
+    const { deps } = setup();
+    const invalid = [
+      "not-an-email",
+      "missing-at-sign.com",
+      "@no-local.com",
+      "no-domain@",
+      "bad@domain",
+      "bad@.com",
+    ];
+    for (const email of invalid) {
+      const res = await handleRequest(
+        new Request(`${BASE}/waitlist`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email }),
+        }),
+        deps,
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "invalid email" });
+    }
+  });
+
+  it("POST /waitlist normalizes email (uppercase/whitespace) → same record", async () => {
+    const { deps } = setup();
+    const first = await handleRequest(
+      new Request(`${BASE}/waitlist`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "  Charlie@Example.COM  " }),
+      }),
+      deps,
+    );
+    expect(first.status).toBe(201);
+    const firstBody = (await first.json()) as { id: string; position: number };
+
+    const second = await handleRequest(
+      new Request(`${BASE}/waitlist`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "charlie@example.com" }),
+      }),
+      deps,
+    );
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as {
+      already_exists: boolean;
+      id: string;
+      position: number;
+    };
+    expect(secondBody.already_exists).toBe(true);
+    expect(secondBody.id).toBe(firstBody.id);
+    // Same record ⇒ same rank. Pins `position` on the normalization path too.
+    expect(secondBody.position).toBe(firstBody.position);
+  });
+
+  it("POST /api/instance/status with valid token → 204, updates last_seen_at", async () => {
+    const { db, deps } = setup();
+    const seeded = await seedProvisioned(deps);
+    
+    // Get the endpoint to extract its token
+    const endpoint = await db.getEndpointByInviteId(seeded.id);
+    expect(endpoint).not.toBeNull();
+    expect(endpoint?.last_seen_at).toBeNull();
+    
+    const res = await handleRequest(
+      new Request(`${BASE}/api/instance/status`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${seeded.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ version: "1.0.0", uptime_seconds: 3600 }),
+      }),
+      deps,
+    );
+    expect(res.status).toBe(204);
+    
+    // Verify last_seen_at was updated
+    const updated = await db.getEndpointByInviteId(seeded.id);
+    expect(updated?.last_seen_at).toBe(NOW);
+  });
+
+  it("POST /api/instance/status missing Authorization header → 401", async () => {
+    const { deps } = setup();
+    const res = await handleRequest(
+      new Request(`${BASE}/api/instance/status`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+      deps,
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+  });
+
+  it("POST /api/instance/status invalid token (wrong hash) → 401", async () => {
+    const { deps } = setup();
+    await seedProvisioned(deps);
+    
+    const res = await handleRequest(
+      new Request(`${BASE}/api/instance/status`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer wrong-token-that-wont-match",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({}),
+      }),
+      deps,
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+  });
+
+  it("POST /api/instance/status revoked endpoint (status='revoked') → 401", async () => {
+    const { db, deps } = setup();
+    const seeded = await seedProvisioned(deps);
+    
+    // Revoke the endpoint
+    const endpoint = await db.getEndpointByInviteId(seeded.id);
+    expect(endpoint).not.toBeNull();
+    await handleRequest(
+      adminPost(`/api/admin/endpoints/${endpoint?.id ?? ""}/revoke`),
+      deps,
+    );
+    
+    // Try to report status with the (now revoked) token
+    const res = await handleRequest(
+      new Request(`${BASE}/api/instance/status`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${seeded.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({}),
+      }),
+      deps,
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthorized" });
+  });
+
+  it("POST /api/instance/status valid token + optional body fields (version/uptime) → 204", async () => {
+    const { deps } = setup();
+    const seeded = await seedProvisioned(deps);
+    
+    const res = await handleRequest(
+      new Request(`${BASE}/api/instance/status`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${seeded.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ version: "2.5.1", uptime_seconds: 86400 }),
+      }),
+      deps,
+    );
+    expect(res.status).toBe(204);
+  });
+});
+
+describe("POST /waitlist hardening", () => {
+  function waitlistPost(email: unknown): Request {
+    return new Request(`${BASE}/waitlist`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  // HIGH-4: the endpoint is unauthenticated, so an oversized body is stored
+  // verbatim and amplified. A 200KB "email" was previously accepted.
+  it("rejects an email longer than 254 chars (RFC 5321) with 400", async () => {
+    const { db, deps } = setup();
+    const huge = `${"a".repeat(300)}@example.com`;
+
+    const res = await handleRequest(waitlistPost(huge), deps);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid email" });
+    expect(await db.countWaitlist(1)).toBe(0);
+  });
+
+  // Copilot round 2, finding 1: this used to assert 400, because the ONLY
+  // thing standing between a stranger and a 200KB payload was the email length
+  // check — which runs after the whole body has already been read and parsed.
+  // The body cap now rejects it earlier and more cheaply, so the status is 413
+  // and the parse never happens. The property the test actually cares about —
+  // an enormous payload is refused and nothing is stored — is unchanged and
+  // still asserted; only the layer that refuses it moved outward.
+  it("rejects a 200KB email at the body cap, without storing it", async () => {
+    const { db, deps } = setup();
+    const enormous = `${"a".repeat(200 * 1024)}@example.com`;
+
+    const res = await handleRequest(waitlistPost(enormous), deps);
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "body too large" });
+    expect(await db.countWaitlist(1)).toBe(0);
+  });
+
+  // The email cap is NOT made redundant by the body cap: an address can be
+  // grossly invalid while the body stays well under 8 KB. This keeps the 400
+  // path pinned so the inner check cannot be deleted as "already covered".
+  it("still rejects an over-long email with 400 when the body is under the cap", async () => {
+    const { db, deps } = setup();
+    // ~1 KB body: far below MAX_JSON_BODY_BYTES, far above EMAIL_MAX_LENGTH.
+    const longButSmall = `${"a".repeat(1000)}@example.com`;
+
+    const res = await handleRequest(waitlistPost(longButSmall), deps);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid email" });
+    expect(await db.countWaitlist(1)).toBe(0);
+  });
+
+  it("caps length BEFORE the regex so a pathological local-part cannot be scanned", async () => {
+    const { deps } = setup();
+    // 254 chars is the RFC 5321 maximum; 255 must fail on length alone.
+    const at255 = `${"a".repeat(255 - "@example.com".length)}@example.com`;
+    expect(at255).toHaveLength(255);
+    expect(EMAIL_RE.test(at255)).toBe(true); // regex-valid, length-invalid
+
+    const res = await handleRequest(waitlistPost(at255), deps);
+    expect(res.status).toBe(400);
+  });
+
+  it("still accepts an email at exactly the 254-char boundary", async () => {
+    const { db, deps } = setup();
+    const at254 = `${"a".repeat(254 - "@example.com".length)}@example.com`;
+    expect(at254).toHaveLength(254);
+
+    const res = await handleRequest(waitlistPost(at254), deps);
+
+    expect(res.status).toBe(201);
+    expect(await db.countWaitlist(1)).toBe(1);
+  });
+
+  // Copilot round 5, finding 1: the cap used to run on the RAW string, before
+  // trim(). The stored/validated value is the trimmed one, so a legitimate
+  // 254-char address pasted with surrounding whitespace (every mail client and
+  // password manager adds it) was rejected on a length its normalized form does
+  // not have. The cap must measure what we actually keep.
+  it("accepts a 254-char email submitted with surrounding whitespace", async () => {
+    const { db, deps } = setup();
+    const at254 = `${"a".repeat(254 - "@example.com".length)}@example.com`;
+    expect(at254).toHaveLength(254);
+    const padded = `  \t${at254}\n `;
+    expect(padded.length).toBeGreaterThan(EMAIL_MAX_LENGTH);
+
+    const res = await handleRequest(waitlistPost(padded), deps);
+
+    expect(res.status).toBe(201);
+    expect(await db.countWaitlist(1)).toBe(1);
+  });
+
+  // The other half of the same boundary: moving the cap after trim() must not
+  // turn it into a no-op. 255 trimmed chars is still over the RFC limit, and
+  // padding it with whitespace must not smuggle it past.
+  it("rejects an email whose TRIMMED length is 255, whitespace or not", async () => {
+    const { db, deps } = setup();
+    const at255 = `${"a".repeat(255 - "@example.com".length)}@example.com`;
+    expect(at255).toHaveLength(EMAIL_MAX_LENGTH + 1);
+
+    for (const candidate of [at255, `  ${at255}  `]) {
+      const res = await handleRequest(waitlistPost(candidate), deps);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "invalid email" });
+    }
+    expect(await db.countWaitlist(1)).toBe(0);
+  });
+
+  // HIGH-4: position was computed by pulling EVERY row and scanning in JS, so
+  // each request cost O(n) and the endpoint cost O(n^2) cumulatively. The
+  // indexed countWaitlist() was implemented but never called on this path.
+  it("does not call listWaitlist on the signup path (uses the indexed count)", async () => {
+    const { db, deps } = setup();
+    let listCalls = 0;
+    let countCalls = 0;
+    const tracked: ConnectDb = {
+      ...db,
+      async listWaitlist(batch) {
+        listCalls += 1;
+        return db.listWaitlist(batch);
+      },
+      async countWaitlist(batch) {
+        countCalls += 1;
+        return db.countWaitlist(batch);
+      },
+      async waitlistRankOf(batch, createdAt, id) {
+        countCalls += 1;
+        return db.waitlistRankOf(batch, createdAt, id);
+      },
+    };
+
+    const first = await handleRequest(waitlistPost("new@example.com"), { ...deps, db: tracked });
+    expect(first.status).toBe(201);
+    // And on the already-exists branch too.
+    const second = await handleRequest(waitlistPost("new@example.com"), { ...deps, db: tracked });
+    expect(second.status).toBe(200);
+
+    expect(listCalls).toBe(0);
+    expect(countCalls).toBeGreaterThan(0);
+  });
+
+  it("reports positions that increase with each distinct signup", async () => {
+    // Distinct signups arriving in distinct seconds — the plain ordering case.
+    // `now` advances here on purpose: the frozen-clock variant is a different
+    // scenario and is covered by the same-second test below.
+    const { deps: base } = setup();
+    let tick = 0;
+    const deps = { ...base, now: () => `2026-07-24T10:00:0${tick++}.000Z` };
+    const positions: number[] = [];
+    for (const email of ["a@example.com", "b@example.com", "c@example.com"]) {
+      const res = await handleRequest(waitlistPost(email), deps);
+      expect(res.status).toBe(201);
+      positions.push(((await res.json()) as { position: number }).position);
+    }
+    expect(positions).toEqual([1, 2, 3]);
+  });
+
+  // The regression Copilot flagged, at the HTTP layer. created_at is a
+  // whole-second ISO string, so several people signing up in the same second is
+  // routine. Under the old `created_at <= ?` count, querying those rows gave
+  // every one of them the SAME position (measured against real SQLite with
+  // three same-second rows: 3, 3, 3).
+  //
+  // Distinctness is a property of a fixed snapshot, so this asserts against the
+  // settled table (via the repeat-submit 200 path) rather than against the
+  // insert-time values: a position handed out mid-signup is the rank among the
+  // rows that existed then, and because newId("wl") is random hex rather than
+  // monotonic, a later same-second row can legitimately sort ahead of an
+  // earlier one. Hence also no assertion of submission order here — that is
+  // not something this implementation guarantees within one second.
+  it("same-second signups get distinct, stable positions (no ties)", async () => {
+    const { db, deps } = setup();
+    const emails = ["a@example.com", "b@example.com", "c@example.com", "d@example.com"];
+    for (const email of emails) {
+      expect((await handleRequest(waitlistPost(email), deps)).status).toBe(201);
+    }
+
+    // All four share one frozen timestamp — this is the tie scenario.
+    const rows = await db.listWaitlist(1);
+    expect(rows).toHaveLength(emails.length);
+    expect(new Set(rows.map((r) => r.created_at)).size).toBe(1);
+
+    const settled = async (): Promise<number[]> => {
+      const out: number[] = [];
+      for (const email of emails) {
+        const res = await handleRequest(waitlistPost(email), deps);
+        expect(res.status).toBe(200);
+        out.push(((await res.json()) as { position: number }).position);
+      }
+      return out;
+    };
+
+    const positions = await settled();
+    // Every position distinct, and exactly the set 1..4 — no gaps, no ties.
+    // The old implementation returned [4, 4, 4, 4] here.
+    expect(new Set(positions).size).toBe(emails.length);
+    expect([...positions].sort((x, y) => x - y)).toEqual([1, 2, 3, 4]);
+
+    // Stable across repeated reads, not just internally consistent once.
+    expect(await settled()).toEqual(positions);
+  });
+
+  // HIGH-5: SELECT-then-INSERT is not atomic. Five concurrent identical POSTs
+  // previously returned one 201 and four 500 {"error":"internal"} — a user
+  // double-clicking Submit got an error page after being signed up.
+  it("concurrent identical submits never 500 (TOCTOU)", async () => {
+    const { db, deps } = setup();
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => handleRequest(waitlistPost("race@example.com"), deps)),
+    );
+
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses.filter((s) => s === 500)).toEqual([]);
+    expect(statuses.filter((s) => s === 201)).toHaveLength(1);
+    expect(statuses.filter((s) => s === 200)).toHaveLength(4);
+    // Data integrity: the UNIQUE index still admits exactly one row.
+    expect(await db.countWaitlist(1)).toBe(1);
+  });
+
+  it("a lost INSERT race returns the same shape as the already-exists branch", async () => {
+    const { db, deps } = setup();
+    const first = await handleRequest(waitlistPost("dup@example.com"), deps);
+    expect(first.status).toBe(201);
+    const firstId = ((await first.json()) as { id: string }).id;
+
+    // Force the race deterministically: blind ONLY the pre-check, so the
+    // handler proceeds to an INSERT that the UNIQUE index rejects. The
+    // post-violation lookup still works, exactly as in a real race where the
+    // winner's row is committed by the time we re-read.
+    let precheckBlinded = false;
+    const racing: ConnectDb = {
+      ...db,
+      async getWaitlistByEmail(email, batch) {
+        if (!precheckBlinded) {
+          precheckBlinded = true;
+          return null;
+        }
+        return db.getWaitlistByEmail(email, batch);
+      },
+    };
+
+    const second = await handleRequest(waitlistPost("dup@example.com"), {
+      ...deps,
+      db: racing,
+    });
+
+    expect(precheckBlinded).toBe(true);
+    expect(second.status).toBe(200);
+    const body = (await second.json()) as {
+      already_exists: boolean;
+      id: string;
+      position: number;
+    };
+    expect(body.already_exists).toBe(true);
+    expect(body.id).toBe(firstId);
+    expect(body.position).toBe(1);
+    expect(await db.countWaitlist(1)).toBe(1);
+  });
+
+  it("propagates a genuine insert failure as 500 (does not swallow every error)", async () => {
+    const { db, deps } = setup();
+    const broken: ConnectDb = {
+      ...db,
+      async insertWaitlist() {
+        throw new Error("D1_ERROR: network unreachable");
+      },
+    };
+
+    const res = await handleRequest(waitlistPost("boom@example.com"), { ...deps, db: broken });
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "internal" });
+  });
+
+  it("a non-UNIQUE failure still 500s even when a row is readable afterwards", async () => {
+    // Pins the narrowness of the UNIQUE check itself. Above, the recovery
+    // lookup returns null and the `winner === null` guard produces the 500 —
+    // so that test passes even with a broad catch-all. Here the lookup DOES
+    // return a row, so only classifying on the error message keeps this a 500.
+    // A blanket `catch { return 200 }` would report a D1 outage as success.
+    const { db, deps } = setup();
+    await db.insertWaitlist({
+      id: "wl_pre",
+      email: "outage@example.com",
+      batch: 1,
+      status: "pending",
+      created_at: "2026-07-24T09:00:00.000Z",
+    });
+    let precheckBlinded = false;
+    const broken: ConnectDb = {
+      ...db,
+      async getWaitlistByEmail(email, batch) {
+        if (!precheckBlinded) {
+          precheckBlinded = true;
+          return null;
+        }
+        return db.getWaitlistByEmail(email, batch);
+      },
+      async insertWaitlist() {
+        throw new Error("D1_ERROR: statement timed out");
+      },
+    };
+
+    const res = await handleRequest(waitlistPost("outage@example.com"), { ...deps, db: broken });
+
+    expect(precheckBlinded).toBe(true);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "internal" });
+  });
+
+  // MEDIUM-7: the schema default was 'waiting' while routes insert 'pending',
+  // so the column held two different words for one state. Nothing filters on
+  // status today — this pins that the app and the schema agree on the literal.
+  it("inserts the same status literal the schema defaults to", async () => {
+    const { db, deps } = setup();
+    await handleRequest(waitlistPost("lit@example.com"), deps);
+    const row = await db.getWaitlistByEmail("lit@example.com", 1);
+    expect(row?.status).toBe("pending");
+  });
+});
+
+// Copilot round 2, finding 1: readJsonBody() read and JSON.parse'd an
+// unbounded body. The email length cap runs AFTER that, so /waitlist — public
+// and unauthenticated — let a stranger make the Worker buffer and parse
+// megabytes for free. This Worker shares its D1 with the provisioning control
+// plane, so that is CPU/memory amplification against provisioning too.
+describe("request body size cap", () => {
+  function waitlistPost(email: unknown): Request {
+    return new Request(`${BASE}/waitlist`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  /** A body far above MAX_JSON_BODY_BYTES (8 KB) but cheap to build. */
+  const oversizedJson = (): string => JSON.stringify({ email: "a".repeat(64 * 1024) });
+
+  /** Streams `text` so the Request carries NO content-length (chunked). */
+  function chunkedRequest(
+    url: string,
+    text: string,
+    headers: Record<string, string> = {},
+  ): Request {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(text));
+        controller.close();
+      },
+    });
+    return new Request(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body,
+      // Required by undici/workerd for a streaming request body.
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+  }
+
+  it("declared Content-Length over the cap → 413, before the body is read", async () => {
+    const { deps } = setup();
+    // Body is never sent — only the header claims the size. A cap that is
+    // enforced purely post-read would have nothing to reject here.
+    const res = await handleRequest(
+      new Request(`${BASE}/waitlist`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": String(64 * 1024) },
+        body: JSON.stringify({ email: "ok@example.com" }),
+      }),
+      deps,
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "body too large" });
+  });
+
+  it("oversized actual body with NO Content-Length (chunked) → 413", async () => {
+    const { db, deps } = setup();
+
+    const res = await handleRequest(
+      chunkedRequest(`${BASE}/waitlist`, oversizedJson()),
+      deps,
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "body too large" });
+    expect(await db.countWaitlist(1)).toBe(0);
+  });
+
+  it("oversized actual body behind a LYING small Content-Length → 413", async () => {
+    const { db, deps } = setup();
+    // The header cannot be trusted: it says 12 bytes, the stream delivers 64 KB.
+    const res = await handleRequest(
+      chunkedRequest(`${BASE}/waitlist`, oversizedJson(), { "content-length": "12" }),
+      deps,
+    );
+
+    expect(res.status).toBe(413);
+    expect(await db.countWaitlist(1)).toBe(0);
+  });
+
+  it("counts BYTES, not UTF-16 code units (multibyte payload under the char count)", async () => {
+    const { deps } = setup();
+    // 4 KB of 3-byte characters = 12 KB on the wire but only ~4k `.length`.
+    // A `text.length` cap would wave this through; a byte cap must not.
+    const res = await handleRequest(
+      chunkedRequest(`${BASE}/waitlist`, JSON.stringify({ email: "中".repeat(4096) })),
+      deps,
+    );
+
+    expect(res.status).toBe(413);
+  });
+
+  it("a normal small body still succeeds on POST /waitlist", async () => {
+    const { db, deps } = setup();
+    const res = await handleRequest(waitlistPost("small@example.com"), deps);
+    expect(res.status).toBe(201);
+    expect(await db.countWaitlist(1)).toBe(1);
+  });
+
+  // The cap lives in the shared helper, so the two admin call sites get it too
+  // and must keep working. Both are bearer-authenticated; the cap is not their
+  // threat model, but a regression here would break the admin console.
+  it("a normal small body still succeeds on POST /api/admin/invites", async () => {
+    const { deps } = setup();
+    const res = await createInviteViaApi(deps, { email: "admin@example.com", slug: "alice" });
+    expect(res.status).toBe(201);
+  });
+
+  it("a normal small body still succeeds on POST /api/admin/invites/:id/provision", async () => {
+    const { deps } = setup();
+    const created = (await (
+      await createInviteViaApi(deps, { email: "admin@example.com" })
+    ).json()) as InviteCreated;
+
+    const res = await provisionViaApi(deps, created.id, { slug: "bob" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("oversized body on POST /api/admin/invites → 413 (helper is shared)", async () => {
+    const { deps } = setup();
+    const res = await handleRequest(
+      chunkedRequest(`${BASE}/api/admin/invites`, oversizedJson(), {
+        authorization: `Bearer ${ADMIN}`,
+      }),
+      deps,
+    );
+    expect(res.status).toBe(413);
+  });
+
+  // POST /api/instance/status is deliberately NOT in this list: it never reads
+  // its body at all (no readJsonBody call — it authenticates by header and
+  // returns 204), so there is nothing to buffer and nothing to amplify. The
+  // test below pins that, so if someone later adds a body read they get a
+  // failing test telling them to route it through the capped helper.
+  it("POST /api/instance/status ignores its body entirely, so a huge one is not read", async () => {
+    const { deps } = setup();
+    const seeded = await seedProvisioned(deps);
+    const req = chunkedRequest(
+      `${BASE}/api/instance/status`,
+      JSON.stringify({ version: "1".repeat(64 * 1024), uptime_seconds: 1 }),
+      { authorization: `Bearer ${seeded.token}` },
+    );
+
+    const res = await handleRequest(req, deps);
+
+    expect(res.status).toBe(204);
+    // Never consumed → never buffered. This is the property that makes the
+    // absence of a cap on this route safe.
+    expect(req.bodyUsed).toBe(false);
+  });
+
+  it("a body at exactly the cap is accepted; one byte over is not", async () => {
+    const { deps } = setup();
+    const overhead = JSON.stringify({ email: "", pad: "" }).length;
+    const atCap = JSON.stringify({
+      email: "edge@example.com",
+      pad: "a".repeat(MAX_JSON_BODY_BYTES - overhead - "edge@example.com".length),
+    });
+    expect(new TextEncoder().encode(atCap).byteLength).toBe(MAX_JSON_BODY_BYTES);
+
+    expect((await handleRequest(chunkedRequest(`${BASE}/waitlist`, atCap), deps)).status).toBe(201);
+
+    const overCap = `${atCap.slice(0, -2)}a"}`;
+    expect(new TextEncoder().encode(overCap).byteLength).toBe(MAX_JSON_BODY_BYTES + 1);
+    expect((await handleRequest(chunkedRequest(`${BASE}/waitlist`, overCap), deps)).status).toBe(
+      413,
+    );
   });
 });

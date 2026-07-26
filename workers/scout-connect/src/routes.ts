@@ -9,6 +9,9 @@ import { assertSlug } from "./slug.js";
 import { homePage } from "./html/home-page.js";
 import { adminPage } from "./html/admin-page.js";
 import { invitePage, type InvitePageState } from "./html/invite-page.js";
+import { EMAIL_MAX_LENGTH, EMAIL_RE } from "./validation.js";
+import { newId } from "./ids.js";
+import { sha256Hex } from "./crypto-token.js";
 
 // Same aperture mark as apps/web/app/icon.svg — the product brand.
 const LOGO_SVG =
@@ -35,8 +38,91 @@ export async function handleRequest(request: Request, deps: RouteDeps): Promise<
   }
 }
 
+/**
+ * Hard cap on any request body this Worker will buffer or parse.
+ *
+ * 8 KB, because every body we accept is tiny and fixed-shape: `{email}` on
+ * POST /waitlist (an email is capped at 254 bytes by RFC 5321 — see
+ * EMAIL_MAX_LENGTH), `{email, slug, invitee_label}` on invite creation,
+ * `{slug}` on provision, and `{version, uptime_seconds}` on the status
+ * heartbeat. 8 KB is ~30x the largest of those, so it cannot reject a
+ * legitimate caller, while still being small enough that the worst case a
+ * stranger can force is trivial.
+ *
+ * This matters because POST /waitlist is public and unauthenticated, and this
+ * Worker shares its D1 instance with the provisioning control plane: an
+ * unbounded read+JSON.parse here is free CPU/memory amplification that
+ * degrades provisioning and revocation, not just the waitlist.
+ */
+export const MAX_JSON_BODY_BYTES = 8 * 1024;
+
+/**
+ * Cheap pre-read rejection on the DECLARED size. Costs nothing and refuses the
+ * request before a single byte is buffered — but it is only half the defence,
+ * because Content-Length is absent under chunked encoding and is attacker-
+ * controlled besides. readBodyTextCapped() enforces the real limit.
+ */
+function assertDeclaredSizeWithinCap(request: Request): void {
+  const declared = request.headers.get("content-length");
+  if (declared === null) {
+    return;
+  }
+  const bytes = Number(declared);
+  if (Number.isFinite(bytes) && bytes > MAX_JSON_BODY_BYTES) {
+    throw new HttpError(413, "body too large");
+  }
+}
+
+/**
+ * Reads the body with a genuine streaming cap: we stop pulling and cancel the
+ * stream the moment the running total crosses MAX_JSON_BODY_BYTES, so an
+ * attacker's 500 MB body costs us one chunk, not 500 MB. `await
+ * request.text()` cannot do this — it buffers everything first, which is
+ * exactly the amplification being fixed.
+ *
+ * Counts BYTES off the wire, not `String.length`: a JS string length is UTF-16
+ * code units, so a multibyte payload is up to 3x larger than a post-decode
+ * length check would suggest.
+ */
+async function readBodyTextCapped(request: Request): Promise<string> {
+  const body = request.body;
+  if (body === null) {
+    return "";
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value === undefined) {
+        continue;
+      }
+      total += value.byteLength;
+      if (total > MAX_JSON_BODY_BYTES) {
+        await reader.cancel();
+        throw new HttpError(413, "body too large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
+}
+
 async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
-  const text = await request.text();
+  assertDeclaredSizeWithinCap(request);
+  const text = await readBodyTextCapped(request);
   if (text.trim() === "") {
     return {};
   }
@@ -164,6 +250,16 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
   const revealMatch = path.match(/^\/api\/i\/([^/]+)\/reveal$/);
   if (revealMatch !== null && method === "POST") {
     return await revealInvite(deps, decodeParam(revealMatch[1] ?? ""));
+  }
+
+  // ---- public waitlist ----
+  if (path === "/waitlist" && method === "POST") {
+    return await addToWaitlist(request, deps);
+  }
+
+  // ---- instance status reporting (bearer token auth) ----
+  if (path === "/api/instance/status" && method === "POST") {
+    return await reportInstanceStatus(request, deps);
   }
 
   throw new HttpError(404, "not found");
@@ -331,4 +427,160 @@ async function revealInvite(deps: RouteDeps, code: string): Promise<Response> {
         { noStore: true },
       );
   }
+}
+
+const WAITLIST_BATCH = 1; // Fixed batch for 阶段 1.
+
+/** The status literal for a queued signup. Must match schema.sql's DEFAULT. */
+const WAITLIST_PENDING = "pending";
+
+/**
+ * True when an insert failed because the (email, batch) UNIQUE index rejected
+ * it, as opposed to any other D1 failure. Deliberately narrow: a broad
+ * catch-all here would convert real outages into cheerful 200s.
+ */
+function isUniqueViolation(e: unknown): boolean {
+  return e instanceof Error && /UNIQUE constraint failed/i.test(e.message);
+}
+
+/**
+ * POST /waitlist — public, unauthenticated signup.
+ *
+ * Request: `{ email: string }` (≤ EMAIL_MAX_LENGTH bytes; trimmed+lowercased).
+ *
+ * Responses — `position` is present on EVERY success path, new or repeat:
+ *   201 `{ id: string, position: number }`
+ *   200 `{ already_exists: true, id: string, position: number }`
+ *   400 `{ error: "email required" | "invalid email" }`
+ *       (plus "invalid json" / "invalid body" from the
+ *        shared body reader)
+ *   413 `{ error: "body too large" }`
+ *
+ * The 200 body is a strict superset of `{ already_exists, id }`. Any doc that
+ * omits `position` there is stale — see the comment on the branch itself for
+ * why it is deliberate. `position` is 1-based within the batch.
+ */
+async function addToWaitlist(request: Request, deps: RouteDeps): Promise<Response> {
+  const body = await readJsonBody(request);
+  const emailRaw = body.email;
+  if (typeof emailRaw !== "string") {
+    throw new HttpError(400, "email required");
+  }
+  // Normalize FIRST, then bound, then run the regex.
+  //
+  // The cap measures the value we actually validate and store, not the raw
+  // submission: a 254-char address pasted with surrounding whitespace is a
+  // legitimate address, and capping `emailRaw` rejected it on a length its
+  // normalized form does not have.
+  //
+  // Trimming first is NOT a DoS hole, so do not "restore" a pre-trim check as
+  // hardening. The raw string is already bounded far earlier and far more
+  // cheaply by MAX_JSON_BODY_BYTES (8 KB, enforced as a streaming byte cap in
+  // readBodyTextCapped before this function is ever entered), so `trim()` here
+  // can only ever see ≤8 KB. The 200KB-address case is a 413 at the body cap.
+  // The cap below still bounds what reaches EMAIL_RE and the database.
+  const email = emailRaw.trim().toLowerCase();
+  if (email.length > EMAIL_MAX_LENGTH || !EMAIL_RE.test(email)) {
+    throw new HttpError(400, "invalid email");
+  }
+
+  const batch = WAITLIST_BATCH;
+
+  // Fast path for the common repeat submit. This is only an optimisation — the
+  // INSERT below is authoritative, because a SELECT-then-INSERT pair is not
+  // atomic and a double-clicked Submit used to 500.
+  const existing = await deps.db.getWaitlistByEmail(email, batch);
+  if (existing !== null) {
+    // `position` is returned on the already-exists path INTENTIONALLY, and the
+    // extra indexed read it costs is intentional too. The settings-page
+    // waitlist form shows the user their rank, and a repeat submit (double
+    // click, revisit, refresh) is exactly when they want to see it again.
+    // Returning it on both the 201 and 200 paths keeps one response contract
+    // instead of forcing the client to branch. Do not "optimise" it away.
+    return json(
+      { already_exists: true, id: existing.id, position: await waitlistPosition(deps, existing) },
+      200,
+    );
+  }
+
+  const row = {
+    id: newId("wl"),
+    email,
+    batch,
+    status: WAITLIST_PENDING,
+    created_at: deps.now(),
+  };
+  try {
+    await deps.db.insertWaitlist(row);
+  } catch (e) {
+    if (!isUniqueViolation(e)) {
+      throw e;
+    }
+    // Lost the race: someone inserted this exact (email, batch) between our
+    // pre-check and here. That is a successful signup, not an error — return
+    // the same shape as the already-exists branch above.
+    const winner = await deps.db.getWaitlistByEmail(email, batch);
+    if (winner === null) {
+      throw e; // UNIQUE fired but the row is not readable — genuinely broken.
+    }
+    // Same contract as the pre-check branch above, `position` included.
+    return json(
+      { already_exists: true, id: winner.id, position: await waitlistPosition(deps, winner) },
+      200,
+    );
+  }
+
+  return json({ id: row.id, position: await waitlistPosition(deps, row) }, 201);
+}
+
+/**
+ * Position of `row` in its batch, via an indexed count rather than by pulling
+ * every row and scanning in JS. The old implementation made TWO full table
+ * scans per request — O(n) per call and O(n^2) cumulatively on an
+ * unauthenticated endpoint that shares its D1 instance with `endpoints`, so
+ * filling the waitlist degraded provisioning and revocation.
+ *
+ * Ranks on the composite (created_at, id). created_at alone is not a total
+ * order — it is a whole-second ISO string, so every signup in the same second
+ * used to collapse to one shared position (measured: three same-second rows
+ * all reported position 3). `id` is the PRIMARY KEY, which makes the order
+ * total and every position distinct.
+ *
+ * Caveat worth knowing: ids are random (see newId), not monotonic, so within a
+ * single second the tiebreak is arbitrary-but-stable rather than true arrival
+ * order. Distinctness and stability are what the UI needs; exact sub-second
+ * arrival ordering would require a monotonic key we do not currently store.
+ */
+async function waitlistPosition(
+  deps: RouteDeps,
+  row: { batch: number; created_at: string; id: string },
+): Promise<number> {
+  return deps.db.waitlistRankOf(row.batch, row.created_at, row.id);
+}
+
+async function reportInstanceStatus(request: Request, deps: RouteDeps): Promise<Response> {
+  // Extract Bearer token from Authorization header
+  const authHeader = request.headers.get("authorization");
+  if (!authHeader || !authHeader.toLowerCase().startsWith("bearer ")) {
+    throw new HttpError(401, "unauthorized");
+  }
+  const token = authHeader.slice("bearer ".length).trim();
+  if (token === "") {
+    throw new HttpError(401, "unauthorized");
+  }
+
+  // Hash the token and look up the endpoint
+  const tokenHash = await sha256Hex(token);
+  const endpoint = await deps.db.getEndpointByTokenSha256(tokenHash);
+
+  // Endpoint must exist and be active
+  if (endpoint === null || endpoint.status !== "active") {
+    throw new HttpError(401, "unauthorized");
+  }
+
+  // Update last_seen_at
+  await deps.db.updateEndpointLastSeen(endpoint.id, deps.now());
+
+  // Return 204 No Content
+  return new Response(null, { status: 204 });
 }

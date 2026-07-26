@@ -30,6 +30,26 @@ admin ──► mediaryconnect.app (this worker)
             docker compose --profile tunnel up -d   (TUNNEL_TOKEN in .env)
 ```
 
+### Public endpoints (no auth)
+
+`POST /waitlist` — beta signup. Body `{ email }`.
+
+| Status | Body |
+| --- | --- |
+| 201 | `{ id, position }` — new signup |
+| 200 | `{ already_exists: true, id, position }` — email already queued |
+| 400 | `{ error }` — `email required` / `invalid email` (or `invalid json` / `invalid body` from the shared body reader) |
+| 413 | `{ error: "body too large" }` |
+
+`position` is 1-based within the batch and is returned on **both** success
+paths — the 200 body is a strict superset of `{ already_exists, id }`. A repeat
+submit (double click, refresh) is exactly when the settings-page form needs to
+re-display the rank, so clients never have to branch on status code to find it.
+
+Ranking counts every row in the batch regardless of `waitlist.status`. Only
+`'pending'` exists today and nothing reads the column; if that changes, see the
+TRIPWIRE tests in `src/schema.test.ts` and `src/db.test.ts`.
+
 Token secrecy: the connector token is returned to the caller exactly once (at
 provision to the admin, or at `/api/i/:code/reveal` to the invitee). D1 stores
 AES-GCM ciphertext (`TOKEN_WRAP_KEY`) until the first reveal, then only a
@@ -59,6 +79,46 @@ npx wrangler deploy
 curl https://mediaryconnect.app/healthz       # → ok
 ```
 
+### Migrations (existing databases)
+
+`schema.sql` is the **fresh-install** shape only — applying it to a live
+database does nothing for columns that already exist. Every schema change also
+ships a file in `./migrations`, applied explicitly with `d1 execute --file`
+(there is no `migrations_dir` / `d1 migrations apply` wiring for this Worker).
+
+**Run pending migrations BEFORE `wrangler deploy`.** The Worker code assumes the
+new shape; deploying first takes the control plane down.
+
+```bash
+cd workers/scout-connect
+npx wrangler d1 execute scout-connect --remote \
+  --file=./migrations/0001-drop-access-notnull-add-last-seen.sql
+npx wrangler deploy
+```
+
+| Migration | What / why |
+| --- | --- |
+| `0001-drop-access-notnull-add-last-seen.sql` | Drops the `cf_access_app_id NOT NULL` (post-Access `provision.ts` writes `NULL`; the old table rejected it, so **every provision 500'd** after creating and then rolling back the tunnel/DNS). Adds `last_seen_at` for `POST /api/instance/status`. Adds `idx_endpoints_token_sha256` + `idx_waitlist_batch_created` (both paths were full table scans). Realigns `waitlist.status` default `'waiting'` → `'pending'`. |
+
+Notes on writing migrations here:
+
+- **No explicit SQL transactions.** D1 rejects them. `d1 execute --file` already
+  applies a file atomically (a mid-file failure leaves the DB untouched).
+  Wrangler's splitter also string-matches the adjacent words `BEGIN` +
+  `TRANSACTION` *even inside a `--` comment* and refuses the whole file with
+  "contains several transactions" — `src/schema.test.ts` pins this.
+- SQLite has no `ADD COLUMN IF NOT EXISTS`, so migrations are abort-safe rather
+  than idempotent: re-running 0001 fails on the first `ALTER` and, because the
+  file is atomic, changes nothing.
+- Removing a `NOT NULL` or changing a `DEFAULT` needs a table rebuild
+  (rename → create → `INSERT … SELECT` → drop → recreate indexes). Name the
+  columns explicitly on both sides; `SELECT *` binds positionally and silently
+  shuffles values into the wrong columns.
+- Rebuilding a table drops its indexes — recreate them, or the admin
+  `revoke_failed` sweep quietly degrades to a scan.
+- Changes to `schema.sql` must keep fresh and migrated installs converged;
+  `src/schema.test.ts` asserts the two shapes are identical.
+
 ⚠️ If you have `CF_API_TOKEN` in your shell env (e.g. for other scripts),
 wrangler picks it up as *its own* auth and fails with account-list errors —
 run deploy/secret commands as `env -u CF_API_TOKEN npx wrangler ...`.
@@ -85,6 +145,13 @@ on a UDP-restricted network, tell the invitee to add
 ## Tests
 
 `npx vitest run workers/scout-connect` from the repo root (auto-discovered).
-106 unit tests cover slug/auth, crypto wrap/unwrap, CF API client (incl. token
+Unit tests cover slug/auth, crypto wrap/unwrap, CF API client (incl. token
 non-leakage), D1 SQL shape, provision compensation (CF + D1 failure paths),
 revoke idempotency, one-time reveal state machine, and HTTP routes.
+
+`src/schema.test.ts` is the one file that applies the real `schema.sql` (and
+`migrations/*.sql`) to a real SQLite database via `better-sqlite3`. The rest of
+the suite runs against `createMemoryConnectDb`, a `Map` with no constraint
+engine — it cannot catch a NOT NULL / missing-column / index regression, and
+once didn't: a null insert passed the mock while production rejected it. Any
+schema or migration change belongs in `schema.test.ts`.

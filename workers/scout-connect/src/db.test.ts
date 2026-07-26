@@ -38,6 +38,7 @@ function makeEndpoint(overrides: Partial<EndpointRow> = {}): EndpointRow {
     token_sha256: "sha256hex",
     token_ciphertext: "ciphertext",
     token_shown_at: null,
+    last_seen_at: null,
     created_at: "2026-07-24T00:00:00.000Z",
     revoked_at: null,
     ...overrides,
@@ -317,5 +318,193 @@ describe("D1 ConnectDb SQL", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.query).not.toContain("s3cret-ciphertext");
     expect(calls[0]?.binds).toContain("s3cret-ciphertext");
+  });
+});
+
+describe("waitlist", () => {
+  it("insert + count + list; email 唯一约束", async () => {
+    const db = createMemoryConnectDb();
+    await db.insertWaitlist({
+      id: "w1",
+      email: "a@x.com",
+      batch: 1,
+      status: "pending",
+      created_at: "2026-07-25T00:00:00Z",
+    });
+    await expect(
+      db.insertWaitlist({
+        id: "w2",
+        email: "a@x.com",
+        batch: 1,
+        status: "pending",
+        created_at: "2026-07-25T00:00:01Z",
+      }),
+    ).rejects.toThrow(/UNIQUE/);
+    expect(await db.countWaitlist(1)).toBe(1);
+    expect((await db.listWaitlist(1)).map((r) => r.email)).toEqual(["a@x.com"]);
+  });
+
+  it("getWaitlistByEmail 返回匹配行或 null", async () => {
+    const db = createMemoryConnectDb();
+    await db.insertWaitlist({
+      id: "w1",
+      email: "b@y.com",
+      batch: 1,
+      status: "pending",
+      created_at: "2026-07-25T00:00:00Z",
+    });
+    expect(await db.getWaitlistByEmail("b@y.com", 1)).toMatchObject({ email: "b@y.com" });
+    expect(await db.getWaitlistByEmail("missing@z.com", 1)).toBeNull();
+  });
+
+  // The memory backend must rank identically to the D1 backend, or route tests
+  // (which run on memory) prove nothing about production. The authoritative
+  // same-second coverage lives in schema.test.ts against real SQLite; this is
+  // the lockstep check for the mock.
+  it("waitlistRankOf 同一秒内按 id 给出互不相同的 1,2,3", async () => {
+    const db = createMemoryConnectDb();
+    const ts = "2026-07-26T00:00:00.000Z";
+    for (const { id, email } of [
+      { id: "wl_b", email: "b@x.com" },
+      { id: "wl_c", email: "c@x.com" },
+      { id: "wl_a", email: "a@x.com" },
+    ]) {
+      await db.insertWaitlist({ id, email, batch: 1, status: "pending", created_at: ts });
+    }
+
+    const ranks = await Promise.all(
+      ["wl_a", "wl_b", "wl_c"].map((id) => db.waitlistRankOf(1, ts, id)),
+    );
+    expect(ranks).toEqual([1, 2, 3]);
+  });
+
+  it("waitlistRankOf 跨时间戳排序，且不计入其他 batch", async () => {
+    const db = createMemoryConnectDb();
+    await db.insertWaitlist({
+      id: "wl_early",
+      email: "early@x.com",
+      batch: 1,
+      status: "pending",
+      created_at: "2026-07-25T00:00:00.000Z",
+    });
+    await db.insertWaitlist({
+      id: "wl_late",
+      email: "late@x.com",
+      batch: 1,
+      status: "pending",
+      created_at: "2026-07-27T00:00:00.000Z",
+    });
+    await db.insertWaitlist({
+      id: "wl_zzz_other",
+      email: "other@x.com",
+      batch: 2,
+      status: "pending",
+      created_at: "2026-07-25T00:00:00.000Z",
+    });
+
+    expect(await db.waitlistRankOf(1, "2026-07-25T00:00:00.000Z", "wl_early")).toBe(1);
+    expect(await db.waitlistRankOf(1, "2026-07-27T00:00:00.000Z", "wl_late")).toBe(2);
+    expect(await db.waitlistRankOf(2, "2026-07-25T00:00:00.000Z", "wl_zzz_other")).toBe(1);
+  });
+
+  // TRIPWIRE — mirror of the same-named test in schema.test.ts, which runs
+  // this scenario against real SQLite. Both exist on purpose: the two
+  // waitlistRankOf implementations must stay semantically identical, so a
+  // status filter added to only one of them has to fail somewhere. Read the
+  // long comment in schema.test.ts before changing either.
+  it("TRIPWIRE: ranking counts non-pending rows too — status is not filtered (memory mock)", async () => {
+    const db = createMemoryConnectDb();
+    const TS = "2026-07-26T00:00:00.000Z";
+    await db.insertWaitlist({
+      id: "wl_gone",
+      email: "gone@x.com",
+      batch: 1,
+      status: "removed",
+      created_at: "2026-07-25T00:00:00.000Z",
+    });
+    await db.insertWaitlist({
+      id: "wl_here",
+      email: "here@x.com",
+      batch: 1,
+      status: "pending",
+      created_at: TS,
+    });
+
+    expect(await db.waitlistRankOf(1, TS, "wl_here")).toBe(2);
+    expect(await db.waitlistRankOf(1, "2026-07-25T00:00:00.000Z", "wl_gone")).toBe(1);
+  });
+
+  // Mirror of the listWaitlist ordering tests in schema.test.ts. The mock
+  // ordered by created_at alone while waitlistRankOf used (created_at, id),
+  // so the row listed first could report position 3. Route tests run on this
+  // backend, so the two must stay semantically identical.
+  async function seedOutOfIdOrder(db: ReturnType<typeof createMemoryConnectDb>): Promise<void> {
+    const TS = "2026-07-26T00:00:00.000Z";
+    // Insertion order != id order; Map iteration is insertion-ordered, so an
+    // unsorted (or partially sorted) implementation returns wl_c first.
+    for (const { id, email } of [
+      { id: "wl_c", email: "c@x.com" },
+      { id: "wl_a", email: "a@x.com" },
+      { id: "wl_b", email: "b@x.com" },
+    ]) {
+      await db.insertWaitlist({ id, email, batch: 1, status: "pending", created_at: TS });
+    }
+  }
+
+  it("listWaitlist 同一秒内按 id 排序，而非插入顺序（memory mock）", async () => {
+    const db = createMemoryConnectDb();
+    await seedOutOfIdOrder(db);
+
+    expect((await db.listWaitlist(1)).map((r) => r.id)).toEqual(["wl_a", "wl_b", "wl_c"]);
+  });
+
+  it("CROSS-CONSISTENCY: listWaitlist[i] 的 rank 恰为 i+1（memory mock）", async () => {
+    const db = createMemoryConnectDb();
+    await seedOutOfIdOrder(db);
+
+    const rows = await db.listWaitlist(1);
+    const ranks = await Promise.all(rows.map((r) => db.waitlistRankOf(1, r.created_at, r.id)));
+
+    expect(ranks).toEqual(rows.map((_, i) => i + 1));
+  });
+
+  it("CROSS-CONSISTENCY 在混合时间戳 + 同秒并列下仍成立（memory mock）", async () => {
+    const db = createMemoryConnectDb();
+    const TS = "2026-07-26T00:00:00.000Z";
+    const LATER = "2026-07-27T00:00:00.000Z";
+    for (const { id, email, created_at, batch } of [
+      { id: "wl_m", email: "m@x.com", created_at: LATER, batch: 1 },
+      { id: "wl_c", email: "c@x.com", created_at: TS, batch: 1 },
+      { id: "wl_z", email: "z@x.com", created_at: LATER, batch: 1 },
+      { id: "wl_a", email: "a@x.com", created_at: TS, batch: 1 },
+      { id: "wl_aaa_other", email: "o@x.com", created_at: TS, batch: 2 },
+    ]) {
+      await db.insertWaitlist({ id, email, batch, status: "pending", created_at });
+    }
+
+    const rows = await db.listWaitlist(1);
+    expect(rows.map((r) => r.id)).toEqual(["wl_a", "wl_c", "wl_m", "wl_z"]);
+
+    const ranks = await Promise.all(rows.map((r) => db.waitlistRankOf(1, r.created_at, r.id)));
+    expect(ranks).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe("endpoint cf_access_app_id 可空", () => {
+  // NOTE: this only pins the in-memory ConnectDb contract. createMemoryConnectDb
+  // is a plain Map with no constraint engine, so a green result here says
+  // NOTHING about whether the real table accepts the NULL — it passed happily
+  // the entire time schema.sql declared `cf_access_app_id TEXT NOT NULL` and
+  // production 500'd on every provision. The authoritative coverage is
+  // schema.test.ts, which runs this same insert against real SQLite built from
+  // schema.sql. Do not treat this test as constraint verification.
+  it("cf_access_app_id 为 null（去 Access 后）时正常插入", async () => {
+    const db = createMemoryConnectDb();
+    await db.insertInvite(makeInvite());
+    const ep = await db.insertEndpoint(
+      makeEndpoint({ cf_access_app_id: null, cf_access_policy_id: null }),
+    );
+    expect(ep.cf_access_app_id).toBeNull();
+    expect(ep.cf_access_policy_id).toBeNull();
   });
 });
