@@ -201,25 +201,39 @@ export async function loginAccount(
   password: string,
   throttleKey?: string,
 ): Promise<AuthOutcome> {
-  // 无显式 throttleKey 时（库级调用，无请求上下文）退化为仅按 username。
-  // 不做 toLowerCase()：账号查询是精确匹配，折叠大小写会让不同账号共用一个桶。
+  // 无显式 throttleKey 时（库级调用，无请求上下文）退化为仅按身份。
+  // 单用户模式忽略用户名（永远是 acct_default），故身份用常量——否则换个
+  // 用户名就换一个桶，限流可被直接绕过。
+  // 多用户不做 toLowerCase()：账号查询是精确匹配，折叠大小写会让不同账号共用一个桶。
   // 一律过 normalizeThrottleKey()——显式传入的 key 也必须有界，否则调用方
   // 传超长键就能撑大内存。
-  const key = normalizeThrottleKey(throttleKey ?? username);
+  const key = normalizeThrottleKey(
+    throttleKey ?? (isMultiUserEnabled() ? username : DEFAULT_ACCOUNT_ID),
+  );
   const now = Date.now();
   const verdict = checkLoginAllowed(key, now);
   if (!verdict.allowed) {
     return { ok: false, error: `尝试过于频繁，请 ${verdict.retryAfterSec} 秒后再试。` };
   }
-  const account = await getWorkflowRepository().getAccountByUsername(username.trim());
-  // Always verify to avoid timing oracle. Missing accounts get a dummy scrypt hash that will fail.
-  // (The empty-hash default account has no password and can't be logged into.)
-  const DUMMY_HASH = "scrypt:a2448ef076990b889ef0540720bccce2:4fdc41afebb4560f4a638b4225d8325904894d18d2df1c7a95c50a65c141b926dc252e99b63e681e15e2d6e008acc845b02c9a2fc99a4888749226ab262c6978";
+  // 账号缺失时也要走完整验密，否则耗时差异会泄露账号是否存在
+  // （空 hash 会在 verifyPassword 的格式校验处提前 return，所以必须给一个真格式的 hash）。
+  const DUMMY_HASH =
+    "scrypt:a2448ef076990b889ef0540720bccce2:4fdc41afebb4560f4a638b4225d8325904894d18d2df1c7a95c50a65c141b926dc252e99b63e681e15e2d6e008acc845b02c9a2fc99a4888749226ab262c6978";
+
+  // 单用户模式：只认 acct_default（「只输密码」，用户名忽略），且必须已设密码。
+  const repo = getWorkflowRepository();
+  const account = isMultiUserEnabled()
+    ? await repo.getAccountByUsername(username.trim())
+    : await repo.getAccountById(DEFAULT_ACCOUNT_ID);
+
   const hash = account?.passwordHash || DUMMY_HASH;
   const valid = await verifyPassword(password, hash);
   if (!account || !valid || account.passwordHash.length === 0) {
     recordLoginFailure(key, now);
-    return { ok: false, error: "用户名或密码不正确。" };
+    return {
+      ok: false,
+      error: isMultiUserEnabled() ? "用户名或密码不正确。" : "密码不正确。",
+    };
   }
   // 先建 session 再清限流桶：建 session 可能抛（DB 故障、取密钥失败），
   // 那种情况下这次登录并未成功，桶必须保留，否则服务端间歇故障期间
@@ -238,6 +252,45 @@ export async function logoutSession(signedCookie: string | undefined): Promise<v
   if (sessionId) {
     await getWorkflowRepository().deleteSession(sessionId);
   }
+}
+
+/**
+ * 单用户模式的登录密码状态。
+ *
+ * 三态而非布尔：`"unknown"` 表示**读不出来**（DB 抖动、连接池耗尽、故障切换），
+ * 它和「没设密码」是完全不同的两件事。若把二者合并，一次数据库抖动就会让
+ * 公网访客直接拿到站主身份——读不到状态时必须由调用方按「本地宽容、远程收紧」
+ * 分别决策，而不是在这里一律当作开放。
+ */
+export type LoginPasswordState = boolean | "unknown";
+
+export async function hasLoginPassword(): Promise<LoginPasswordState> {
+  try {
+    const acct = await getWorkflowRepository().getAccountById(DEFAULT_ACCOUNT_ID);
+    return Boolean(acct && acct.passwordHash.length > 0);
+  } catch {
+    return "unknown";
+  }
+}
+
+/** 单用户模式设置/更新登录密码（`acct_default`）。设置后远程访问即需登录。 */
+export async function setSingleUserPassword(
+  newPassword: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (newPassword.length < 6) {
+    return { ok: false, error: "密码至少 6 位。" };
+  }
+  const repo = getWorkflowRepository();
+  await repo.setAccountPassword(DEFAULT_ACCOUNT_ID, await hashPassword(newPassword));
+  await repo.deleteSessionsForAccount(DEFAULT_ACCOUNT_ID); // 改密即踢掉全部旧 session
+  return { ok: true };
+}
+
+/** 单用户模式清除登录密码（回到全开放态）。 */
+export async function clearSingleUserPassword(): Promise<void> {
+  const repo = getWorkflowRepository();
+  await repo.setAccountPassword(DEFAULT_ACCOUNT_ID, "");
+  await repo.deleteSessionsForAccount(DEFAULT_ACCOUNT_ID);
 }
 
 /** Self-service password change. Verifies the current password, sets the new hash,
@@ -557,9 +610,74 @@ export async function getRegisteredDriveCount(): Promise<number> {
   return storages.filter((storage) => isRegisteredStorageProvider(storage.provider)).length;
 }
 
+/**
+ * 远程判定：任一 Cloudflare 头存在即为经隧道的远程请求。
+ *
+ * 用 `cf-ray`/`cdn-loop` 而非仅 `cf-connecting-ip`——后者是唯一能被 zone
+ * Transform Rules 删除的 cf-* 头，删掉会把远程误判成内网（fail-open 裸奔）；
+ * `cf-ray` 访客删不掉。反方向（LAN 被误判成远程）只多要一次登录，fail-closed。
+ *
+ * 前提：实例只能经「局域网 + 隧道」两条路到达。部署文档须写明禁 UPnP、
+ * 勿把 web 端口直接映射出公网（Emby「thousands hacked」的主要暴露面即 UPnP 打洞）。
+ */
+export function isRemoteRequest(hdrs: Headers): boolean {
+  return hdrs.has("cf-ray") || hdrs.has("cdn-loop") || hdrs.has("cf-connecting-ip");
+}
+
+/**
+ * 单用户账号判定（纯函数，本 plan 的安全核心）。设密码后：LAN 开放、远程需 session。
+ *
+ * `hasPassword` 为 `"unknown"`（状态读取失败）时按**已设密码**处理：
+ * 局域网仍然放行（可信网段，不因一次抖动制造运维事故），远程则收紧到需要
+ * session——读不到状态绝不等于没设密码。
+ *
+ * 远程放行只认 `acct_default`：同一个库可能残留多用户时期的账号
+ * （`MEDIA_TRACK_MULTI_USER` 是运行时开关，可来回切），那些账号的 session
+ * 不该在单用户模式下被当作站主，况且改密/清密只会吊销 `acct_default` 的 session，
+ * 吊销不掉它们。
+ *
+ * 抽成纯函数是为了能确定性覆盖全部「内外 × 有无 session」组合——
+ * Emby/Jellyfin 的事故正是内外判定出错，这段逻辑必须可被精确测试。
+ */
+export function resolveSingleUserAccount(opts: {
+  hasPassword: LoginPasswordState;
+  isRemote: boolean;
+  sessionAccountId: string | null;
+}): string {
+  if (opts.hasPassword === false) return DEFAULT_ACCOUNT_ID;
+  if (!opts.isRemote) return DEFAULT_ACCOUNT_ID; // LAN 免登录（含状态未知）
+  // 远程：必须持有 acct_default 自己的有效 session
+  return opts.sessionAccountId === DEFAULT_ACCOUNT_ID
+    ? DEFAULT_ACCOUNT_ID
+    : UNAUTHENTICATED_ACCOUNT_ID;
+}
+
 export async function getCurrentAccountId(): Promise<string> {
   if (!isMultiUserEnabled()) {
-    return DEFAULT_ACCOUNT_ID;
+    const hasPassword = await hasLoginPassword();
+    if (hasPassword === false) return DEFAULT_ACCOUNT_ID; // 明确没设密码 → 保持现状全开放
+    // 已设密码，或状态读不出来：都要看请求来自哪里
+    let hdrs: Headers;
+    let sessionCookie: string | undefined;
+    try {
+      const { cookies, headers } = await import("next/headers");
+      hdrs = await headers();
+      sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
+    } catch {
+      // 无请求上下文（in-process worker）：视为本地直通——采集任务不认 cookie。
+      return DEFAULT_ACCOUNT_ID;
+    }
+    if (!isRemoteRequest(hdrs)) return DEFAULT_ACCOUNT_ID; // LAN → 开放
+    // 已确认是远程：此后任何读取失败都必须 fail-closed，不能退回开放默认值
+    let sessionAccountId: string | null = null;
+    if (sessionCookie) {
+      try {
+        sessionAccountId = await resolveSessionAccountId(sessionCookie);
+      } catch {
+        return UNAUTHENTICATED_ACCOUNT_ID;
+      }
+    }
+    return resolveSingleUserAccount({ hasPassword, isRemote: true, sessionAccountId });
   }
   try {
     const { cookies } = await import("next/headers");
@@ -577,13 +695,14 @@ export async function getCurrentAccountId(): Promise<string> {
 }
 
 /**
- * Account id for write/bind mutations. Multi-user + no valid session → throw
- * (never bind to the read-only sentinel `acct_unauthenticated`). Single-user
- * and the in-process worker path are unchanged.
+ * Account id for write/bind mutations. The sentinel `acct_unauthenticated` is
+ * only ever produced by an auth failure, so it must never reach a write path —
+ * reject it unconditionally rather than re-deriving whether the instance is
+ * gated (that second read could disagree with the first).
  */
 export async function requireAuthenticatedAccountId(): Promise<string> {
   const accountId = await getCurrentAccountId();
-  if (isMultiUserEnabled() && accountId === UNAUTHENTICATED_ACCOUNT_ID) {
+  if (accountId === UNAUTHENTICATED_ACCOUNT_ID) {
     throw new UnauthenticatedAccountError();
   }
   return accountId;
