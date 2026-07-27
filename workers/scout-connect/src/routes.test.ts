@@ -136,6 +136,44 @@ describe("handleRequest", () => {
     expect(await res.text()).toContain("Scout Connect");
   });
 
+  it("GET / on the beta subdomain serves the signup page (canonical URL is the bare host)", async () => {
+    const { deps } = setup();
+    // beta.mediaryconnect.app 就是规范地址——"beta.…/beta" 是结巴。
+    // 该子域名的根路径必须直接给报名表单，而不是 Scout Connect 说明页。
+    const res = await handleRequest(new Request("https://beta.mediaryconnect.app/"), deps);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("申请内测席位");
+    expect(html).not.toContain("Scout Connect 说明");
+  });
+
+  it("beta root routing survives an un-normalized rootDomain env value", async () => {
+    // CONNECT_ROOT_DOMAIN 从 env 原样进来，不 trim 不小写。带大小写/空格的
+    // 配置不该让 beta 根路径静默退回说明页（Copilot PR #183）。
+    const { deps } = setup();
+    const messyDeps = { ...deps, rootDomain: "  MediaryConnect.APP  " };
+    const res = await handleRequest(new Request("https://beta.mediaryconnect.app/"), messyDeps);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("申请内测席位");
+  });
+
+  it("GET / on apex still serves the home page (host routing must not leak)", async () => {
+    const { deps } = setup();
+    const res = await handleRequest(new Request(`${BASE}/`), deps);
+    const html = await res.text();
+    expect(html).toContain("Scout Connect");
+    expect(html).not.toContain("申请内测席位");
+  });
+
+  it("GET /beta keeps working on both hosts (no regression)", async () => {
+    const { deps } = setup();
+    for (const host of [BASE, "https://beta.mediaryconnect.app"]) {
+      const res = await handleRequest(new Request(`${host}/beta`), deps);
+      expect(res.status).toBe(200);
+      expect(await res.text()).toContain("申请内测席位");
+    }
+  });
+
   it("GET /healthz → ok", async () => {
     const { deps } = setup();
     const res = await handleRequest(new Request(`${BASE}/healthz`), deps);
