@@ -9,7 +9,7 @@ import { assertSlug } from "./slug.js";
 import { homePage } from "./html/home-page.js";
 import { adminPage } from "./html/admin-page.js";
 import { invitePage, type InvitePageState } from "./html/invite-page.js";
-import { betaPage } from "./html/beta-page.js";
+import { betaPage, normalizeTurnstileSitekey } from "./html/beta-page.js";
 import { EMAIL_MAX_LENGTH, EMAIL_RE } from "./validation.js";
 import { newId } from "./ids.js";
 import { sha256Hex } from "./crypto-token.js";
@@ -29,6 +29,12 @@ export interface RouteDeps {
   newEndpointId: () => string;
   newAuditId: () => string;
   newInviteCode: () => string;
+  // Cloudflare Turnstile config for the public waitlist gate. Both optional —
+  // the gate is active ONLY when both are set — the paired rule lives in
+  // turnstileSitekeyIfConfigured() / turnstileGateEnabled() below;
+  // either absent → no widget rendered, POST /waitlist skips verification.
+  turnstileSitekey?: string | undefined;
+  turnstileSecret?: string | undefined;
 }
 
 export async function handleRequest(request: Request, deps: RouteDeps): Promise<Response> {
@@ -177,7 +183,7 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
     // mixed-case or space-padded value would silently break this routing.
     const betaHost = `beta.${deps.rootDomain.trim().toLowerCase()}`;
     if (url.hostname.toLowerCase() === betaHost) {
-      return htmlPage(betaPage());
+      return htmlPage(betaPage(turnstileSitekeyIfConfigured(deps)));
     }
     return htmlPage(homePage());
   }
@@ -200,7 +206,7 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
     return htmlPage(adminPage());
   }
   if (method === "GET" && path === "/beta") {
-    return htmlPage(betaPage());
+    return htmlPage(betaPage(turnstileSitekeyIfConfigured(deps)));
   }
 
   // ---- admin api (bearer required) ----
@@ -508,14 +514,20 @@ function isUniqueViolation(e: unknown): boolean {
 /**
  * POST /waitlist — public, unauthenticated signup.
  *
- * Request: `{ email: string }` (≤ EMAIL_MAX_LENGTH bytes; trimmed+lowercased).
+ * Request: `{ email: string, turnstile_token?: string }`
+ * (email ≤ EMAIL_MAX_LENGTH bytes; trimmed+lowercased. turnstile_token is
+ * REQUIRED when the Turnstile gate is configured — see turnstileGateEnabled —
+ * and ignored entirely when it is not.)
  *
  * Responses — `position` is present on EVERY success path, new or repeat:
  *   201 `{ id: string, position: number }`
  *   200 `{ already_exists: true, id: string, position: number }`
- *   400 `{ error: "email required" | "invalid email" }`
- *       (plus "invalid json" / "invalid body" from the
- *        shared body reader)
+ *   400 `{ error: "email required" | "invalid email" | "turnstile required" }`
+ *       ("turnstile required" only when the gate is on and the token is
+ *        missing/blank/non-string; plus "invalid json" / "invalid body"
+ *        from the shared body reader)
+ *   403 `{ error: "turnstile failed" }` — gate on and siteverify did not
+ *       return success (fail CLOSED: network/timeout/non-2xx count as failure)
  *   409 `{ error: "本批内测席位已满" }` — founding batch at WAITLIST_SEAT_CAP;
  *       NEW emails only, repeats still get their 200 below
  *   413 `{ error: "body too large" }`
@@ -524,6 +536,101 @@ function isUniqueViolation(e: unknown): boolean {
  * omits `position` there is stale — see the comment on the branch itself for
  * why it is deliberate. `position` is 1-based within the batch.
  */
+/**
+ * sitekey 只在两半齐备时下发页面（sitekey 无 secret → 铸出验不了的 token；
+ * secret 无 sitekey → 没有 widget 可铸）。与 /waitlist 的门同一条规则。
+ */
+function turnstileSitekeyIfConfigured(deps: RouteDeps): string | undefined {
+  // 与页面同一个归一化（trim + 字符集校验）：畸形 sitekey 会让页面不渲染
+  // widget，此时门也必须关——否则用户没有任何途径拿到 token，报名全 400。
+  const key = normalizeTurnstileSitekey(deps.turnstileSitekey);
+  return key && turnstileSecretIfConfigured(deps) ? key : undefined;
+}
+
+/** 归一化后的 secret：`wrangler secret put` 从文件/echo 灌进来常带尾换行，
+ *  原样用会让门「开着但永远验不过」（报名 100% 静默死）。纯空白 = 未配置。 */
+function turnstileSecretIfConfigured(deps: RouteDeps): string | undefined {
+  const secret = deps.turnstileSecret?.trim();
+  return secret ? secret : undefined;
+}
+
+/** Turnstile 门是否启用——与 turnstileSitekeyIfConfigured 同一条「成对」规则。 */
+function turnstileGateEnabled(deps: RouteDeps): boolean {
+  return turnstileSitekeyIfConfigured(deps) !== undefined;
+}
+
+/**
+ * Cloudflare Turnstile 服务端校验（siteverify）。project 硬规则：外部 HTTP
+ * 一律带超时。失败一律 fail CLOSED（这是公开报名漏斗，宁误杀不放过）——
+ * 但日志里绝不带 secret 与用户 token。
+ */
+async function verifyTurnstile(secret: string, token: string, remoteIp: string | null): Promise<boolean> {
+  const form = new URLSearchParams();
+  form.set("secret", secret);
+  form.set("response", token);
+  if (remoteIp) form.set("remoteip", remoteIp);
+  try {
+    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+      signal: AbortSignal.timeout(5_000),
+    });
+    // 基础设施异常必须与「正常拦截」在日志里可区分：两者对用户都是 403，
+    // 若日志也一样，CF 挂掉/secret 配错会让报名漏斗静默归零且无人知情。
+    if (!res.ok) {
+      console.error("turnstile siteverify HTTP error, status:", res.status);
+      return false;
+    }
+    const data = (await res.json().catch(() => null)) as TurnstileVerifyResponse | null;
+    if (data === null) {
+      console.error("turnstile siteverify returned a non-JSON body, status:", res.status);
+      return false;
+    }
+    if (data.success === true) return true;
+    const actionable = turnstileActionableCodes(data);
+    if (actionable.length > 0) {
+      // error-codes 是 CF 的固定枚举，既不含 secret 也不含用户 token。
+      console.error("turnstile siteverify config/infra error:", actionable.join(","));
+    }
+    return false;
+  } catch (e) {
+    console.error("turnstile siteverify failed:", errorName(e));
+    return false;
+  }
+}
+
+type TurnstileVerifyResponse = { success?: boolean; "error-codes"?: unknown };
+
+/** 需要运维介入的 siteverify error-codes（其余属于正常拦截，不该刷日志）。
+ *  见 developers.cloudflare.com/turnstile/get-started/server-side-validation。
+ *  刻意排除 missing/invalid-input-response 与 timeout-or-duplicate——过期、
+ *  重放、机器人是这条公开漏斗的日常，报警值为零。 */
+const TURNSTILE_ACTIONABLE_CODES = new Set([
+  "missing-input-secret",
+  "invalid-input-secret",
+  "invalid-widget-id",
+  "invalid-parsed-secret",
+  "bad-request",
+  "internal-error",
+]);
+
+function turnstileActionableCodes(data: TurnstileVerifyResponse): string[] {
+  const raw = data["error-codes"];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((c): c is string => typeof c === "string" && TURNSTILE_ACTIONABLE_CODES.has(c));
+}
+
+/** 某些运行时的 DOMException 不是 `instanceof Error`（AbortSignal.timeout 抛的
+ *  就是它）——只按 instanceof 取名字会把 TimeoutError 记成 "unknown error"。 */
+function errorName(e: unknown): string {
+  if (typeof e === "object" && e !== null && "name" in e) {
+    const n = (e as { name?: unknown }).name;
+    if (typeof n === "string" && n.length > 0) return n;
+  }
+  return "unknown error";
+}
+
 async function addToWaitlist(request: Request, deps: RouteDeps): Promise<Response> {
   const body = await readJsonBody(request);
   const emailRaw = body.email;
@@ -546,6 +653,26 @@ async function addToWaitlist(request: Request, deps: RouteDeps): Promise<Respons
   const email = emailRaw.trim().toLowerCase();
   if (email.length > EMAIL_MAX_LENGTH || !EMAIL_RE.test(email)) {
     throw new HttpError(400, "invalid email");
+  }
+
+  // Turnstile 门：仅在 sitekey+secret 成对配置时启用（未配置=本地开发，
+  // 全链路不设防）。位置刻意在邮箱形状校验**之后**——siteverify 的
+  // token 是一次性的，不能浪费在一个注定 400 的请求上。
+  if (turnstileGateEnabled(deps)) {
+    const rawToken = body.turnstile_token;
+    const token = typeof rawToken === "string" ? rawToken.trim() : "";
+    if (token === "") {
+      throw new HttpError(400, "turnstile required");
+    }
+    const remoteIp = request.headers.get("cf-connecting-ip")?.trim() || null;
+    // turnstileGateEnabled 只表达规则，不给 TS 收窄——secret 在此单独取值收窄。
+    // 必须走同一个归一化，否则送去 siteverify 的还是带空白的原值。
+    const secret = turnstileSecretIfConfigured(deps);
+    if (!secret) throw new HttpError(500, "internal");
+    const ok = await verifyTurnstile(secret, token, remoteIp);
+    if (!ok) {
+      throw new HttpError(403, "turnstile failed");
+    }
   }
 
   const batch = WAITLIST_BATCH;

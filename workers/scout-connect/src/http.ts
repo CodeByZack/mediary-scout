@@ -23,15 +23,23 @@ export function htmlPage(body: string, status = 200): Response {
     status,
     headers: {
       "content-type": "text/html; charset=utf-8",
-      // Pages are fully self-contained (inline style/script only), so a strict
-      // CSP is free defense-in-depth for a page that carries a one-time token.
+      // Pages carry inline style/script only — no first-party asset requests —
+      // so a strict CSP is free defense-in-depth for a page that carries a
+      // one-time token. The ONE third-party source is conditional: the beta
+      // page's Turnstile widget (allowlisted below).
       // connect-src 'self' is load-bearing, not decorative: every page's
       // inline script POSTs same-origin (invite reveal, admin console, beta
       // signup), and connect-src falls back to default-src when absent —
       // 'none' made the browser refuse those fetches outright (verified
       // empirically: "Failed to fetch" without the directive, 200 with it).
+      // challenges.cloudflare.com (script/frame/connect) is the beta page's
+      // Turnstile widget. On the shared policy for all pages — htmlPage() is
+      // shared, per-page CSP would only invite drift.
+      // script-src 刻意不含 'self'：本 worker 的每个 <script> 要么内联、要么
+      // 是上面那个 Turnstile CDN 地址，没有任何同源脚本资源。加了不解决问题，
+      // 只是白白放宽（connect-src 'self' 是另一回事，那条是 fetch 用的）。
       "content-security-policy":
-        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
       "x-content-type-options": "nosniff",
       // frame-ancestors only works as a CSP directive (above); x-frame-options
       // is the legacy header that actually blocks framing in older browsers.
