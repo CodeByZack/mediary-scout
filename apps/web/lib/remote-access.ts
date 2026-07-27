@@ -116,6 +116,19 @@ export async function resolveRemoteAccessState(opts: {
   return { kind: "active", hostname: opts.hostname ?? null };
 }
 
+/**
+ * 内测报名站的对外地址（唯一来源）。
+ *
+ * 指向 worker 承载的 /beta 页——与 /waitlist API 同部署，只换了更好记的域名。
+ * 必须带 /beta 路径：该子域名的根路径 `GET /` 是 Scout Connect 说明页，
+ * 报名表单只在 `GET /beta`。
+ * 设置页「远程访问」tab 的跳转链接从这里取，不要在组件里另写一份。
+ * 注意：没有「链接可用性」的自动探测。如果 beta 站未来下线或迁移，
+ * 需要的动作是改代码——把 tab 的 not_provisioned 分支改回 return null
+ * （触发 settings-tabs 的自动隐藏），而不是指望某个开关。
+ */
+export const BETA_SITE_URL = "https://beta.mediaryconnect.app/beta";
+
 /** 服务端读实例隧道 token（docker-compose 需把 `TUNNEL_TOKEN` 也传给 web 服务）。 */
 export function instanceTunnelToken(): string | undefined {
   return process.env.TUNNEL_TOKEN?.trim() || undefined;
@@ -135,24 +148,3 @@ export function accountPasswordHref(w?: string): string {
   return `/settings?${params.toString()}#password`;
 }
 
-/**
- * 内测报名入口是否开放。**默认关闭。**
- *
- * 为什么要有这个开关：容器用户是 `git clone` + `docker compose up -d --build`
- * 从源码构建，**没有 release 门槛——`git pull` 就吃到 main 上的一切**。
- * 于是「代码合进 main」和「后端真的能用」之间存在一个窗口，窗口里用户会看到
- * 一个点了必失败的报名框。
- *
- * 后端就绪的判据有两条，缺一不可：
- *   1. Scout Connect worker 已部署到含 `POST /waitlist` 的版本（当前生产是
- *      7-24 的版本，该端点返回 404）；
- *   2. D1 迁移 0001 已执行（否则 waitlist 表不存在，插入必然失败），且
- *      **admin 侧有读取名单的入口**——收得进却看不见等于没收。
- *
- * 两条都满足后，在实例 `.env` 里设 `MEDIA_TRACK_WAITLIST_OPEN=1` 开启。
- * 不做成「探测端点可用性就自动开」是故意的：那会把一个产品发布决策
- * 交给一次网络请求的结果，端点抖一下就自己开了。
- */
-export function isWaitlistOpen(): boolean {
-  return process.env.MEDIA_TRACK_WAITLIST_OPEN?.trim() === "1";
-}

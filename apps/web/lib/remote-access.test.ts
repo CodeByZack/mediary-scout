@@ -4,7 +4,7 @@ import {
   resolveRemoteAccessState,
   scoutConnectBaseUrl,
   accountPasswordHref,
-  isWaitlistOpen,
+  BETA_SITE_URL,
   type RemoteAccessState,
 } from "./remote-access";
 
@@ -222,18 +222,12 @@ describe("accountPasswordHref（保留 ?w 工作区上下文）", () => {
   });
 });
 
-describe("isWaitlistOpen（默认关闭的发布开关）", () => {
-  it("未设 / 空 / 非 \"1\" → 关闭；只有 \"1\" 才开", () => {
-    delete process.env.MEDIA_TRACK_WAITLIST_OPEN;
-    expect(isWaitlistOpen()).toBe(false);
-    for (const v of ["", "  ", "0", "true", "yes", "on"]) {
-      process.env.MEDIA_TRACK_WAITLIST_OPEN = v;
-      expect(isWaitlistOpen()).toBe(false);
-    }
-    process.env.MEDIA_TRACK_WAITLIST_OPEN = "1";
-    expect(isWaitlistOpen()).toBe(true);
-    process.env.MEDIA_TRACK_WAITLIST_OPEN = "  1  ";
-    expect(isWaitlistOpen()).toBe(true);
+describe("BETA_SITE_URL（设置页跳转链接的唯一来源）", () => {
+  it("是 https 绝对地址且以 /beta 结尾——根路径是说明页，不是报名表单", () => {
+    // Copilot PR #182：只校验域名会把「指到域名根」当成通过，
+    // 而 GET / 返回的是 Scout Connect 说明页，报名页在 GET /beta。
+    expect(BETA_SITE_URL).toMatch(/^https:\/\/[a-z0-9.-]+\/beta$/);
+    expect(BETA_SITE_URL.endsWith("/")).toBe(false);
   });
 });
 
