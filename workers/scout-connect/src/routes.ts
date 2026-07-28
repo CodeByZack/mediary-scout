@@ -12,6 +12,7 @@ import { adminPage } from "./html/admin-page.js";
 import { invitePage, type InvitePageState } from "./html/invite-page.js";
 import { betaPage, normalizeTurnstileSitekey } from "./html/beta-page.js";
 import { compliancePage, COMPLIANCE_PAGES, type CompliancePageKey } from "./html/compliance-page.js";
+import { RAW_ASSETS } from "./html/assets.gen.js";
 import { consolePage } from "./html/console-page.js";
 import { loginPage } from "./html/login-page.js";
 import { EMAIL_MAX_LENGTH, EMAIL_RE } from "./validation.js";
@@ -231,6 +232,32 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
   if (method === "GET" && path === "/api/slug/check") {
     return await slugCheckRoute(url, request, deps);
   }
+  if (method === "POST" && path === "/api/claim-code") {
+    return await issueClaimCode(request, deps);
+  }
+  if (method === "POST" && path === "/api/claim/exchange") {
+    return await exchangeClaimCode(request, deps);
+  }
+  if (method === "GET" && path === "/connect.sh") {
+    const script = RAW_ASSETS["connect.sh"];
+    if (script !== undefined) {
+      // 让下载到的脚本自洽于它的来源主机:把内置的生产默认 WORKER_BASE
+      // 改写成当前请求的 origin。否则在 staging/preview(不同 rootDomain)下
+      // 用户从该主机 curl 脚本,脚本却仍打生产 API——staging 签的取件码拿到
+      // 生产去 exchange 必然失败(secret 不同)。用户仍可用 MEDIARY_CONNECT_BASE
+      // 覆盖(:- 默认写法保留)。只替换首个默认值,精确匹配那一行的字面量。
+      const served = script.replace(
+        'WORKER_BASE="${MEDIARY_CONNECT_BASE:-https://mediaryconnect.app}"',
+        `WORKER_BASE="\${MEDIARY_CONNECT_BASE:-${url.origin}}"`,
+      );
+      return new Response(served, {
+        headers: {
+          "content-type": "text/x-shellscript; charset=utf-8",
+          "cache-control": "public, max-age=300",
+        },
+      });
+    }
+  }
   // Brand logo for Access Custom Pages + invite page — self-hosted so we don't
   // depend on any external asset host.
   if (method === "GET" && path === "/logo.svg") {
@@ -351,6 +378,9 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
 const MAGIC_TTL_MS = 30 * 60_000;
 // session 有效期 30 天(低频访问,长会话减少重复登录摩擦)。
 const SESSION_TTL_MS = 30 * 24 * 3600_000;
+// 取件码有效期:15 分钟。够 agent 走完「SSH 到部署机 → 跑 connect.sh」,
+// 又短到即便泄露也很快作废(决策 #12:能取 token 的凭据必须短命)。
+const CLAIM_TTL_MS = 15 * 60_000;
 
 async function requestMagicLink(request: Request, deps: RouteDeps): Promise<Response> {
   const body = await readJsonBody(request);
@@ -383,6 +413,61 @@ async function requestMagicLink(request: Request, deps: RouteDeps): Promise<Resp
   }
   // 固定 202,无论邮箱存在与否。
   return json({ ok: true }, 202, { noStore: true });
+}
+
+/** 登录用户为自己的 active endpoint 签发一个短期取件码。code 是 claim purpose
+ *  的 signed-token,subject=endpointId,15 分钟过期,窗口内可重复用(脚本重试/
+ *  换机器)。D1 零写入——过期由签名自带。 */
+async function issueClaimCode(request: Request, deps: RouteDeps): Promise<Response> {
+  // now 只取一次:签名过期与返回的 expires_at 必须基于同一时刻,否则两次
+  // deps.now() 之间若推进,签发的 token 过期时刻与告知用户的会漂移。
+  const nowMs = Date.parse(deps.now());
+  // fail-closed:now 畸形(misconfig/坏 stub)时 nowMs=NaN,后面
+  // new Date(NaN).toISOString() 会抛 RangeError 变裸 500;且签出的 token
+  // 过期语义不可信。与别处「non-finite now 视为过期」的守卫一致,显式拒。
+  if (!Number.isFinite(nowMs)) throw new HttpError(500, "server time unavailable");
+  const session = await parseSessionCookie(request.headers.get("cookie"), {
+    secret: deps.sessionSecret,
+    now: nowMs,
+  });
+  if (!session.ok) throw new HttpError(401, "unauthorized");
+  const endpoint = await deps.db.getActiveEndpointByAccountId(session.accountId);
+  if (endpoint === null) {
+    // 还没开通(付费但未 provision,或从未开通)→ 没有可接入的实例。
+    throw new HttpError(404, "no active endpoint");
+  }
+  const code = await signToken(
+    { purpose: "claim", subject: endpoint.id },
+    { key: deps.sessionSecret, ttlMs: CLAIM_TTL_MS, now: nowMs },
+  );
+  const expiresAt = new Date(nowMs + CLAIM_TTL_MS).toISOString();
+  return json({ code, expires_at: expiresAt }, 200, { noStore: true });
+}
+
+/** 脚本凭码换 token(无 session)。验签 → 查 endpoint 仍 active → 向 CF 现取
+ *  token。窗口内可重复换(脚本重试/换机器);endpoint 撤销后拒发。 */
+async function exchangeClaimCode(request: Request, deps: RouteDeps): Promise<Response> {
+  const body = await readJsonBody(request);
+  const codeRaw = body.code;
+  const code = typeof codeRaw === "string" ? codeRaw : "";
+  // now 取一次 + finite 守卫,与 issueClaimCode 对称:now 畸形时若直接传给
+  // verifyToken,会把 token 判成过期→400 client error,把服务端时间/配置问题
+  // 误报为「码失效」。显式 500 才诚实。
+  const nowMs = Date.parse(deps.now());
+  if (!Number.isFinite(nowMs)) throw new HttpError(500, "server time unavailable");
+  const result = await verifyToken(code, {
+    key: deps.sessionSecret,
+    now: nowMs,
+    expectPurpose: "claim",
+  });
+  if (!result.ok) throw new HttpError(400, "invalid or expired code");
+  const endpoint = await deps.db.getEndpointById(result.subject);
+  if (endpoint === null || endpoint.status !== "active") {
+    // 撤销/不存在 → 不给已死隧道取 token。403 而非 404:码本身有效,是目标失效。
+    throw new HttpError(403, "endpoint not active");
+  }
+  const token = await deps.cf.getTunnelToken(endpoint.cf_tunnel_id);
+  return json({ hostname: endpoint.hostname, token }, 200, { noStore: true });
 }
 
 /** slug 实时查重 + 相似推荐(登录后选 slug 用)。需 session。 */
@@ -470,8 +555,12 @@ async function consoleRoute(request: Request, deps: RouteDeps): Promise<Response
     return new Response(null, { status: 302, headers: { location: "/login" } });
   }
   const entitlements = await deps.db.listEntitlements(account.id);
+  // 该账号的 active endpoint(可能为 null:已付费但还没选 slug,或未开通)。
+  // 控制台据此决定显示「选专属地址」入口还是「接入命令」提示词区。
+  const endpoint = await deps.db.getActiveEndpointByAccountId(account.id);
+  const url = new URL(request.url);
   return htmlPage(
-    consolePage({ account, entitlements, now: deps.now() }),
+    consolePage({ account, entitlements, endpoint, baseUrl: url.origin, now: deps.now() }),
     { noStore: true }, // 用户专属页面,不可缓存(Copilot round 3)
   );
 }
