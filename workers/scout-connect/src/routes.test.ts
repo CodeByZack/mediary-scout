@@ -70,6 +70,10 @@ function makeDeps(db: ConnectDb, cf: CfApi): RouteDeps {
     newEndpointId: seq("ep"),
     newAuditId: seq("aud"),
     newInviteCode: seq("code"),
+    newAccountId: seq("act"),
+    newEntitlementId: seq("ent"),
+    sessionSecret: "f".repeat(64),
+    sendMagicLink: async () => {},
   };
 }
 
@@ -218,6 +222,15 @@ describe("handleRequest", () => {
     const res = await handleRequest(new Request(`${BASE}/api/admin/invites`), deps);
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "unauthorized" });
+  });
+
+  it("admin invite creation works even when Turnstile is configured (not a public endpoint)", async () => {
+    const { deps } = setup();
+    // 开 turnstile gate:admin 路由不受影响(无需 turnstile_token)
+    deps.turnstileSitekey = "0x4AAAAAAD-test";
+    deps.turnstileSecret = "secret-fixture";
+    const res = await createInviteViaApi(deps, { email: "alice@example.com" });
+    expect(res.status).toBe(201);
   });
 
   it("POST invite → 201 with lowercased email, inviteUrl, and audit row", async () => {

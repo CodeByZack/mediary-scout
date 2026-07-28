@@ -1,5 +1,5 @@
 import type { CfApi } from "./cf-api.js";
-import type { ConnectDb } from "./db.js";
+import type { AccountRow, ConnectDb } from "./db.js";
 import { HttpError, handleError, htmlPage, json } from "./http.js";
 import { requireAdmin } from "./auth.js";
 import { provisionEndpoint } from "./provision.js";
@@ -11,9 +11,14 @@ import { adminPage } from "./html/admin-page.js";
 import { invitePage, type InvitePageState } from "./html/invite-page.js";
 import { betaPage, normalizeTurnstileSitekey } from "./html/beta-page.js";
 import { compliancePage, COMPLIANCE_PAGES, type CompliancePageKey } from "./html/compliance-page.js";
+import { consolePage } from "./html/console-page.js";
+import { loginPage } from "./html/login-page.js";
 import { EMAIL_MAX_LENGTH, EMAIL_RE } from "./validation.js";
 import { newId } from "./ids.js";
 import { sha256Hex } from "./crypto-token.js";
+import { signToken, verifyToken } from "./signed-token.js";
+import { buildSessionCookie, parseSessionCookie } from "./session.js";
+import { computeExpiry } from "./entitlement.js";
 
 // Same aperture mark as apps/web/app/icon.svg — the product brand.
 const LOGO_SVG =
@@ -36,6 +41,12 @@ export interface RouteDeps {
   // either absent → no widget rendered, POST /waitlist skips verification.
   turnstileSitekey?: string | undefined;
   turnstileSecret?: string | undefined;
+  // P3: 魔法链接登录
+  newAccountId: () => string;
+  newEntitlementId: () => string;
+  sessionSecret: string;
+  /** 发一封含魔法链接的邮件。注入以便测试不打真 Resend。 */
+  sendMagicLink: (to: string, url: string) => Promise<void>;
 }
 
 export async function handleRequest(request: Request, deps: RouteDeps): Promise<Response> {
@@ -203,6 +214,19 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
       headers: { "content-type": "text/plain; charset=utf-8" },
     });
   }
+  // P3: 魔法链接登录
+  if (method === "POST" && path === "/api/auth/magic") {
+    return await requestMagicLink(request, deps);
+  }
+  if (method === "GET" && path === "/auth/callback") {
+    return await magicCallback(url, deps);
+  }
+  if (method === "GET" && path === "/login") {
+    return htmlPage(loginPage(turnstileSitekeyIfConfigured(deps)));
+  }
+  if (method === "GET" && path === "/console") {
+    return await consoleRoute(request, deps);
+  }
   // Brand logo for Access Custom Pages + invite page — self-hosted so we don't
   // depend on any external asset host.
   if (method === "GET" && path === "/logo.svg") {
@@ -253,10 +277,12 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
 
   if (path === "/api/admin/waitlist" && method === "GET") {
     requireAdmin(request, deps.adminToken);
-    // Queue order straight from the db — (created_at, id) ascending, the same
-    // composite waitlistRankOf counts under, so the 1-based array index here
-    // IS the position POST /waitlist reported to the user.
+    // Queue order straight from the db
     return json({ waitlist: await deps.db.listWaitlist(WAITLIST_BATCH) });
+  }
+
+  if (path === "/api/admin/grant" && method === "POST") {
+    return await adminGrant(request, deps);
   }
 
   if (path === "/api/admin/audits" && method === "GET") {
@@ -317,6 +343,157 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
   throw new HttpError(404, "not found");
 }
 
+// P3: 魔法链接登录 —— magic purpose token 有效期 30 分钟。
+const MAGIC_TTL_MS = 30 * 60_000;
+// session 有效期 30 天(低频访问,长会话减少重复登录摩擦)。
+const SESSION_TTL_MS = 30 * 24 * 3600_000;
+
+async function requestMagicLink(request: Request, deps: RouteDeps): Promise<Response> {
+  const body = await readJsonBody(request);
+  const emailRaw = body.email;
+  if (typeof emailRaw !== "string") throw new HttpError(400, "email required");
+  const email = emailRaw.trim().toLowerCase();
+  if (email.length > EMAIL_MAX_LENGTH || !EMAIL_RE.test(email)) {
+    throw new HttpError(400, "invalid email");
+  }
+  // 与 /waitlist 同一条防滥用规则:Turnstile 成对配置时,发信入口也要过人机
+  // 校验——否则这是个公开的「触发发邮件」放大面。校验在邮箱形状之后:
+  // 一次性 token 不浪费在注定 400 的请求上。
+  await requireTurnstileIfEnabled(request, body, deps);
+  // 注册即登录:不论邮箱是否已存在都发信,不泄露注册状态。账号在 callback
+  // 落地时才创建(避免未验证邮箱污染 accounts 表)。
+  const token = await signToken(
+    { purpose: "magic", subject: email },
+    { key: deps.sessionSecret, ttlMs: MAGIC_TTL_MS, now: Date.parse(deps.now()) },
+  );
+  // rootDomain 需 normalize:CONNECT_ROOT_DOMAIN 可能带空白/大小写,直拼到邮件
+  // 链接里会坏掉——与路由期待的规范 host 不符(Copilot round 3)。
+  const domain = deps.rootDomain.trim().toLowerCase();
+  const url = `https://${domain}/auth/callback?t=${encodeURIComponent(token)}`;
+  // 发信失败不改变对外结果(固定 202):既不泄露邮箱是否存在,也不让
+  // Resend 的抖动变成用户可见的 500。失败在 sender 内部已 console.error。
+  try {
+    await deps.sendMagicLink(email, url);
+  } catch {
+    // swallowed — sender logs its own diagnostics
+  }
+  // 固定 202,无论邮箱存在与否。
+  return json({ ok: true }, 202, { noStore: true });
+}
+
+/** 按 email upsert 账号,race-safe:两个并发请求可能都读到 null,第二个
+ *  INSERT 撞 UNIQUE(email) —— 捕获后重读,而不是让登录 500(Copilot round 2)。 */
+async function upsertAccount(email: string, deps: RouteDeps): Promise<AccountRow> {
+  const existing = await deps.db.getAccountByEmail(email);
+  if (existing !== null) return existing;
+  try {
+    return await deps.db.insertAccount({
+      id: deps.newAccountId(),
+      email,
+      paddle_customer_id: null,
+      created_at: deps.now(),
+      last_login_at: null,
+    });
+  } catch (e) {
+    if (!isUniqueViolation(e)) throw e;
+    // 并发对手赢了这一插:重读它插入的行。
+    const raced = await deps.db.getAccountByEmail(email);
+    if (raced === null) throw e; // UNIQUE 失败却读不到 → 真异常,不吞
+    return raced;
+  }
+}
+
+async function magicCallback(url: URL, deps: RouteDeps): Promise<Response> {
+  const token = url.searchParams.get("t") ?? "";
+  const result = await verifyToken(token, {
+    key: deps.sessionSecret,
+    now: Date.parse(deps.now()),
+    expectPurpose: "magic",
+  });
+  if (!result.ok) throw new HttpError(400, "invalid or expired link");
+  const email = result.subject;
+
+  // 账号 upsert:首次登录建号,之后复用。
+  const account = await upsertAccount(email, deps);
+  await deps.db.updateAccountLastLogin(account.id, deps.now());
+
+  const cookie = await buildSessionCookie(account.id, {
+    secret: deps.sessionSecret,
+    ttlMs: SESSION_TTL_MS,
+    now: Date.parse(deps.now()),
+  });
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: "/console",
+      "set-cookie": cookie,
+      "cache-control": "no-store",
+      // URL query 里带着 ?t=<magic token>;不加 no-referrer,浏览器会把含
+      // token 的完整 referer 带到 /console 请求,进访问日志=泄露短期凭据。
+      "referrer-policy": "no-referrer",
+    },
+  });
+}
+
+async function consoleRoute(request: Request, deps: RouteDeps): Promise<Response> {
+  const session = await parseSessionCookie(request.headers.get("cookie"), {
+    secret: deps.sessionSecret,
+    now: Date.parse(deps.now()),
+  });
+  if (!session.ok) {
+    return new Response(null, { status: 302, headers: { location: "/login" } });
+  }
+  const account = await deps.db.getAccountById(session.accountId);
+  if (account === null) {
+    // 陈旧 cookie(账号已删)→ fail closed 回登录页。
+    return new Response(null, { status: 302, headers: { location: "/login" } });
+  }
+  const entitlements = await deps.db.listEntitlements(account.id);
+  return htmlPage(
+    consolePage({ account, entitlements, now: deps.now() }),
+    { noStore: true }, // 用户专属页面,不可缓存(Copilot round 3)
+  );
+}
+
+/** 内测手工授予时长(admin)。P7 的 Paddle webhook 会复用同一 upsert+叠加逻辑。 */
+async function adminGrant(request: Request, deps: RouteDeps): Promise<Response> {
+  requireAdmin(request, deps.adminToken);
+  const body = await readJsonBody(request);
+  const emailRaw = body.email;
+  if (typeof emailRaw !== "string") throw new HttpError(400, "email required");
+  const email = emailRaw.trim().toLowerCase();
+  if (email.length > EMAIL_MAX_LENGTH || !EMAIL_RE.test(email)) {
+    throw new HttpError(400, "invalid email");
+  }
+  const months = body.months;
+  if (typeof months !== "number" || !Number.isInteger(months) || months < 1 || months > 120) {
+    throw new HttpError(400, "months must be an integer in [1,120]");
+  }
+  const source = body.source === "founding" || body.source === "manual" || body.source === "beta"
+    ? body.source
+    : "manual";
+
+  // account upsert
+  const account = await upsertAccount(email, deps);
+  // 从当前最新到期时刻叠加
+  const ents = await deps.db.listEntitlements(account.id);
+  let current: string | null = null;
+  for (const e of ents) {
+    if (current === null || Date.parse(e.expires_at) > Date.parse(current)) current = e.expires_at;
+  }
+  const expiresAt = computeExpiry({ currentExpiry: current, months, now: deps.now() });
+  await deps.db.insertEntitlement({
+    id: deps.newEntitlementId(),
+    account_id: account.id,
+    expires_at: expiresAt,
+    source,
+    paddle_transaction_id: null,
+    months,
+    created_at: deps.now(),
+  });
+  return json({ ok: true, account_id: account.id, expires_at: expiresAt });
+}
+
 async function createInvite(request: Request, url: URL, deps: RouteDeps): Promise<Response> {
   const body = await readJsonBody(request);
   const emailRaw = body.email;
@@ -324,7 +501,7 @@ async function createInvite(request: Request, url: URL, deps: RouteDeps): Promis
     throw new HttpError(400, "email required");
   }
   const email = emailRaw.trim().toLowerCase();
-  if (!email.includes("@")) {
+  if (email.length > EMAIL_MAX_LENGTH || !EMAIL_RE.test(email)) {
     throw new HttpError(400, "invalid email");
   }
   // Validate/normalize the slug at creation time so a bad slug fails fast
@@ -575,6 +752,25 @@ function turnstileGateEnabled(deps: RouteDeps): boolean {
  * 一律带超时。失败一律 fail CLOSED（这是公开报名漏斗，宁误杀不放过）——
  * 但日志里绝不带 secret 与用户 token。
  */
+/** 若 Turnstile 成对配置则强制校验;否则放行。发信入口(/api/auth/magic)与
+ *  报名入口(/waitlist)共用,消除两处逻辑漂移。约定:调用方须先做完邮箱形状
+ *  校验,不把一次性 token 浪费在注定失败的请求上。 */
+async function requireTurnstileIfEnabled(
+  request: Request,
+  body: Record<string, unknown>,
+  deps: RouteDeps,
+): Promise<void> {
+  if (!turnstileGateEnabled(deps)) return;
+  const rawToken = body.turnstile_token;
+  const token = typeof rawToken === "string" ? rawToken.trim() : "";
+  if (token === "") throw new HttpError(400, "turnstile required");
+  const remoteIp = request.headers.get("cf-connecting-ip")?.trim() || null;
+  const secret = turnstileSecretIfConfigured(deps);
+  if (!secret) throw new HttpError(500, "internal");
+  const ok = await verifyTurnstile(secret, token, remoteIp);
+  if (!ok) throw new HttpError(403, "turnstile failed");
+}
+
 async function verifyTurnstile(secret: string, token: string, remoteIp: string | null): Promise<boolean> {
   const form = new URLSearchParams();
   form.set("secret", secret);
@@ -666,25 +862,9 @@ async function addToWaitlist(request: Request, deps: RouteDeps): Promise<Respons
     throw new HttpError(400, "invalid email");
   }
 
-  // Turnstile 门：仅在 sitekey+secret 成对配置时启用（未配置=本地开发，
-  // 全链路不设防）。位置刻意在邮箱形状校验**之后**——siteverify 的
-  // token 是一次性的，不能浪费在一个注定 400 的请求上。
-  if (turnstileGateEnabled(deps)) {
-    const rawToken = body.turnstile_token;
-    const token = typeof rawToken === "string" ? rawToken.trim() : "";
-    if (token === "") {
-      throw new HttpError(400, "turnstile required");
-    }
-    const remoteIp = request.headers.get("cf-connecting-ip")?.trim() || null;
-    // turnstileGateEnabled 只表达规则，不给 TS 收窄——secret 在此单独取值收窄。
-    // 必须走同一个归一化，否则送去 siteverify 的还是带空白的原值。
-    const secret = turnstileSecretIfConfigured(deps);
-    if (!secret) throw new HttpError(500, "internal");
-    const ok = await verifyTurnstile(secret, token, remoteIp);
-    if (!ok) {
-      throw new HttpError(403, "turnstile failed");
-    }
-  }
+  // Turnstile 门(成对配置时启用)。位置刻意在邮箱形状校验之后:一次性
+  // token 不浪费在注定 400 的请求上。与 /api/auth/magic 共用同一 helper。
+  await requireTurnstileIfEnabled(request, body, deps);
 
   const batch = WAITLIST_BATCH;
 
