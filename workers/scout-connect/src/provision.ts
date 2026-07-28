@@ -1,6 +1,7 @@
 import { assertSlug } from "./slug.js";
 import { sha256Hex } from "./crypto-token.js";
 import { buildAgentPromptOrManual } from "./agent-prompt.js";
+import { isEntitlementActive, latestExpiry } from "./entitlement.js";
 import type { CfApi } from "./cf-api.js";
 import type { ConnectDb } from "./db.js";
 
@@ -14,33 +15,69 @@ export interface ProvisionDeps {
   newAuditId: () => string;
 }
 
-export interface ProvisionResult {
-  endpointId: string;
-  inviteCode: string;
-  hostname: string;
-  /** plaintext connector token — return value ONLY, never persisted */
-  token: string;
-  agentPrompt: string;
-}
+/** 开通来源:admin 邀请(旧,行为原样保留)或登录账号自助(0004)。 */
+export type ProvisionOrigin =
+  | { kind: "invite"; inviteId: string }
+  | { kind: "account"; accountId: string };
+
+/** 判别联合:invite 分支必有 token/prompt(旧 reveal 流),account 分支在
+ *  类型上就没有这些字段——token 只能经取件码换取(决策 #10/#12),把 token
+ *  放进自助开通的响应等于绕过取件码的短命设计。编译期即杜绝误传播。 */
+export type ProvisionResult =
+  | {
+      kind: "invite";
+      endpointId: string;
+      hostname: string;
+      inviteCode: string;
+      /** plaintext connector token — return value ONLY, never persisted */
+      token: string;
+      agentPrompt: string;
+    }
+  | { kind: "account"; endpointId: string; hostname: string };
 
 export async function provisionEndpoint(input: {
-  inviteId: string;
+  origin: ProvisionOrigin;
   slug: string;
   deps: ProvisionDeps;
 }): Promise<ProvisionResult> {
-  const { deps } = input;
+  const { deps, origin } = input;
   const { cf, db } = deps;
 
-  const invite = await db.getInviteById(input.inviteId);
-  if (invite === null) {
-    throw new Error("invite not found");
-  }
-  if (invite.status !== "pending") {
-    throw new Error("invite not pending");
+  // ── 来源门禁(CF 编排之前;402/409 级失败绝不烧 CF API 调用)──
+  let inviteCode: string | null = null;
+  let accountId: string | null = null;
+  if (origin.kind === "invite") {
+    const invite = await db.getInviteById(origin.inviteId);
+    if (invite === null) {
+      throw new Error("invite not found");
+    }
+    if (invite.status !== "pending") {
+      throw new Error("invite not pending");
+    }
+    inviteCode = invite.code;
+  } else {
+    const account = await db.getAccountById(origin.accountId);
+    if (account === null) {
+      throw new Error("account not found");
+    }
+    // entitlement 门禁:无有效时长不给开(路由层映射 402)。
+    const ents = await db.listEntitlements(account.id);
+    if (!isEntitlementActive(latestExpiry(ents), deps.now())) {
+      throw new Error("no active entitlement");
+    }
+    // 一账号一 live endpoint(数据库部分唯一索引兜底,这里是友好预检)。
+    const existing = await db.getActiveEndpointByAccountId(account.id);
+    if (existing !== null) {
+      throw new Error("already provisioned");
+    }
+    accountId = account.id;
   }
 
   const slug = assertSlug(input.slug);
-  const hostname = `${slug}.${deps.rootDomain}`;
+  // rootDomain normalize:CONNECT_ROOT_DOMAIN 可能带空白/大小写(与 magic-link
+  // / slug-check 各处同款处理),否则会生成畸形 hostname 误配 CF/DNS/查重。
+  const rootDomain = deps.rootDomain.trim().toLowerCase();
+  const hostname = `${slug}.${rootDomain}`;
 
   // Slug/hostname availability precheck: shrinks the window where a retry
   // would burn a full set of CF resources only to die on a UNIQUE constraint
@@ -107,6 +144,7 @@ export async function provisionEndpoint(input: {
   // inserted endpoint row, plus a best-effort `provision.orphan` audit row
   // (which may itself fail if D1 is down).
   const endpointId = deps.newEndpointId();
+  const actor = origin.kind === "invite" ? "admin" : `account:${origin.accountId}`;
   try {
     // SECURITY: token 不落库(决策 #10/#11)。只存 sha256 供心跳按 token 反查
     // endpoint;明文既不加密存也不存明文——需要时按 cf_tunnel_id 向 CF 现取。
@@ -114,7 +152,7 @@ export async function provisionEndpoint(input: {
 
     await db.insertEndpoint({
       id: endpointId,
-      invite_id: invite.id,
+      invite_id: origin.kind === "invite" ? origin.inviteId : null,
       slug,
       hostname,
       cf_tunnel_id: tunnelId,
@@ -128,20 +166,26 @@ export async function provisionEndpoint(input: {
       last_seen_at: null,
       created_at: deps.now(),
       revoked_at: null,
+      account_id: accountId,
+      grace_until: null,
+      suspended_at: null,
+      purge_after: null,
     });
 
-    await db.updateInviteStatus(invite.id, {
-      status: "provisioned",
-      slug,
-      provisioned_at: deps.now(),
-    });
+    if (origin.kind === "invite") {
+      await db.updateInviteStatus(origin.inviteId, {
+        status: "provisioned",
+        slug,
+        provisioned_at: deps.now(),
+      });
+    }
 
     await db.insertAudit({
       id: deps.newAuditId(),
       at: deps.now(),
-      actor: "admin",
+      actor,
       action: "endpoint.provision",
-      invite_id: invite.id,
+      invite_id: origin.kind === "invite" ? origin.inviteId : null,
       endpoint_id: endpointId,
       detail_json: JSON.stringify({ hostname }),
     });
@@ -166,18 +210,21 @@ export async function provisionEndpoint(input: {
     // anyway: the row points at CF resources the compensation below is about
     // to delete, so a provisioned invite would let reveal hand out a token for
     // a dead tunnel. The phantom row stays visible in the admin endpoints list
-    // and revoke is 404-idempotent.
-    try {
-      const surviving = await db.getEndpointByInviteId(invite.id);
-      if (surviving === null || surviving.id === endpointId) {
-        await db.updateInviteStatus(invite.id, {
-          status: "pending",
-          slug: null,
-          provisioned_at: null,
-        });
+    // and revoke is 404-idempotent. (invite 分支专属:account 分支没有 invite
+    // 状态机可回滚。)
+    if (origin.kind === "invite") {
+      try {
+        const surviving = await db.getEndpointByInviteId(origin.inviteId);
+        if (surviving === null || surviving.id === endpointId) {
+          await db.updateInviteStatus(origin.inviteId, {
+            status: "pending",
+            slug: null,
+            provisioned_at: null,
+          });
+        }
+      } catch {
+        // D1 may be the failing component — nothing more we can do
       }
-    } catch {
-      // D1 may be the failing component — nothing more we can do
     }
     try {
       await cf.deleteDnsRecord(recordId);
@@ -195,7 +242,7 @@ export async function provisionEndpoint(input: {
         at: deps.now(),
         actor: "system",
         action: "provision.orphan",
-        invite_id: invite.id,
+        invite_id: origin.kind === "invite" ? origin.inviteId : null,
         endpoint_id: endpointId,
         detail_json: JSON.stringify({
           hostname,
@@ -209,9 +256,16 @@ export async function provisionEndpoint(input: {
     throw e;
   }
 
+  // account 分支在类型上就不含 token/prompt:接入唯一路径是控制台取件码。
+  if (origin.kind === "account") {
+    return { kind: "account", endpointId, hostname };
+  }
   return {
+    kind: "invite",
     endpointId,
-    inviteCode: invite.code,
+    // inviteCode 在 invite 分支的门禁里必然已赋值;这里的守卫让 TS 收窄,
+    // 也把"不可能"变成 fail-fast 而不是把 null 序列化给客户端。
+    inviteCode: inviteCode!,
     hostname,
     token,
     agentPrompt: buildAgentPromptOrManual({ hostname, tunnelToken: token }),

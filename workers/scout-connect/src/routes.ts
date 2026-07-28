@@ -235,6 +235,9 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
   if (method === "POST" && path === "/api/claim-code") {
     return await issueClaimCode(request, deps);
   }
+  if (method === "POST" && path === "/api/provision") {
+    return await selfServeProvision(request, deps);
+  }
   if (method === "POST" && path === "/api/claim/exchange") {
     return await exchangeClaimCode(request, deps);
   }
@@ -415,6 +418,74 @@ async function requestMagicLink(request: Request, deps: RouteDeps): Promise<Resp
   return json({ ok: true }, 202, { noStore: true });
 }
 
+/** 自助开通(0004,spec 2026-07-28):登录 + 有效时长的账号选 slug 给自己开
+ *  endpoint。门禁次序 session → slug 形状校验 → entitlement(后两步在
+ *  provisionEndpoint 内)→ slug 查重;402/409 级失败绝不烧 CF API 调用
+ *  (门禁都在 CF 编排之前)。响应绝不含 token:接入唯一路径是控制台取件码
+ *  (决策 #10/#12)。 */
+async function selfServeProvision(request: Request, deps: RouteDeps): Promise<Response> {
+  const session = await parseSessionCookie(request.headers.get("cookie"), {
+    secret: deps.sessionSecret,
+    now: Date.parse(deps.now()),
+  });
+  if (!session.ok) throw new HttpError(401, "unauthorized");
+  const body = await readJsonBody(request);
+  const slugRaw = optString(body.slug);
+  if (slugRaw === null) throw new HttpError(400, "slug required");
+  let slug: string;
+  try {
+    slug = assertSlug(slugRaw);
+  } catch (e) {
+    throw new HttpError(400, e instanceof Error ? e.message : "invalid slug");
+  }
+  try {
+    const result = await provisionEndpoint({
+      origin: { kind: "account", accountId: session.accountId },
+      slug,
+      deps: {
+        cf: deps.cf,
+        db: deps.db,
+        rootDomain: deps.rootDomain,
+        tokenWrapKeyHex: deps.tokenWrapKeyHex,
+        now: deps.now,
+        newEndpointId: deps.newEndpointId,
+        newAuditId: deps.newAuditId,
+      },
+    });
+    // 只回 hostname——token/agentPrompt 在 account 分支本就是 null,这里再
+    // 显式收窄一层,响应形状永远不含敏感字段。
+    return json({ hostname: result.hostname }, 200, { noStore: true });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "";
+    // 无有效时长:语义上最诚实的 402(前端据此引导去 /pricing 续期/开通)。
+    if (msg.includes("no active entitlement")) {
+      throw new HttpError(402, "no active entitlement");
+    }
+    // 陈旧 session(账号已删)fail closed。
+    if (msg.includes("account not found")) {
+      throw new HttpError(401, "unauthorized");
+    }
+    // 一账号一 live endpoint:预检消息 + 部分唯一索引的 UNIQUE 兜底,两条路
+    // 归并为同一个 409 语义,body error 供前端区分于 slug 冲突。
+    if (
+      msg.includes("already provisioned") ||
+      msg.includes("UNIQUE constraint failed: endpoints.account_id")
+    ) {
+      throw new HttpError(409, "already provisioned");
+    }
+    // slug/hostname 冲突:预检消息与 UNIQUE 兜底同样归并(与 provisionInvite
+    // 的映射一致——绝不回显裸 UNIQUE 文本泄 schema)。
+    if (
+      msg.includes("already in use") ||
+      msg.includes("UNIQUE constraint failed: endpoints.slug") ||
+      msg.includes("UNIQUE constraint failed: endpoints.hostname")
+    ) {
+      throw new HttpError(409, "slug taken");
+    }
+    throw e;
+  }
+}
+
 /** 登录用户为自己的 active endpoint 签发一个短期取件码。code 是 claim purpose
  *  的 signed-token,subject=endpointId,15 分钟过期,窗口内可重复用(脚本重试/
  *  换机器)。D1 零写入——过期由签名自带。 */
@@ -560,7 +631,14 @@ async function consoleRoute(request: Request, deps: RouteDeps): Promise<Response
   const endpoint = await deps.db.getActiveEndpointByAccountId(account.id);
   const url = new URL(request.url);
   return htmlPage(
-    consolePage({ account, entitlements, endpoint, baseUrl: url.origin, now: deps.now() }),
+    consolePage({
+      account,
+      entitlements,
+      endpoint,
+      baseUrl: url.origin,
+      rootDomain: deps.rootDomain.trim().toLowerCase(),
+      now: deps.now(),
+    }),
     { noStore: true }, // 用户专属页面,不可缓存(Copilot round 3)
   );
 }
@@ -678,7 +756,7 @@ async function provisionInvite(
   let result;
   try {
     result = await provisionEndpoint({
-      inviteId: invite.id,
+      origin: { kind: "invite", inviteId: invite.id },
       slug,
       deps: {
         cf: deps.cf,
@@ -711,12 +789,20 @@ async function provisionInvite(
       throw new HttpError(409, `slug already in use: ${slug}`);
     }
     if (msg.includes("UNIQUE constraint failed: endpoints.hostname")) {
-      throw new HttpError(409, `hostname already in use: ${slug}.${deps.rootDomain}`);
+      // rootDomain normalize:与 provision.ts 拼 hostname 同款(trim+lowercase),
+      // 否则 env 带空白/大写时,竞态失败文案里的 hostname 与实际写入的对不上。
+      throw new HttpError(409, `hostname already in use: ${slug}.${deps.rootDomain.trim().toLowerCase()}`);
     }
     if (msg.includes("UNIQUE constraint failed: endpoints.invite_id")) {
       throw new HttpError(409, "invite already provisioned");
     }
     throw e;
+  }
+  // 判别联合的显式收窄:invite 来源必得 invite 分支结果。这不只是取悦 TS——
+  // 若未来重构把 account 分支的结果带到这里,fail-fast 500 好过把 null
+  // 序列化成 "/i/null" 发给客户端(Copilot #198 round-2)。
+  if (result.kind !== "invite") {
+    throw new Error("provisionEndpoint returned non-invite result for an invite origin");
   }
   return json(
     {
