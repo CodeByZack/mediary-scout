@@ -6,6 +6,7 @@ import { provisionEndpoint } from "./provision.js";
 import { revokeEndpoint } from "./revoke.js";
 import { revealByCode } from "./reveal.js";
 import { assertSlug } from "./slug.js";
+import { checkSlug, type IsTaken } from "./slug-availability.js";
 import { homePage } from "./html/home-page.js";
 import { adminPage } from "./html/admin-page.js";
 import { invitePage, type InvitePageState } from "./html/invite-page.js";
@@ -227,6 +228,9 @@ async function route(request: Request, deps: RouteDeps): Promise<Response> {
   if (method === "GET" && path === "/console") {
     return await consoleRoute(request, deps);
   }
+  if (method === "GET" && path === "/api/slug/check") {
+    return await slugCheckRoute(url, request, deps);
+  }
   // Brand logo for Access Custom Pages + invite page — self-hosted so we don't
   // depend on any external asset host.
   if (method === "GET" && path === "/logo.svg") {
@@ -379,6 +383,23 @@ async function requestMagicLink(request: Request, deps: RouteDeps): Promise<Resp
   }
   // 固定 202,无论邮箱存在与否。
   return json({ ok: true }, 202, { noStore: true });
+}
+
+/** slug 实时查重 + 相似推荐(登录后选 slug 用)。需 session。 */
+async function slugCheckRoute(url: URL, request: Request, deps: RouteDeps): Promise<Response> {
+  const session = await parseSessionCookie(request.headers.get("cookie"), {
+    secret: deps.sessionSecret,
+    now: Date.parse(deps.now()),
+  });
+  if (!session.ok) throw new HttpError(401, "unauthorized");
+  const slug = url.searchParams.get("s") ?? "";
+  // 占用判定查所有状态的行(含 revoked/purged):slug 永久保留不释放(决策 #9)。
+  // rootDomain normalize:与本文件别处一致(CONNECT_ROOT_DOMAIN 可能带空白/大小写)。
+  const domain = deps.rootDomain.trim().toLowerCase();
+  const isTaken: IsTaken = async (s) =>
+    (await deps.db.findEndpointBySlugOrHostname(s, `${s}.${domain}`)) !== null;
+  const result = await checkSlug(slug, isTaken);
+  return json(result, 200, { noStore: true });
 }
 
 /** 按 email upsert 账号,race-safe:两个并发请求可能都读到 null,第二个
@@ -637,13 +658,13 @@ async function inviteState(deps: RouteDeps, code: string): Promise<InvitePageSta
     return { kind: "waiting" };
   }
   // Match revealByCode: a non-active endpoint is an invalid link — never show
-  // a hostname or ready/revealed state for a revoked/revoke_failed endpoint.
+  // a hostname or ready state for a revoked/revoke_failed endpoint.
   if (endpoint.status !== "active") {
     return { kind: "not_found" };
   }
-  if (endpoint.token_shown_at !== null || endpoint.token_ciphertext === null) {
-    return { kind: "revealed", hostname: endpoint.hostname };
-  }
+  // P4: reveal 现在幂等(token 按需向 CF 取,无一次性 burn),所以 active 的
+  // endpoint 永远展示「获取接入信息」按钮——换机器/重试都能再取。不再有
+  // 「已展示过」的终态。
   return { kind: "ready", code };
 }
 
@@ -652,7 +673,7 @@ async function revealInvite(deps: RouteDeps, code: string): Promise<Response> {
     code,
     deps: {
       db: deps.db,
-      tokenWrapKeyHex: deps.tokenWrapKeyHex,
+      cf: deps.cf,
       now: deps.now,
       newAuditId: deps.newAuditId,
     },
@@ -662,8 +683,6 @@ async function revealInvite(deps: RouteDeps, code: string): Promise<Response> {
       throw new HttpError(404, "not found");
     case "not_ready":
       return json({ error: "not ready" }, 409);
-    case "already_shown":
-      return json({ hostname: outcome.hostname, alreadyShown: true });
     case "revealed":
       return json(
         {
