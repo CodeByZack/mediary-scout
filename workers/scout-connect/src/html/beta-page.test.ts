@@ -8,11 +8,14 @@ describe("betaPage", () => {
     expect(page.startsWith("<!doctype html>")).toBe(true);
     expect(page).toContain('<html lang="zh">');
     expect(page).toContain('<meta charset="utf-8">');
-    expect(page).toContain("<title>Scout Connect 远程访问 · 内测 · Mediary Scout Connect</title>");
+    expect(page).toContain("<title>Mediary Connect 远程访问 · 内测</title>");
   });
 
   it("renders the honest marketing copy (what it is, pricing, 100 seats)", () => {
-    expect(page).toContain("Scout Connect 远程访问 · 内测");
+    expect(page).toContain("Mediary Connect 远程访问 · 内测");
+    // eyebrow 是大写形态，单独钉住——round 1 评审抓到它漏改。
+    expect(page).toContain("MEDIARY CONNECT · BETA");
+    expect(page).not.toMatch(/SCOUT CONNECT/);
     expect(page).toContain("在外网也能打开家里实例的浏览器界面");
     expect(page).toContain("经 Cloudflare 加密隧道，不开端口、不要公网 IP、不需要域名");
     expect(page).toContain("内容与凭据始终只在你自己的机器上");
