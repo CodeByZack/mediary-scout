@@ -11,6 +11,8 @@
  * 写长法律文本又不可维护。这个 60 行的子集是两者之间的甜点。
  */
 
+import { isZhBlock } from "./lang-split.js";
+
 const ESCAPE_RE = /[&<>"']/g;
 const ESCAPES: Record<string, string> = {
   "&": "&amp;",
@@ -64,7 +66,7 @@ export function renderMarkdown(md: string): string {
     // 次级色)+ lang="zh-Hans"(文档是 lang="en",给屏幕阅读器/分词正确的
     // 发音与断句提示)。作者只需先写英文块、再写中文块,"EN above 中文"
     // 自然成立,无需发明新语法。attr 只在中文块出现,英文块保持原样。
-    const zh = isCjkMajority(trimmed) ? ' class="zh" lang="zh-Hans"' : "";
+    const zh = isZhBlock(trimmed) ? ' class="zh" lang="zh-Hans"' : "";
     const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed);
     if (heading) {
       const level = heading[1]!.length;
@@ -84,15 +86,3 @@ export function renderMarkdown(md: string): string {
   return html.join("\n");
 }
 
-/** 块内 CJK 字符是否多于 ASCII 字母。用来区分英文块与中文块(双语版式)。
- *  只数「CJK 统一表意文字」区间;标点/数字不计,避免纯数字块误判。 */
-function isCjkMajority(text: string): boolean {
-  let cjk = 0;
-  let latin = 0;
-  for (const ch of text) {
-    const code = ch.codePointAt(0)!;
-    if (code >= 0x4e00 && code <= 0x9fff) cjk++;
-    else if ((code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a)) latin++;
-  }
-  return cjk > latin;
-}
