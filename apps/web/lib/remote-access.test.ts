@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   instanceTunnelToken,
+  instanceConnectHostname,
   resolveRemoteAccessState,
   scoutConnectBaseUrl,
   accountPasswordHref,
   BETA_SITE_URL,
+  consoleUrl,
   type RemoteAccessState,
 } from "./remote-access";
 
@@ -13,6 +15,7 @@ import {
 // 测试文件）会继续读一个已经不再更新的快照。
 const prevScoutConnectUrl = process.env.SCOUT_CONNECT_URL;
 const prevTunnelToken = process.env.TUNNEL_TOKEN;
+const prevConnectHostname = process.env.MEDIARY_CONNECT_HOSTNAME;
 
 afterEach(() => {
   // 原值为 undefined 时必须删除而非跳过，否则本套件设的值会泄漏给后续测试文件
@@ -25,6 +28,11 @@ afterEach(() => {
     process.env.TUNNEL_TOKEN = prevTunnelToken;
   } else {
     delete process.env.TUNNEL_TOKEN;
+  }
+  if (prevConnectHostname !== undefined) {
+    process.env.MEDIARY_CONNECT_HOSTNAME = prevConnectHostname;
+  } else {
+    delete process.env.MEDIARY_CONNECT_HOSTNAME;
   }
   vi.unstubAllGlobals();
 });
@@ -255,5 +263,64 @@ describe("instanceTunnelToken", () => {
     expect(instanceTunnelToken()).toBeUndefined();
     process.env.TUNNEL_TOKEN = "   ";
     expect(instanceTunnelToken()).toBeUndefined();
+  });
+});
+
+describe("instanceConnectHostname（connect.sh 写进 .env 的本地域名来源）", () => {
+  it("正常值 → 返回小写 hostname", () => {
+    process.env.MEDIARY_CONNECT_HOSTNAME = "dirtyfancy.mediaryconnect.app";
+    expect(instanceConnectHostname()).toBe("dirtyfancy.mediaryconnect.app");
+  });
+
+  it("带空白/大写 → normalize", () => {
+    process.env.MEDIARY_CONNECT_HOSTNAME = "  Dirtyfancy.MediaryConnect.App  ";
+    expect(instanceConnectHostname()).toBe("dirtyfancy.mediaryconnect.app");
+  });
+
+  it("缺失/空串 → null（早期接入的实例没有这行，UI 回落到不给链接）", () => {
+    delete process.env.MEDIARY_CONNECT_HOSTNAME;
+    expect(instanceConnectHostname()).toBeNull();
+    process.env.MEDIARY_CONNECT_HOSTNAME = "   ";
+    expect(instanceConnectHostname()).toBeNull();
+  });
+
+  it("畸形值一律 null——绝不把怪东西拼进 href", () => {
+    for (const bad of [
+      "https://x.example.com",       // 带协议
+      "x.example.com/path",          // 带路径
+      "localhost",                   // 无 TLD
+      "no dots",                     // 空格
+      "-bad.example.com",            // 以连字符开头
+      'x.example.com" onload="evil', // 引号注入
+      "a..b.example.com",            // 连续点(宽松正则会放过)
+      "bad-.example.com",            // label 以连字符结尾(宽松正则会放过)
+      "a.b.example.c",               // TLD 只有 1 位
+      ".example.com",                // 以点开头
+    ]) {
+      process.env.MEDIARY_CONNECT_HOSTNAME = bad;
+      expect(instanceConnectHostname(), bad).toBeNull();
+    }
+  });
+});
+
+describe("consoleUrl", () => {
+  it("指向控制台登录页（魔法链接入口）", () => {
+    expect(consoleUrl()).toBe("https://mediaryconnect.app/login");
+  });
+
+  // 不能写死生产域名:本模块的既定设计是 worker base 只有一个来源
+  // (scoutConnectBaseUrl)。SCOUT_CONNECT_URL 指向预发/自建 worker 时,若控制台
+  // 链接仍钉在生产,用户会被从预发实例送去生产控制台——那里没有他这台机器的
+  // 记录,看起来就是「开通了但控制台查不到」。
+  it("跟随 SCOUT_CONNECT_URL（预发/自建 worker 不会被送去生产控制台）", () => {
+    process.env.SCOUT_CONNECT_URL = "https://connect.test";
+    expect(consoleUrl()).toBe("https://connect.test/login");
+  });
+
+  it("SCOUT_CONNECT_URL 误配（漏协议/只有斜杠）时回落生产,不产出相对路径", () => {
+    process.env.SCOUT_CONNECT_URL = "mediaryconnect.app";
+    expect(consoleUrl()).toBe("https://mediaryconnect.app/login");
+    process.env.SCOUT_CONNECT_URL = "///";
+    expect(consoleUrl()).toBe("https://mediaryconnect.app/login");
   });
 });

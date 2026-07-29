@@ -89,6 +89,16 @@ if [ -z "$TUNNEL_TOKEN" ] || [ -z "$HOSTNAME" ]; then
   echo "❌ 换取响应里没有 token/hostname,无法继续。" >&2
   exit 1
 fi
+# hostname 要被持久化进 .env(apps/web 靠它渲染专属地址链接),所以在**碰 .env
+# 之前**就校验形状:逐 label 白名单,只放行 a-z0-9 与连字符,每段不以连字符
+# 起止,末段是 2+ 位字母 TLD。这样空白/斜杠/冒号/引号/连续点/端口一律挡掉,
+# 免得写出一个解析不出或点了就坏的值,而 .env 已经被改过。
+# (真换行进不来:sed 是行式的,JSON 里的 \n 也只会变成字面 \ + n;
+#  但空格、斜杠这类会原样穿过,那才是这里真正要挡的。)
+if ! printf '%s' "$HOSTNAME" | grep -Eq '^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$'; then
+  echo "❌ 换取响应里的 hostname 形状不合法,已中止,.env 未改动。" >&2
+  exit 1
+fi
 echo "  ✓ 已获取,目标地址:https://$HOSTNAME"
 
 # 4) 原子写入 .env(先备份,再临时文件 + mv;绝不半途留下损坏的 .env)
@@ -110,36 +120,48 @@ if ! cp -p "$ENV_FILE" "$TMP"; then
   echo "❌ 创建临时文件失败(cp -p 非零),.env 未改动。" >&2
   rm -f "$TMP"; exit 1
 fi
-# docker compose 认这些写法都算 TUNNEL_TOKEN:前导空格、= 两侧空格、export
-# 前缀。只匹配 '^TUNNEL_TOKEN=' 会漏掉它们,留下含旧密钥的重复行,取哪条变
-# 不确定。过滤/计数用同一个正则。
-TOKEN_RE='^[[:space:]]*(export[[:space:]]+)?TUNNEL_TOKEN[[:space:]]*='
-# 保留所有非 TUNNEL_TOKEN 行。必须区分 grep 退出码:0=有保留行,1=无保留行
-# (.env 只有 token,合法),>=2 才是真错误(.env 不可读/IO)。不区分而用
+# docker compose 认这些写法都算托管键:前导空格、= 两侧空格、export
+# 前缀。过滤/计数用同一个正则,漏掉任何写法都会留下重复行,取哪条变
+# 不确定。托管键有两个:TUNNEL_TOKEN(隧道凭据)与
+# MEDIARY_CONNECT_HOSTNAME(实例的公网域名——apps/web 的远程访问 tab
+# 靠它在本地显示专属地址,缺了只能显示「已开启」给不出链接)。
+MANAGED_RE='^[[:space:]]*(export[[:space:]]+)?(TUNNEL_TOKEN|MEDIARY_CONNECT_HOSTNAME)[[:space:]]*='
+# 保留所有非托管键的行。必须区分 grep 退出码:0=有保留行,1=无保留行
+# (.env 只有托管键,合法),>=2 才是真错误(.env 不可读/IO)。不区分而用
 # '|| true' 吞掉,>=2 时 '>' 已把 TMP 截空,继续 mv 会静默清掉全部其它配置。
-grep -Ev "$TOKEN_RE" "$ENV_FILE" > "$TMP" 2>/dev/null
+# 这里必须临时关掉 -e:否则 rc=1(合法的「无保留行」)会被 -e 直接中止脚本,
+# 下面的 GREP_RC 分支永远走不到。已实测:set -eu 下该 grep 返回 1 时脚本
+# 立刻以 1 退出,不会执行后续任何一行。
+set +e
+grep -Ev "$MANAGED_RE" "$ENV_FILE" > "$TMP" 2>/dev/null
 GREP_RC=$?
+set -e
 if [ "$GREP_RC" -ge 2 ]; then
   echo "❌ 读取 .env 失败(grep 退出码 ${GREP_RC}),.env 未改动。" >&2
   rm -f "$TMP"; exit 1
 fi
 printf 'TUNNEL_TOKEN=%s\n' "$TUNNEL_TOKEN" >> "$TMP"
-# 替换前自检:新文件非 token 行数必须与原文件一致,且确有 TUNNEL_TOKEN。
-OLD_KEPT=$(grep -Ecv "$TOKEN_RE" "$ENV_FILE" 2>/dev/null || true)
-NEW_KEPT=$(grep -Ecv "$TOKEN_RE" "$TMP" 2>/dev/null || true)
+printf 'MEDIARY_CONNECT_HOSTNAME=%s\n' "$HOSTNAME" >> "$TMP"
+# 替换前自检:新文件非托管键行数必须与原文件一致,且两个托管键都在。
+OLD_KEPT=$(grep -Ecv "$MANAGED_RE" "$ENV_FILE" 2>/dev/null || true)
+NEW_KEPT=$(grep -Ecv "$MANAGED_RE" "$TMP" 2>/dev/null || true)
 if [ "$OLD_KEPT" != "$NEW_KEPT" ]; then
   echo "❌ 新文件丢了配置行(原 $OLD_KEPT → 新 $NEW_KEPT),已中止,.env 未改动。备份在 $BACKUP。" >&2
   rm -f "$TMP"; exit 1
 fi
-if ! grep -Eq "$TOKEN_RE" "$TMP"; then
+if ! grep -Eq '^[[:space:]]*(export[[:space:]]+)?TUNNEL_TOKEN[[:space:]]*=' "$TMP"; then
   echo "❌ 新文件里没有 TUNNEL_TOKEN,已中止,.env 未改动。" >&2
+  rm -f "$TMP"; exit 1
+fi
+if ! grep -Eq '^[[:space:]]*(export[[:space:]]+)?MEDIARY_CONNECT_HOSTNAME[[:space:]]*=' "$TMP"; then
+  echo "❌ 新文件里没有 MEDIARY_CONNECT_HOSTNAME,已中止,.env 未改动。" >&2
   rm -f "$TMP"; exit 1
 fi
 if ! mv "$TMP" "$ENV_FILE"; then
   echo "❌ 替换 .env 失败(mv 非零),.env 未改动。备份在 $BACKUP。" >&2
   rm -f "$TMP"; exit 1
 fi
-echo "  ✓ 已写入 TUNNEL_TOKEN"
+echo "  ✓ 已写入 TUNNEL_TOKEN 与 MEDIARY_CONNECT_HOSTNAME"
 
 # 5) 带 --profile tunnel 启动(这个 flag 是关键:漏了它 cloudflared 根本不起,
 #    其他容器却正常,看起来「成功」实则隧道没通)。

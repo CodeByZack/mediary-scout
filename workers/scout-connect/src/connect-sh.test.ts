@@ -38,6 +38,19 @@ describe("GET /connect.sh", () => {
     expect(body).toContain("[^A-Za-z0-9_.-]");
     // 分级报错:403 撤销 与 400 过期 区分
     expect(body).toContain("endpoint not active");
+    // 实例公网域名随 setup 写入 .env——apps/web 的远程访问 tab 靠它在本地
+    // 显示专属地址(没有这个本地来源时只能显示「已开启」给不出链接)。
+    expect(body).toContain("MEDIARY_CONNECT_HOSTNAME");
+    expect(body).toContain('printf \'MEDIARY_CONNECT_HOSTNAME=%s\\n\' "$HOSTNAME"');
+    // 过滤托管键的 grep 必须被 set +e/-e 包起来:脚本头是 set -eu,而
+    // 「.env 里只有托管键」时 grep 返回 1,-e 会直接中止脚本,下面按退出码
+    // 区分 1 与 >=2 的分支就永远走不到(实测 set -eu 下确实立刻退出 1)。
+    expect(body).toMatch(/set \+e\s*\ngrep -Ev "\$MANAGED_RE"[^\n]*\nGREP_RC=\$\?\s*\nset -e/);
+    // hostname 会被持久化进 .env,写之前必须校验形状(空格/斜杠/冒号/引号/
+    // 连续点/端口都要挡掉),且校验发生在碰 .env 之前——否则 .env 已被改过
+    // 才发现值是坏的。
+    expect(body).toMatch(/grep -Eq '\^\(\[a-z0-9\]\(\[a-z0-9-\]\*\[a-z0-9\]\)\?\\\.\)\+\[a-z\]\{2,\}\$'/);
+    expect(body.indexOf("hostname 形状不合法")).toBeLessThan(body.indexOf('cp -p "$ENV_FILE"'));
   });
 
   it("is servable over the beta host too (curl | sh 从任一入口)", async () => {

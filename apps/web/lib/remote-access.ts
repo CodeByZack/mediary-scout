@@ -155,6 +155,41 @@ export function instanceTunnelToken(): string | undefined {
 }
 
 /**
+ * 用户控制台入口（登录页即入口，魔法链接无密码）。
+ *
+ * 从 `scoutConnectBaseUrl()` 派生而非再写死一个生产域名：本模块的既定设计就是
+ * 「worker base 只有一个来源」（见上），`SCOUT_CONNECT_URL` 指向预发/自建 worker
+ * 时若控制台链接仍钉在生产，用户会被从预发实例送去生产控制台——那里没有他这台
+ * 机器的记录，看起来就是「开通了但控制台查不到」。
+ *
+ * 必须是函数而非常量：顶层求值在 `cacheComponents` 下会把构建期 env 烤死进产物。
+ */
+export function consoleUrl(): string {
+  return `${scoutConnectBaseUrl()}/login`;
+}
+
+/**
+ * 实例的公网域名——connect.sh 接入时写进 .env 的本地来源
+ * (MEDIARY_CONNECT_HOSTNAME=dirtyfancy.mediaryconnect.app)。这正是本文件
+ * 头注释预留的「隧道 setup 写入」来源:有了它,远程访问 tab 就能显示专属
+ * 地址与控制台链接,而不用碰 worker 元数据(204 无 body 的刻意设计不变)。
+ *
+ * 早期接入的实例 .env 里没这行(connect.sh 后加的)——返回 null,UI 回落到
+ * 旧的「已开启但不给链接」文案,绝不臆造。
+ * 在函数里读 env(cacheComponents 下模块顶层求值会把构建期 env 烤进产物)。
+ * 校验成 hostname 形状(DNS 字符集,无协议无路径)防 env 被塞怪东西。 */
+export function instanceConnectHostname(): string | null {
+  const raw = process.env.MEDIARY_CONNECT_HOSTNAME?.trim().toLowerCase();
+  if (!raw) return null;
+  // 逐 label 校验:每段以字母数字开头结尾、中间可含连字符,最后一段是 TLD。
+  // 宽松的 /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/ 会放过 `a..b.com`、`a-.b.com`
+  // 这类非法 DNS 形状——虽然不危险,但会渲染出点了就坏的链接。
+  const LABEL = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
+  const HOSTNAME_RE = new RegExp(`^(?:${LABEL}\\.)+[a-z]{2,}$`);
+  return HOSTNAME_RE.test(raw) ? raw : null;
+}
+
+/**
  * 「去设置密码」链接。
  *
  * 必须保留 `?w` 工作区深链参数：从非默认工作区进设置页时，硬编码
