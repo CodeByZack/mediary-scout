@@ -11,6 +11,7 @@ import { homePage } from "./html/home-page.js";
 import { adminPage } from "./html/admin-page.js";
 import { invitePage, type InvitePageState } from "./html/invite-page.js";
 import { betaPage, normalizeTurnstileSitekey } from "./html/beta-page.js";
+import { CAPACITY_LIMIT, isAtCapacityError } from "./capacity.js";
 import { buyPage } from "./html/buy-page.js";
 import { compliancePage, COMPLIANCE_PAGES, type CompliancePageKey } from "./html/compliance-page.js";
 import { RAW_ASSETS } from "./html/assets.gen.js";
@@ -21,7 +22,7 @@ import { newId } from "./ids.js";
 import { sha256Hex } from "./crypto-token.js";
 import { signToken, verifyToken } from "./signed-token.js";
 import { buildSessionCookie, parseSessionCookie } from "./session.js";
-import { computeExpiry } from "./entitlement.js";
+import { computeExpiry, isEntitlementActive, latestExpiry } from "./entitlement.js";
 
 // Same aperture mark as apps/web/app/icon.svg — the product brand.
 const LOGO_SVG =
@@ -504,6 +505,11 @@ async function selfServeProvision(request: Request, deps: RouteDeps): Promise<Re
     ) {
       throw new HttpError(409, "slug taken");
     }
+    // 容量已满 → 503(共享 helper,见 capacity.ts:两条 provision 路由必须
+    // 用同一个判定,否则漏掉的那条会把容量满变成 500)。
+    if (isAtCapacityError(e)) {
+      throw new HttpError(503, "at capacity");
+    }
     throw e;
   }
 }
@@ -651,6 +657,18 @@ async function consoleRoute(request: Request, deps: RouteDeps): Promise<Response
   // 该账号的 active endpoint(可能为 null:已付费但还没选 slug,或未开通)。
   // 控制台据此决定显示「选专属地址」入口还是「接入命令」提示词区。
   const endpoint = await deps.db.getActiveEndpointByAccountId(account.id);
+  // 仅在「真的能走到 slug 表单」时才数配额,两个条件都要满足:
+  //   1. 还没开通(已开通用户不受配额影响)
+  //   2. 有有效时长(无时长的用户在 console-page 走早返回分支,压根用不到这个值)
+  // 否则未付费/已过期用户每次进控制台都白跑一次全表 COUNT。
+  // now 只取一次:同一请求里若取两次,在到期边界附近会出现「判断条件用的时刻」
+  // 与「页面渲染的时刻」不一致(状态显示与实际门禁矛盾)。
+  const now = deps.now();
+  const eligibleToProvision =
+    endpoint === null && isEntitlementActive(latestExpiry(entitlements), now);
+  const atCapacity = eligibleToProvision
+    ? (await deps.db.countLiveEndpoints()) >= CAPACITY_LIMIT
+    : false;
   const url = new URL(request.url);
   return htmlPage(
     consolePage({
@@ -659,7 +677,8 @@ async function consoleRoute(request: Request, deps: RouteDeps): Promise<Response
       endpoint,
       baseUrl: url.origin,
       rootDomain: deps.rootDomain.trim().toLowerCase(),
-      now: deps.now(),
+      now,
+      atCapacity,
     }),
     { noStore: true }, // 用户专属页面,不可缓存(Copilot round 3)
   );
@@ -796,6 +815,12 @@ async function provisionInvite(
     // The actual race loser dies on the UNIQUE constraint — "UNIQUE
     // constraint failed: endpoints.slug" (same wording in D1 and the memory
     // mock) — which contains neither pre-check message, so map it explicitly.
+    // 容量已满 → 503。**必须与自助路径用同一个判定**:provisionEndpoint 是
+    // 共享函数,这条路径原先漏了映射,容量满时会变成 500(且语义不对——那不是
+    // 服务器故障,而是我方配额用尽)。
+    if (isAtCapacityError(e)) {
+      throw new HttpError(503, "at capacity");
+    }
     const msg = e instanceof Error ? e.message : "";
     if (msg.includes("invite not pending") || msg.includes("already in use")) {
       throw new HttpError(409, msg);

@@ -1,3 +1,4 @@
+import { AT_CAPACITY_MESSAGE, CAPACITY_LIMIT } from "./capacity.js";
 import { assertSlug } from "./slug.js";
 import { sha256Hex } from "./crypto-token.js";
 import { buildAgentPromptOrManual } from "./agent-prompt.js";
@@ -89,6 +90,27 @@ export async function provisionEndpoint(input: {
       throw new Error(`slug already in use: ${slug}`);
     }
     throw new Error(`hostname already in use: ${hostname}`);
+  }
+
+  // 容量闸门。**必须在烧任何 CF 资源之前**:CF 隧道硬上限 1000/账号(所有套餐
+  // 一致,含 Enterprise),撞上时 createTunnel 会失败,用户已付款却拿到
+  // 「开通失败,请稍后重试」——而重试永远不会成功。放在这里(slug 查重之后、
+  // createTunnel 之前)既不浪费一次查重,也保证零 CF 副作用。
+  // 路由层把这条映射成 503(我方容量问题,不是用户请求错误)。
+  //
+  // **已知非原子(TOCTOU),有意如此。** 这是 COUNT 读后再建,并发下多个请求可能
+  // 同时看到 live < CAPACITY_LIMIT 而全部放行。要真的突破 CF 的 1000 硬上限,
+  // 需要 **11 个请求落在同一个毫秒级窗口内、且恰好都在第 990 条附近** ——
+  // 990 阈值留的那 10 条余量正是为此(不只是给运维)。
+  // 本产品是预付时长、单人自助开通,该并发在 1000 用户规模下不会出现。
+  // 若真要硬保证,需引入预留机制(插一条 status='provisioning' 的短命行抢
+  // UNIQUE),但那要求:新状态进容量白名单、僵尸预留的清理任务、以及改
+  // idx_endpoints_account_live 部分唯一索引的语义 —— 改动面远大于收益。
+  // 触发重新评估的信号:活跃 endpoint 数接近 900,或出现任何一次 createTunnel
+  // 因配额失败的审计记录。
+  const live = await db.countLiveEndpoints();
+  if (live >= CAPACITY_LIMIT) {
+    throw new Error(AT_CAPACITY_MESSAGE);
   }
 
   const { tunnelId, token } = await cf.createTunnel(`scout-${slug}`);
