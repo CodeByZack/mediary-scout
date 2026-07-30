@@ -157,6 +157,15 @@ export interface ConnectDb {
   updateAccountLastLogin(id: string, at: string): Promise<void>;
   /** 幂等插入时长记录。paddle_transaction_id 已存在时返回 false(不重复加时长)。 */
   insertEntitlement(row: EntitlementRow): Promise<boolean>;
+  /** 修正某笔时长的 expires_at。
+   *
+   *  用于并发下的账本收敛:「读最新到期→加N月→写」在并发时会 lost update
+   *  (两笔都基于同一快照,用户付 24 个月只拿到 12)。写入后从整本账重算,
+   *  与快照不符就用这个方法修正。见 grant.ts 与 entitlement.ts:recomputeExpiry。 */
+  updateEntitlementExpiry(entitlementId: string, expiresAt: string): Promise<void>;
+  /** 按 paddle_transaction_id 查那笔时长。幂等重投时用来定位「上次收敛失败
+   *  留下的错值行」并自愈,见 grant.ts。 */
+  getEntitlementByTransactionId(txnId: string): Promise<EntitlementRow | null>;
   listEntitlements(accountId: string): Promise<EntitlementRow[]>;
 }
 
@@ -612,9 +621,35 @@ export function createD1ConnectDb(d1: D1Database): ConnectDb {
       }
     },
 
+    async updateEntitlementExpiry(entitlementId, expiresAt) {
+      // **必须检查 meta.changes。** 0 行受影响与"成功"在 D1 里无法从返回值区分,
+      // 而这个 UPDATE 是并发收敛的最后一步:静默失败会让基于陈旧快照的错值
+      // 永久留下(用户永久少拿一个周期),且没有任何后台任务会重算账本。
+      // 抛错则冒泡到 webhook → 503 → Paddle 重投 → 幂等分支自愈。
+      // (注:D1 把受影响行数放在 run() 返回值的 meta.changes 里;
+      //  这里刻意只在**确定为 0** 时抛,拿不到该字段的运行时不误报。)
+      const res = (await d1
+        .prepare(`UPDATE entitlements SET expires_at = ? WHERE id = ?`)
+        .bind(expiresAt, entitlementId)
+        .run()) as { meta?: { changes?: number } };
+      const changes = res?.meta?.changes;
+      if (typeof changes === "number" && changes === 0) {
+        throw new Error(`updateEntitlementExpiry affected 0 rows: ${entitlementId}`);
+      }
+    },
+
+    async getEntitlementByTransactionId(txnId) {
+      // 与 listEntitlements 同款:entitlements 的列与 EntitlementRow 一一对应,
+      // 不需要 mapper(其它表有 nullable 归一才需要)。
+      return await d1
+        .prepare(`SELECT * FROM entitlements WHERE paddle_transaction_id = ? LIMIT 1`)
+        .bind(txnId)
+        .first<EntitlementRow>();
+    },
+
     async listEntitlements(accountId) {
       const rows = await d1
-        .prepare(`SELECT * FROM entitlements WHERE account_id = ? ORDER BY created_at ASC`)
+        .prepare(`SELECT * FROM entitlements WHERE account_id = ? ORDER BY created_at ASC, id ASC`)
         .bind(accountId)
         .all<EntitlementRow>();
       return rows.results;
@@ -944,8 +979,27 @@ export function createMemoryConnectDb(): ConnectDb {
     async listEntitlements(accountId) {
       return [...entitlements.values()]
         .filter((e) => e.account_id === accountId)
-        .sort((a, b) => a.created_at.localeCompare(b.created_at))
+        // 与 D1 分支同款 ORDER BY created_at ASC, id ASC:相等 created_at 时
+        // SQLite 不保证稳定,不带 id 两个实现会给出不同顺序(parity 缺口)。
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
         .map((e) => ({ ...e }));
+    },
+
+    async updateEntitlementExpiry(entitlementId, expiresAt) {
+      // parity:D1 分支在 0 行受影响时抛错(那是并发收敛静默失败的信号),
+      // 这里也必须抛,否则 memory 测试会绿而生产会留下错值。
+      const row = entitlements.get(entitlementId);
+      if (row === undefined) {
+        throw new Error(`updateEntitlementExpiry affected 0 rows: ${entitlementId}`);
+      }
+      entitlements.set(entitlementId, { ...row, expires_at: expiresAt });
+    },
+
+    async getEntitlementByTransactionId(txnId) {
+      for (const row of entitlements.values()) {
+        if (row.paddle_transaction_id === txnId) return { ...row };
+      }
+      return null;
     },
   };
 }

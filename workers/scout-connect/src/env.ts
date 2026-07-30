@@ -23,4 +23,11 @@ export interface Env {
   // PADDLE_ENVIRONMENT: "sandbox" | "production"(缺省视为 production)。
   PADDLE_CLIENT_TOKEN?: string;
   PADDLE_ENVIRONMENT?: string;
+  // notification destination 的 endpoint secret(pdl_ntfset_ 前缀)。
+  // **wrangler secret,不是 vars** —— 它是验签密钥,泄露等于任何人都能凭空
+  // 发时长。未配置时 /api/paddle/webhook 一律 503(fail closed)。
+  PADDLE_WEBHOOK_SECRET?: string;
+  // Paddle 服务端 API key(创建交易用)。**wrangler secret**,不是 vars。
+  // 未配置时 /api/checkout 返回 503(结账未开放),不影响其它路径。
+  PADDLE_API_KEY?: string;
 }

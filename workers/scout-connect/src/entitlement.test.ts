@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addMonths, computeExpiry, isEntitlementActive } from "./entitlement.js";
+import { addMonths, computeExpiry, isEntitlementActive, recomputeExpiry } from "./entitlement.js";
 
 describe("entitlement 时长计算", () => {
   describe("addMonths", () => {
@@ -55,5 +55,92 @@ describe("entitlement 时长计算", () => {
     it("unparseable expiry is inactive (fail closed, never grant on garbage)", () => {
       expect(isEntitlementActive("not-a-date", "2026-07-28T00:00:00.000Z")).toBe(false);
     });
+  });
+});
+
+describe("recomputeExpiry 的排序稳健性", () => {
+  const row = (id: string, created: string, months: number, expires = "2027-01-01T00:00:00.000Z") => ({
+    id,
+    created_at: created,
+    months,
+    expires_at: expires,
+  });
+
+  // 坏值让 Date.parse 得 NaN,比较器返回 NaN 等同返回 0 → 排序保证静默失效。
+  // 实测一个坏值就能把 2026-03 排到 2026-01 前面。localeCompare 对坏值仍给
+  // 确定顺序,结果可复现。
+  it("created_at 含坏值时仍给确定结果(不因 NaN 乱序)", () => {
+    const rows = [row("a", "2026-03-01T00:00:00.000Z", 1), row("b", "BAD", 12), row("c", "2026-01-01T00:00:00.000Z", 3)];
+    const first = recomputeExpiry(rows);
+    // 多次调用、不同输入顺序,结果必须一致(确定性才是这里的核心保证)
+    for (const shuffled of [
+      [rows[2]!, rows[0]!, rows[1]!],
+      [rows[1]!, rows[2]!, rows[0]!],
+    ]) {
+      expect(recomputeExpiry(shuffled)).toBe(first);
+    }
+  });
+
+  // 同毫秒时前两个键都可能相等 —— 尤其自愈会把同账号多行的 expires_at 写成
+  // 同一个值。此时若无 id 兜底,顺序交给 DB,而月加法不满足结合律
+  // (月末钳位有损),不同顺序真会差一天。
+  it("同 created_at 同 expires_at 时靠 id 定序(结果与输入顺序无关)", () => {
+    const same = "2026-01-31T00:00:00.000Z";
+    const exp = "2027-01-31T00:00:00.000Z";
+    const a = row("id_a", same, 1, exp);
+    const b = row("id_b", same, 2, exp);
+    expect(recomputeExpiry([a, b])).toBe(recomputeExpiry([b, a]));
+  });
+
+  it("月加法不满足结合律 —— 所以顺序保证是必需的", () => {
+    // 这条是上面那个测试存在的理由:月末钳位有损,顺序真的影响结果
+    expect(addMonths(addMonths("2026-01-31T00:00:00.000Z", 1), 1)).not.toBe(
+      addMonths("2026-01-31T00:00:00.000Z", 2),
+    );
+  });
+
+  // 坏 created_at 会让 addMonths 里的 new Date("BAD") 成为 Invalid Date,
+  // toISOString() 抛 RangeError → 冒到 webhook 就是 500 → 无限重投。
+  // 重算的职责是「用能用的数据算出真值」,不是整笔崩掉 ——
+  // 崩掉会连带让好的那些行也拿不到时长。
+  it("坏行被跳过而不抛错,好行仍正确计入", () => {
+    const good = row("g", "2026-01-01T00:00:00.000Z", 12);
+    const badDate = row("b", "NOT-A-DATE", 12);
+    const badMonths = { ...row("m", "2026-02-01T00:00:00.000Z", 0), months: 0 };
+    expect(() => recomputeExpiry([good, badDate, badMonths])).not.toThrow();
+    // 只有 good 计入 → 2026-01-01 + 12 个月
+    expect(recomputeExpiry([good, badDate, badMonths])).toBe("2027-01-01T00:00:00.000Z");
+  });
+
+  it("全是坏行时返回 null 而不抛错", () => {
+    expect(recomputeExpiry([row("a", "BAD", 12), row("b", "", 12)])).toBeNull();
+  });
+
+  // expires_at 是本函数自己会改写的派生缓存(grant.ts 的收敛会写它)。
+  // 若把它当排序键,「重算结果」就依赖「上次重算写下的缓存」—— 本该幂等的
+  // 重算变成有状态的。这条钉住:同 created_at 时,expires_at 取任何值都不影响结果。
+  it("结果不受 expires_at 缓存影响(它是派生字段)", () => {
+    const same = "2026-01-31T00:00:00.000Z";
+    // months=[1,2] 在 01-31 基准上,两种叠加顺序差 2 天(月末钳位有损):
+    //   先+1再+2 → 2026-04-28;先+2再+1 → 2026-04-30
+    // 让 expires_at 的大小顺序与 id 顺序**相反**:若 expires_at 参与排序,
+    // 叠加顺序就会翻转,结果随之变化。
+    const a = { id: "id_a", created_at: same, months: 1 };
+    const b = { id: "id_b", created_at: same, months: 2 };
+    // 按 id 定序(a→b):先 +1 再 +2
+    const byId = recomputeExpiry([a, b]);
+    expect(byId).toBe("2026-04-28T00:00:00.000Z");
+    // 塞入会诱导反向排序的 expires_at 缓存;结果必须不变
+    const withCache = recomputeExpiry([
+      { ...a, expires_at: "2099-12-31T00:00:00.000Z" },
+      { ...b, expires_at: "2000-01-01T00:00:00.000Z" },
+    ] as never);
+    expect(withCache, "expires_at 不该影响叠加顺序").toBe(byId);
+    // 输入顺序也不该影响(id 决定一切)
+    expect(recomputeExpiry([b, a])).toBe(byId);
+  });
+
+  it("空账本返回 null", () => {
+    expect(recomputeExpiry([])).toBeNull();
   });
 });
