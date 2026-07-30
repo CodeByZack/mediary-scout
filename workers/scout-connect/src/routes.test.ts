@@ -2158,3 +2158,50 @@ describe("容量满时 admin invite 路径也必须是 503", () => {
     expect(calls.length, `不该有新的 CF 调用: ${calls.slice(before).join(", ")}`).toBe(before);
   });
 });
+
+describe("GET /api/slug/check 限流", () => {
+  // 此端点登录即可访问,每个查询可能触发上百次 D1 查重。
+  // 不限流的话任一登录用户能无限枚举全站 slug 占用情况。
+  it("超限返回 429,且不触发查重", async () => {
+    const { deps, db } = setup();
+    let checkCalls = 0;
+    const wrappedDeps = { ...deps, db: {
+      ...db,
+      async findEndpointBySlugOrHostname(slug: string, hostname: string) {
+        checkCalls++;
+        return db.findEndpointBySlugOrHostname(slug, hostname);
+      },
+    } };
+    // 造一个登录账号
+    await db.insertAccount({
+      id: "act_rl",
+      email: "rl@e.com",
+      paddle_customer_id: null,
+      created_at: "2026-07-30T00:00:00.000Z",
+      last_login_at: null,
+    });
+    const cookie = await (async () => {
+      const { buildSessionCookie } = await import("./session.js");
+      return buildSessionCookie("act_rl", {
+        secret: deps.sessionSecret ?? "f".repeat(64),
+        ttlMs: 3600_000,
+        now: Date.now(),
+      });
+    })();
+    // 连打到超限(默认 10/分钟)
+    let last = 200;
+    for (let i = 0; i < 15; i++) {
+      const res = await handleRequest(
+        new Request(`${BASE}/api/slug/check?s=name${i}`, { headers: { cookie } }),
+        wrappedDeps,
+      );
+      last = res.status;
+      if (res.status === 429) break;
+    }
+    expect(last, "超限应 429").toBe(429);
+    // 限流后不再查重(Copilot 指出:断言里要实际验证查重没被调用)
+    // 注意:前 10 次通过了限流且确实做了查重,checkCalls > 0 是正常的;
+    // 关键是第 11 次被 429 拦下时 checkCalls 不再增长(只有 10 次查重)。
+    expect(checkCalls, "限流后不再查重").toBeLessThanOrEqual(10);
+  });
+});
