@@ -22,6 +22,20 @@ export interface PaddleApi {
     accountEmail: string;
     checkoutUrl: string;
   }): Promise<{ transactionId: string; checkoutUrl: string }>;
+
+  /**
+   * 查这个邮箱有没有**已付款但我们还没入账**的交易。
+   *
+   * 为什么需要它:webhook 是唯一的入账通道,但它会延迟(微信支付延迟捕获,
+   * 官方说可能长达 10 分钟)、会重试、也可能因配置错误而全部失败 —— 这三件事
+   * 都真实发生过。只看 entitlements 的话,这段时间用户看到的是「尚未开通」,
+   * 而他刚刚才付过钱。那是会让人立刻开退款争议的体验。
+   *
+   * 返回 `paid`/`completed` 状态的交易 ID 列表。**只用于显示「正在开通」提示,
+   * 绝不用于发放时长** —— 发放只认验过签的 webhook,否则任何人都能靠伪造
+   * 交易状态白拿时长。
+   */
+  listPaidTransactionIds(accountEmail: string): Promise<string[]>;
 }
 
 /** 真实 Paddle API 客户端。sandbox 与 live 的 base URL 不同。 */
@@ -69,6 +83,29 @@ export function createPaddleApi(input: {
         throw new Error("paddle createTransaction returned no id/checkout url");
       }
       return { transactionId, checkoutUrl: url };
+    },
+
+    async listPaidTransactionIds(accountEmail) {
+      // Paddle 没有「按邮箱查交易」的直接参数,得先找 customer。
+      const cRes = await fetch(
+        `${base}/customers?email=${encodeURIComponent(accountEmail)}&status=active`,
+        { headers: { authorization: `Bearer ${input.apiKey}` } },
+      );
+      if (!cRes.ok) return [];
+      const cBody = (await cRes.json()) as { data?: Array<{ id?: unknown }> };
+      const customerId = cBody.data?.[0]?.id;
+      if (typeof customerId !== "string" || customerId === "") return [];
+
+      // paid = 已捕获但尚未 completed;completed = 已完成。两者都意味着钱已经到了。
+      const tRes = await fetch(
+        `${base}/transactions?customer_id=${encodeURIComponent(customerId)}&status=paid,completed&per_page=20`,
+        { headers: { authorization: `Bearer ${input.apiKey}` } },
+      );
+      if (!tRes.ok) return [];
+      const tBody = (await tRes.json()) as { data?: Array<{ id?: unknown }> };
+      return (tBody.data ?? [])
+        .map((t) => t.id)
+        .filter((id): id is string => typeof id === "string" && id !== "");
     },
   };
 }

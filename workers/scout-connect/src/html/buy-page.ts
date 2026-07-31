@@ -94,7 +94,34 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
       ? `if (!window.Paddle) { fail("支付组件加载失败，请检查网络或稍后重试。"); return; }
   try {
     ${isSandbox ? 'window.Paddle.Environment.set("sandbox");' : "// production: 环境默认即生产,刻意不做任何环境切换调用"}
-    window.Paddle.Initialize({ token: ${tokenLiteral} });
+    window.Paddle.Initialize({
+      token: ${tokenLiteral},
+      // **必须有 eventCallback 或 successUrl,否则付完款界面一动不动。**
+      // 这是一次真实事故的修复:用户微信扫码付了 ¥45,Paddle 结账窗停在原地,
+      // 界面「像是我没扫过码付过款一样」。Paddle 的行为是对的 —— 我们从没告诉过
+      // 它付完要去哪(既没传 successUrl 也没传 eventCallback),它只能停着。
+      //
+      // 用 eventCallback 而不是 successUrl,因为微信支付是**延迟捕获**:
+      // checkout.completed 触发时钱可能还没真正到账(官方文档:通常立刻,
+      // 但**可能长达 10 分钟**)。我们要在跳转前先给一句「正在开通」,
+      // 而不是把用户丢到一个显示「尚未开通」的控制台 —— 那正是这次事故里
+      // 最伤人的一幕:付完钱,回到控制台,看到「尚未开通」。
+      eventCallback: function (event) {
+        if (!event || typeof event.name !== "string") return;
+        if (event.name === "checkout.completed") {
+          hint.textContent = "支付成功,正在开通…";
+          // 微信/支付宝这类延迟捕获的方式,到账可能要几分钟。说清楚,别让人干等。
+          status.textContent = "正在确认到账(微信支付最多需要 10 分钟)。即将回到控制台。";
+          // 留 1.8 秒让用户看到这句话再跳。跳过去后控制台会显示「已付款,正在开通」
+          // 那一态(见 console-page 的 pendingPaid),不会再显示「尚未开通」。
+          setTimeout(function () { window.location.href = "/console?paid=1"; }, 1800);
+        } else if (event.name === "checkout.payment.failed") {
+          // 付款失败也必须说话。之前这里同样是静默的。
+          hint.textContent = "这笔支付没有成功。";
+          status.textContent = "没有扣款。可以换一种支付方式再试,或联系我们。";
+        }
+      },
+    });
   } catch (e) {
     fail("支付组件初始化失败：" + (e && e.message ? e.message : String(e)));
     return;

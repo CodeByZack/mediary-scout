@@ -124,3 +124,46 @@ describe("/buy 的 CSP 必须放行 Paddle,其余页面必须维持最严", () =
     }
   });
 });
+
+describe("付款完成后必须有出路(真实事故的回归防线)", () => {
+  // 事故:用户微信扫码付了 ¥45,Paddle 结账窗停在原地,界面「像是我没扫过码
+  // 付过款一样」。根因是我们既没传 settings.successUrl 也没传 eventCallback ——
+  // Paddle 文档写明这两者之一是必需的,否则它付完不知道去哪,只能停着。
+  const html = () => buyPage({ paddleClientToken: "live_tok", paddleEnvironment: "production" });
+
+  it("Initialize 带 eventCallback", () => {
+    expect(html()).toContain("eventCallback");
+  });
+
+  it("监听 checkout.completed 并跳回控制台", () => {
+    const h = html();
+    expect(h).toContain("checkout.completed");
+    expect(h).toContain("/console?paid=1");
+  });
+
+  it("付款失败也说话,并明确「没有扣款」", () => {
+    // 之前这一路也是静默的。用户会以为按钮坏了然后反复点。
+    const h = html();
+    expect(h).toContain("checkout.payment.failed");
+    expect(h).toContain("没有扣款");
+  });
+
+  it("明说微信支付可能要等几分钟(延迟捕获)", () => {
+    // 官方文档:授权后捕获「通常立刻,但可能长达 10 分钟」。
+    // 不说清楚,用户会在这几分钟里以为付款失败了。
+    expect(html()).toContain("10 分钟");
+  });
+
+  it("跳转前先给一句「正在开通」,不直接把人丢回控制台", () => {
+    // 直接跳的话,若 webhook 还没入账,用户看到的是「尚未开通」——
+    // 那正是事故里最伤人的一幕:付完钱,回到控制台,显示尚未开通。
+    const h = html();
+    expect(h).toContain("正在开通");
+  });
+
+  it("未配置 token 时不注入 eventCallback(没有 Paddle.js 可挂)", () => {
+    const h = buyPage({});
+    expect(h).not.toContain("eventCallback");
+    expect(h).toContain("结账功能尚未开放");
+  });
+});

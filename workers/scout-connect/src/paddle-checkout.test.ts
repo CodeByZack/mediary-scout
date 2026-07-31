@@ -19,6 +19,9 @@ function fakeApi(calls: unknown[]): PaddleApi {
         checkoutUrl: "https://mediaryconnect.app/buy?_ptxn=txn_new",
       };
     },
+    async listPaidTransactionIds() {
+      return [];
+    },
   };
 }
 
@@ -162,6 +165,9 @@ describe("POST /api/checkout", () => {
       paddleApi: {
         async createTransaction() {
           throw new Error("paddle createTransaction failed: 403 forbidden secret=abc");
+        },
+        async listPaidTransactionIds() {
+          return [];
         },
       },
     });
