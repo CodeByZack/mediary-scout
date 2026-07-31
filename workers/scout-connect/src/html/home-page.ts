@@ -138,6 +138,23 @@ ${BRAND_CSS}
 .hero-l{min-width:0;position:relative;z-index:2}
 .hero-r{position:relative;min-width:0;align-self:stretch;overflow:hidden;
   pointer-events:none;
+  /* **关键**:用 mask 让元素自身淡出,而不是靠 ::after 盖一层渐变。
+     盖渐变解决不了硬边 —— overflow:hidden 会把超出容器的海报**直接裁掉**,
+     裁切边是一条真实的竖线,而渐变只在容器内部生效、管不到它。
+     实测:容器左边界 x=743,海报网格从 x=641 开始,中间 102px 被硬裁。
+     mask 作用在元素合成阶段,连裁切边一起淡掉。 */
+  /* 两层 mask 相乘(mask-composite:intersect):水平从左淡入 + 垂直上下淡出。
+     必须四边都淡 —— 只做水平的话,容器上边界和右边界的裁切边同样是硬线
+     (实测顶部 y=68、右侧 x=1226 各留一条)。右侧留 92% 而非 100%:
+     它贴着 section 边缘,完全不淡会切出直角。 */
+  -webkit-mask-image:
+    linear-gradient(90deg,transparent 0%,rgba(0,0,0,.35) 14%,rgba(0,0,0,.8) 40%,#000 70%,#000 92%,rgba(0,0,0,.55) 100%),
+    linear-gradient(180deg,transparent 0%,#000 12%,#000 88%,transparent 100%);
+  -webkit-mask-composite:source-in;
+          mask-image:
+    linear-gradient(90deg,transparent 0%,rgba(0,0,0,.35) 14%,rgba(0,0,0,.8) 40%,#000 70%,#000 92%,rgba(0,0,0,.55) 100%),
+    linear-gradient(180deg,transparent 0%,#000 12%,#000 88%,transparent 100%);
+          mask-composite:intersect;
   /* 向右出血到 section 边缘。**不能用 calc(50% - 50vw)** —— 那个 50% 相对
      父元素(窄网格子项)算,实测溢出到 right=1573 而视口 1280,会出横向滚动条。 */
   margin-top:calc(var(--s-8) * -1);margin-bottom:calc(var(--s-8) * -1);
@@ -146,17 +163,21 @@ ${BRAND_CSS}
   gap:6px;transform:rotate(-2deg) scale(1.14);
   animation:drift 26s ease-in-out infinite alternate}
 .pw img{width:100%;height:104px;object-fit:cover;border-radius:5px;display:block;
-  opacity:.62}   /* 压暗:海报是背景,不能抢标题 */
+  /* 压暗:海报是背景,不能抢标题。.52 是配合上面两层调出来的 ——
+     mask 右端(92%→100%)只从 #000 淡到 .55、::after 右侧只压 .18,
+     也就是右侧遮得很轻;图本身若不压暗就会比左侧亮太多,像两张拼接的图。 */
+  opacity:.52}
 @keyframes drift{
   from{transform:rotate(-2deg) scale(1.14) translate3d(0,0,0)}
   to{transform:rotate(-2deg) scale(1.14) translate3d(-10px,-16px,0)}}
 @media (prefers-reduced-motion:reduce){.pw{animation:none}}
-/* 双层遮罩:左侧淡出(文字区干净)+ 上下淡出(不与 section 边界打架)。
-   单层线性渐变做不到「左+上下」同时淡出。 */
+/* 压暗层:把海报的色调拉回底色,让它读起来是背景而不是内容。
+   **只管色调,不管边缘** —— 四边淡出全部由 .hero-r 的 mask-image 负责
+   (见那里的注释:渐变盖不住 overflow 的裁切边)。
+   数值从左到右 .5 → .28 → .18:左侧压重是因为文字区在那边,
+   右侧留浅一点让海报还能看清是海报。 */
 .hero-r::after{content:"";position:absolute;inset:0;pointer-events:none;
-  background:
-    linear-gradient(90deg,var(--bg-0) 0%,rgba(17,19,18,.92) 22%,rgba(17,19,18,.35) 55%,rgba(17,19,18,.12) 100%),
-    linear-gradient(180deg,var(--bg-0) 0%,transparent 18%,transparent 82%,var(--bg-0) 100%)}
+  background:linear-gradient(90deg,rgba(17,19,18,.5) 0%,rgba(17,19,18,.28) 45%,rgba(17,19,18,.18) 100%)}
 .hero-r::before{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;
   background:radial-gradient(80% 60% at 85% 15%,rgba(30,215,96,.14),transparent 70%)}
 
@@ -320,9 +341,16 @@ ${BRAND_CSS}
 }
 @container (max-width:760px){
   .hero{grid-template-columns:1fr;padding:var(--s-5) var(--gutter) var(--s-6);gap:var(--s-4)}
-  /* 窄屏海报墙压成顶部装饰带,遮罩改成从上到下淡出 */
+  /* 窄屏:海报墙压成顶部装饰带,遮罩改成**纵向**淡出。
+     必须显式覆盖 mask —— 桌面那套是「从左淡入」(为了让左侧文字区干净),
+     但窄屏是单列、海报在文字**上方**的横条,水平淡入会把横条左半边吃掉。
+     实测 392px 下若不覆盖,mask 仍带 90deg。 */
   .hero-r{order:-1;margin:calc(var(--s-5) * -1) calc(var(--gutter) * -1) var(--s-2);
-    height:150px;align-self:auto}
+    height:150px;align-self:auto;
+    -webkit-mask-image:linear-gradient(180deg,#000 0%,#000 55%,transparent 100%);
+            mask-image:linear-gradient(180deg,#000 0%,#000 55%,transparent 100%);
+    -webkit-mask-composite:source-over;
+            mask-composite:add}
   .pw img{height:74px}
   .hero-r::after{background:linear-gradient(180deg,rgba(17,19,18,.55) 0%,
     rgba(17,19,18,.2) 40%,var(--bg-0) 100%)}
