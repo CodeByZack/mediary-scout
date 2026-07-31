@@ -66,6 +66,18 @@ describe("DOCKER_MIRROR 覆盖全部 Docker Hub 镜像", () => {
     expect(connectSh).toContain("旧版本");
   });
 
+  it("**生成产物 assets.gen.ts 与源文件同步**(我今晚漏过这一步)", () => {
+    // /connect.sh 路由读的是 RAW_ASSETS(assets.gen.ts),**不是** assets/connect.sh。
+    // 改了源文件不跑 `node scripts/generate-content.mjs`,线上拿到的还是旧脚本 ——
+    // 而 tsc 和所有测试都是绿的,部署也"成功",只有 curl 线上才能发现。
+    // 我今晚就是这么漏的:改完 connect.sh、提交、部署、自检通过,
+    // 然后 curl 线上发现新内容一个字都没有。
+    const gen = readFileSync(new URL("html/assets.gen.ts", import.meta.url), "utf8");
+    for (const pat of ["DOCKER_MIRROR", "fetch anonymous token", "旧版本"]) {
+      expect(gen, `assets.gen.ts 缺 ${pat} —— 忘了跑 generate-content.mjs?`).toContain(pat);
+    }
+  });
+
   it(".env.example 与文档都列出多个镜像站", () => {
     // 公共镜像站会轮流失效。只给一个 = 那个站挂了用户就卡死。
     const deploy = readFileSync(new URL("docs/deploy.md", root), "utf8");
