@@ -40,6 +40,16 @@ export function consolePage(input: {
   now: string;
   /** 可下单档位。空数组 = 购买通道未配置(白名单空),页面不给假按钮。 */
   tiers?: readonly PurchasableTier[];
+  /**
+   * Paddle 说已付款、但我们还没入账的交易笔数。
+   *
+   * webhook 是唯一入账通道,而它会延迟(微信支付延迟捕获,官方说可能长达
+   * 10 分钟)、会重试、也可能因配置错误全部失败 —— 这三件今天全都真实发生过。
+   * 只看 entitlements 的话,这段时间用户看到「尚未开通」,而他刚付过钱。
+   */
+  pendingPaidCount?: number;
+  /** 刚从 /buy 付款成功跳回来(?paid=1)。 */
+  justPaid?: boolean;
   /** 隧道配额是否已满(CF 1000 硬上限)。只影响「已付费未开通」态:满了就不给
    *  slug 表单,免得用户填完名字才吃 503。已开通用户完全不受影响。 */
   atCapacity?: boolean;
@@ -68,7 +78,13 @@ export function consolePage(input: {
       ? `<span class="badge warn">● 宽限期中 · 剩 ${daysLeft} 天</span>`
       : expiry !== null
         ? `<span class="badge none">已过期 · 续期即恢复</span>`
-        : `<span class="badge none">尚未开通</span>`;
+        : input.pendingPaidCount !== undefined && input.pendingPaidCount > 0
+          ? // 钱到了、货没到。这里**绝不能**再显示「尚未开通」——那是事故里
+            // 最伤人的一句:用户刚付完钱,页面告诉他什么都没发生。
+            `<span class="badge warn">● 已付款 · 正在开通</span>`
+          : input.justPaid === true
+            ? `<span class="badge warn">● 正在确认付款</span>`
+            : `<span class="badge none">尚未开通</span>`;
 
   return `<!doctype html>
 <html lang="zh">
@@ -140,7 +156,16 @@ details[open] summary .chev{transform:rotate(90deg)}
 ${BRAND_BAR}
 <p class="email-line">${esc(input.account.email)}</p>
 <div class="status-row"><h1>远程访问</h1>${statusBadge}</div>
-${renderBody({ ...input, atCapacity: input.atCapacity === true, tiers: input.tiers ?? [] }, active)}
+${renderBody(
+  {
+    ...input,
+    atCapacity: input.atCapacity === true,
+    tiers: input.tiers ?? [],
+    pendingPaidCount: input.pendingPaidCount ?? 0,
+    justPaid: input.justPaid === true,
+  },
+  active,
+)}
 <div class="footer"><a href="/pricing">定价</a> · <a href="/terms">服务条款</a> · <a href="/privacy">隐私政策</a> · <a href="/refund">退款政策</a> · <a href="/contact">联系我们</a></div>
 </main>
 ${renderScript({ ...input, atCapacity: input.atCapacity === true }, active)}
@@ -160,10 +185,39 @@ function renderBody(
     atCapacity: boolean;
     /** 可下单档位(来自价格白名单,空数组=购买通道未配置)。 */
     tiers: readonly PurchasableTier[];
+    pendingPaidCount: number;
+    justPaid: boolean;
   },
   active: boolean,
 ): string {
   if (!active) {
+    // ---- 「已付款,正在开通」优先于「尚未开通」----
+    //
+    // 这一段的存在理由是一次真实事故:用户微信付了 ¥45,webhook 因密钥配错
+    // 全部 401,他回到控制台看到「尚未开通」。**付了钱,界面像没付过。**
+    // 真实用户遇到这个会直接开退款争议,而我们连一句解释都没给。
+    //
+    // 两个触发源,都要覆盖:
+    //  - justPaid:刚从 /buy 跳回来。此刻 Paddle 那边可能还没标 paid
+    //    (微信延迟捕获,官方说可能长达 10 分钟),所以查不到也要安抚。
+    //  - pendingPaidCount:Paddle 确认已付款但我们没入账。这是**真出问题**的
+    //    信号 —— 可能是 webhook 延迟,也可能是它彻底挂了。
+    if (input.justPaid || input.pendingPaidCount > 0) {
+      // 措辞的第一要务:让用户确信**钱没丢**。这比解释技术细节重要得多。
+      const confirmed = input.pendingPaidCount > 0;
+      return `<p class="sub">${confirmed ? "已收到你的付款,正在开通…" : "支付已提交,正在确认到账…"}</p>
+<div class="panel">
+<p class="lead">${confirmed ? "款项已确认,时长即将到账。" : "正在向支付平台确认这笔款项。"}</p>
+<p class="lead-sub">微信支付与支付宝是「延迟到账」——支付平台确认后我们才会开通,
+${confirmed ? "通常几秒内完成,最长约 10 分钟。" : "通常几秒内完成,微信支付最长约 10 分钟。"}
+<strong>你的付款不会丢失。</strong>刷新本页即可查看最新状态。</p>
+<button class="btn" id="recheck" type="button">刷新状态</button>
+<p class="lead-sub" style="margin-top:14px">超过 15 分钟仍未开通?那是我们这边的问题,不是你的 ——
+请<a href="/contact">联系我们</a>,附上你的付款邮箱,我们会手工补发并核查原因。
+14 天内也可无条件全额退款(<a href="/refund">退款政策</a>)。</p>
+</div>`;
+    }
+
     // **真按钮,不是跳 /pricing。** 原来这里是 `<a href="/pricing">开通</a>`,
     // 而 /pricing 是纯说明页、一个结账入口都没有 —— 整条付款路径断在这里,
     // 后端 /api/checkout 从来没有任何调用方(用户截图发现)。
@@ -230,6 +284,30 @@ ${lastSeenHtml(input.endpoint.last_seen_at, input.now)}
 <p class="expire">取件码 15 分钟后失效 · 过期回这里再点一次「获取接入命令」即可</p>
 </div>
 </div>`;
+}
+
+/**
+ * 「刷新状态」——待入账态用。
+ *
+ * ## 为什么是手动刷新而不是自动轮询
+ *
+ * 自动轮询看起来更贴心,但每次轮询都会让 worker 向 Paddle 发一次**跨公网**
+ * 请求(见 routes.ts 的 listPaidTransactionIds)。一个用户开着这个页面不动,
+ * 就是持续的出站流量与 API 配额消耗;而它要等的事件通常几秒内就到。
+ *
+ * 折中:自动**一次**延迟刷新(8 秒,覆盖绝大多数正常到账),之后交给用户手点。
+ * 8 秒不够的情况(微信延迟捕获最长 10 分钟)界面已经说清楚了,不假装还在忙。
+ */
+function recheckScript(): string {
+  return `<script type="module">
+const btn=document.getElementById("recheck");
+// 去掉 ?paid=1 再刷:否则「刚付款」这个软状态会永远粘着,即使 Paddle 那边
+// 早就确认失败了,用户也一直看到「正在确认」——那是另一种形式的说谎。
+function reload(){ window.location.href = "/console"; }
+btn.addEventListener("click",()=>{ btn.disabled=true; btn.textContent="正在查询…"; reload(); });
+// 自动刷一次就好,不做持续轮询(每次都要打 Paddle API)。
+setTimeout(()=>{ if(!btn.disabled) reload(); }, 8000);
+</script>`;
 }
 
 /**
@@ -339,12 +417,20 @@ function renderScript(
     rootDomain: string;
     atCapacity?: boolean;
     tiers?: readonly PurchasableTier[];
+    pendingPaidCount?: number;
+    justPaid?: boolean;
   },
   active: boolean,
 ): string {
   // 无有效时长 = 购买态。**原来这里直接 return ""**,于是页面上连脚本都没有 ——
   // 因为当时那一态只有个跳 /pricing 的死链。现在要下单,必须有脚本。
   if (!active) {
+    // 待入账态渲染的是「刷新状态」按钮,不是档位按钮 —— 脚本必须跟着分支走,
+    // 否则会对不存在的元素 addEventListener(购买脚本会拿不到 #buymsg 而报错,
+    // 整段脚本连带崩掉,连刷新按钮都点不动)。条件必须与 renderBody 一致。
+    if (input.justPaid === true || (input.pendingPaidCount ?? 0) > 0) {
+      return recheckScript();
+    }
     return (input.tiers ?? []).length === 0 ? "" : buyScript();
   }
   // 满容量时 renderBody 不渲染 #slug/#provision,注入表单脚本会对 null 调

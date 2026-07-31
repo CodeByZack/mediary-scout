@@ -1171,6 +1171,35 @@ async function consoleRoute(request: Request, deps: RouteDeps): Promise<Response
   const atCapacity = eligibleToProvision
     ? (await deps.db.countLiveEndpoints()) >= CAPACITY_LIMIT
     : false;
+  // ---- 「已付款但还没入账」检测 ----
+  //
+  // 这是一次真实事故的防线:用户微信付了 ¥45,webhook 因签名密钥配错而全部
+  // 401,控制台照旧显示「尚未开通」—— 他付了钱,界面看起来像没付过。
+  // 真实用户遇到这个会直接开退款争议。
+  //
+  // 触发条件收得很紧,因为这是一次**跨公网**请求(渲染路径上,有超时风险):
+  //  - 只在「当前无有效时长」时查:已开通的用户不需要这个提示。
+  //  - 只在 paddleApi 已配置时查。
+  // 也就是说:付过款的正常用户看不到这次请求,只有「本该有货却没货」的人会走到。
+  //
+  // **绝不用它发放时长** —— 发放只认验过签的 webhook。否则谁能伪造交易状态
+  // 就能白拿时长。这里只决定显示哪句话。
+  let pendingPaidCount = 0;
+  if (!isEntitlementActive(latestExpiry(entitlements), now) && deps.paddleApi !== undefined) {
+    try {
+      const paidIds = await deps.paddleApi.listPaidTransactionIds(account.email);
+      // 减去已入账的:同一笔交易 webhook 到了就不该再提示「正在开通」。
+      const granted = new Set(
+        entitlements.map((e) => e.paddle_transaction_id).filter((x): x is string => x !== null),
+      );
+      pendingPaidCount = paidIds.filter((id) => !granted.has(id)).length;
+    } catch {
+      // 查不到就当没有。**绝不能让它炸掉整个控制台** —— 那会把「少一句提示」
+      // 升级成「页面打不开」,比原问题严重得多。
+      pendingPaidCount = 0;
+    }
+  }
+
   const url = new URL(request.url);
   return htmlPage(
     consolePage({
@@ -1184,6 +1213,10 @@ async function consoleRoute(request: Request, deps: RouteDeps): Promise<Response
       // 档位来自价格白名单(单一来源)。白名单空 → 空数组 → 页面不给假按钮,
       // 因为那种按钮点下去必然被 /api/checkout 的 503 拒掉。
       tiers: purchasableTiers(deps.paddlePriceMonths),
+      pendingPaidCount,
+      // 刚从 /buy 跳回来(付款成功)。即使 Paddle 那边还没标 paid(微信延迟捕获,
+      // 官方说可能长达 10 分钟),也要先安抚 —— 用户此刻最需要的是「钱没丢」。
+      justPaid: url.searchParams.get("paid") === "1",
     }),
     { noStore: true }, // 用户专属页面,不可缓存(Copilot round 3)
   );

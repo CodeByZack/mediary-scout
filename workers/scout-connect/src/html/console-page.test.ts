@@ -302,3 +302,91 @@ describe("无时长态 = 购买入口(不是死链)", () => {
     expect(html).toContain("/refund");
   });
 });
+
+describe("已付款但未入账 = 必须说钱没丢(事故防线)", () => {
+  // 事故复盘:用户微信付了 ¥45,webhook 因签名密钥配错而全部 401,他回到控制台
+  // 看到「尚未开通」。付了钱,界面像没付过。真实用户会直接开退款争议。
+  const TIERS = [
+    { priceId: "pri_y", months: 12, label: "年度", price: "¥108", featured: true, note: "12 个月" },
+  ];
+  const pending = (n: number) =>
+    base({ entitlements: [], endpoint: null, tiers: TIERS, pendingPaidCount: n });
+  const justPaid = () =>
+    base({ entitlements: [], endpoint: null, tiers: TIERS, justPaid: true });
+
+  it("Paddle 确认已付款 → 绝不显示「尚未开通」", () => {
+    // 这是整条防线最核心的一条断言:那句话是事故里最伤人的一幕。
+    const html = pending(1);
+    expect(html).not.toContain("尚未开通");
+    expect(html).toContain("已付款");
+  });
+
+  it("明确告诉用户钱不会丢", () => {
+    const html = pending(1);
+    expect(html).toContain("付款不会丢失");
+  });
+
+  it("解释延迟到账,并给出具体时间上限", () => {
+    // 不给上限的「请稍候」等于没说 —— 用户不知道该等 10 秒还是一小时。
+    const html = pending(1);
+    expect(html).toContain("延迟到账");
+    expect(html).toContain("10 分钟");
+  });
+
+  it("给出超时后的求助路径,并承认这是我们的问题", () => {
+    const html = pending(1);
+    expect(html).toContain("15 分钟");
+    expect(html).toContain("/contact");
+    expect(html).toContain("我们这边的问题");
+    // 退款兜底也要在场:用户此刻最坏的预期就是钱白花了。
+    expect(html).toContain("/refund");
+  });
+
+  it("待入账时不显示购买按钮(防重复付款)", () => {
+    // 这条最要紧:显示购买按钮会让一个已经付过款的人再付一次。
+    const html = pending(1);
+    expect(html).not.toContain("data-price");
+  });
+
+  it("刚付款(?paid=1)但 Paddle 还没确认 → 也要安抚", () => {
+    // 微信是延迟捕获,跳回来那一刻 Paddle 往往还没标 paid。
+    // 这个空窗不安抚,用户看到的就是「尚未开通」。
+    const html = justPaid();
+    expect(html).not.toContain("尚未开通");
+    expect(html).toContain("正在确认");
+    expect(html).not.toContain("data-price");
+  });
+
+  it("有刷新按钮,且刷新时去掉 ?paid=1", () => {
+    // 不去掉的话「刚付款」这个软状态会永远粘着,即使付款其实失败了,
+    // 用户也一直看到「正在确认」—— 那是另一种形式的说谎。
+    const html = justPaid();
+    expect(html).toContain('id="recheck"');
+    expect(html).toContain('"/console"');
+    expect(html).not.toContain("/console?paid=1");
+  });
+
+  it("不做持续轮询(每次都要打 Paddle API)", () => {
+    const html = pending(1);
+    expect(html).not.toContain("setInterval");
+    expect(html).toContain("setTimeout");
+  });
+
+  it("pendingPaidCount=0 且非 justPaid → 正常显示购买按钮", () => {
+    const html = pending(0);
+    expect(html).toContain("data-price");
+    expect(html).toContain("尚未开通");
+  });
+
+  it("已有有效时长时,pendingPaidCount 不干扰正常显示", () => {
+    // 续费场景:老用户还有时长,同时买了新的。不能把他打回待入账态。
+    const html = base({
+      entitlements: [ent("2027-01-01T00:00:00.000Z")],
+      endpoint: null,
+      tiers: TIERS,
+      pendingPaidCount: 1,
+    });
+    expect(html).toContain("有效");
+    expect(html).not.toContain("付款不会丢失");
+  });
+});
