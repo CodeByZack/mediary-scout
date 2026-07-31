@@ -48,6 +48,22 @@ export function buildAgentPrompt(input: {
 1. 执行 \`docker info\` — 若报 command not found / permission denied,提示用户(需装 Docker/加 sudo/OrbStack),停止。
 2. 执行 \`docker compose ls\` — 找到 Config file 路径指向 mediary-scout 部署目录的那个 project。
 3. \`cd\` 到该目录,确认 docker-compose.yml 里有名为 web 的服务。若无,停止并向用户确认目录。
+4. **Docker Hub 可达性预检**(墙内十有八九不通,别等到起容器才发现):
+   \`\`\`bash
+   docker pull -q cloudflare/cloudflared:latest >/dev/null 2>&1 && echo HUB_OK || echo HUB_FAIL
+   \`\`\`
+   若 HUB_FAIL(典型报错 \`failed to fetch anonymous token: ... EOF\` 或
+   \`connection reset by peer\`)——**这不是配置错误,是 Docker Hub 在中国大陆
+   不可达**。在部署目录的 .env 里加一行镜像源,三个 Docker Hub 镜像会一起生效:
+   \`\`\`bash
+   grep -q '^DOCKER_MIRROR=' .env || echo 'DOCKER_MIRROR=docker.1ms.run' >> .env
+   \`\`\`
+   已实测可用(2026-08-01,大陆直连):docker.1ms.run · dockerproxy.net ·
+   docker.m.daocloud.io · hub.rat.dev。**公共镜像站会轮流失效,一个不通就换
+   下一个**,逐个试到 \`docker pull -q <站>/cloudflare/cloudflared:latest\` 成功。
+   注意 pansou 走 ghcr.io,不受这个变量影响(墙内通常可直连)。
+   若该实例的 docker-compose.yml 还没有 DOCKER_MIRROR 支持(老版本,image 是
+   硬编码的),提示用户 \`git pull\` 更新部署文件后重试。
 
 第 1 步·写凭证(原子化操作 + 自动回滚):
 ⚠️ 1a. 强制备份(不可跳过):

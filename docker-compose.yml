@@ -1,6 +1,28 @@
 # media-track 自部署:一把拉起 web(Next + 进程内 worker) / Postgres / PanSou。
 #   docker compose up -d   →   打开 http://<host>:3000   →   设置页扫码连 115 即用
 # TMDB 经 §1 CF Worker 开箱即用;LLM key / 自己的 TMDB key / Prowlarr 在设置页填。
+# ---- Docker Hub 镜像源(墙内必读) ----
+#
+# 本文件里三个镜像来自 Docker Hub:postgres、node(见 Dockerfile)、cloudflared。
+# **在中国大陆,Docker Hub 经常拉不动** —— 表现为
+# `failed to fetch anonymous token: ... EOF` 或 `connection reset by peer`。
+# 这不是你的配置错了,是 registry-1.docker.io / auth.docker.io 不可达。
+#
+# 解决:在 .env 里设一个镜像源前缀,三处会一起生效:
+#
+#   DOCKER_MIRROR=docker.1ms.run
+#
+# 已实测可用(2026-08-01,大陆直连):
+#   docker.1ms.run  ·  dockerproxy.net  ·  docker.m.daocloud.io  ·  hub.rat.dev
+# 换一个不通就换下一个 —— 公共镜像站会轮流失效,别只记住一个。
+#
+# 留空(默认)= 直连 Docker Hub 官方,境外网络无需任何设置。
+# 注意 pansou 走的是 ghcr.io,**不受此变量影响**(ghcr 在墙内通常可直连)。
+#
+# build 阶段(Dockerfile 里的 node 基础镜像)要同一个值:
+#   docker compose build --build-arg DOCKER_MIRROR=docker.1ms.run web
+# 或者更省事:把 DOCKER_MIRROR 写进 .env,compose 会自动传给 build args。
+
 x-default-logging: &default-logging
   driver: json-file
   options:
@@ -9,7 +31,8 @@ x-default-logging: &default-logging
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # ${DOCKER_MIRROR:+...} 的写法:变量非空时才加前缀和斜杠,空则退化成官方镜像名。
+    image: ${DOCKER_MIRROR:+${DOCKER_MIRROR}/library/}postgres:16-alpine
     environment:
       POSTGRES_DB: mediatrack
       POSTGRES_USER: mediatrack
@@ -46,6 +69,11 @@ services:
         # BUILD_COMMIT so a deploy can verify the running container serves HEAD. An unset
         # value defaults to "unknown". See Dockerfile / docs/deploy.md 升级.
         GIT_SHA: ${GIT_SHA:-unknown}
+        # 与上面三个 image 共用同一个镜像源值,自动传进 Dockerfile ——
+        # 否则用户还得记得手敲 `--build-arg DOCKER_MIRROR=...`,而漏了它的表现是
+        # 「compose 拉 postgres 成功、build web 却卡在 node:22-slim」,很难联想到
+        # 是同一个原因。
+        DOCKER_MIRROR: ${DOCKER_MIRROR:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -110,7 +138,7 @@ services:
   #      least one of those two gates is in place.
   # See docs/deploy.md → 「方式二:Cloudflare Tunnel」 for the full walkthrough.
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: ${DOCKER_MIRROR:+${DOCKER_MIRROR}/}cloudflare/cloudflared:latest
     command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}

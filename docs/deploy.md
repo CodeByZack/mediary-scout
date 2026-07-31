@@ -50,6 +50,46 @@ git clone https://github.com/fancydirty/mediary-scout && cd mediary-scout
 docker compose up -d        # 首次会构建 web 镜像,几分钟
 ```
 
+> ### ⚠️ 墙内先看这个:Docker Hub 大概率拉不动
+>
+> 本项目有三个镜像来自 Docker Hub(`postgres`、构建 web 用的 `node`、`cloudflared`),
+> 而 **Docker Hub 在中国大陆经常不可达**。典型报错:
+>
+> ```
+> failed to fetch anonymous token: Get "https://auth.docker.io/token...": EOF
+> failed to resolve reference "docker.io/library/node:22-slim"
+> read: connection reset by peer
+> ```
+>
+> **这不是你配置错了,重试也没用**(作者实测重试十余次全失败)。在仓库根 `.env` 里
+> 加一行镜像源,三处会一起生效:
+>
+> ```bash
+> echo 'DOCKER_MIRROR=docker.1ms.run' >> .env
+> docker compose up -d
+> ```
+>
+> 已实测可用(2026-08-01,大陆直连,四个都能拉到全部三个镜像):
+>
+> | 镜像源 | 备注 |
+> |---|---|
+> | `docker.1ms.run` | 作者实测首选 |
+> | `dockerproxy.net` | |
+> | `docker.m.daocloud.io` | |
+> | `hub.rat.dev` | |
+>
+> **公共镜像站会轮流失效 —— 一个不通就换下一个,别只记住一个。** 验证某站可用:
+>
+> ```bash
+> docker pull docker.1ms.run/library/node:22-slim
+> ```
+>
+> 留空(默认)= 直连 Docker Hub 官方,**境外网络无需任何设置**。
+> `pansou` 走 `ghcr.io`,不受此变量影响(墙内通常可直连)。
+>
+> 另一条路是给 Docker daemon 配全局 `registry-mirrors`(`/etc/docker/daemon.json`),
+> 效果一样。`DOCKER_MIRROR` 的好处是只影响本项目、不需要 root、不用重启 daemon。
+
 打开 `http://<你的主机>:3000`:
 1. **设置 → 网盘**:在品牌瓦片里选一个开始连接——115 / 夸克 / 天翼 / 123 扫码登录,光鸭粘贴 token(见各品牌连接小节);凭证入库后自动用于转存。五个品牌可各绑一块盘,互为独立工作区。
 2. 就这样。**TMDB 元数据经作者 CF Worker 开箱即用**(想用自己额度可在设置填 TMDB key);**PanSou 网盘搜索源已自带**。
@@ -248,7 +288,10 @@ c. 进这条隧道的 Public Hostname → Add a public hostname:
 
 第 3 步·启动:
 - 在部署目录执行 `docker compose --profile tunnel up -d`
-- 首次会拉取 cloudflared 镜像(慢网络几分钟,正常);拉取失败重试 `docker compose --profile tunnel pull` 1-2 次。
+- 首次会拉取 cloudflared 镜像(慢网络几分钟,正常)。
+  **墙内若报 `failed to fetch anonymous token` / `connection reset by peer`,重试没用** ——
+  那是 Docker Hub 不可达,在 `.env` 里加 `DOCKER_MIRROR=docker.1ms.run` 再重跑
+  (见上方「Compose 快速开始」里的镜像源小节)。`connect.sh` 遇到这个错会直接把解法打出来。
 
 第 4 步·确认连通:
 1. 先 `docker compose ps cloudflared` 应显示 Up(若 Starting/空,等 30 秒再看,别判失败)。

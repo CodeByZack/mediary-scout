@@ -166,7 +166,35 @@ echo "  ✓ 已写入 TUNNEL_TOKEN 与 MEDIARY_CONNECT_HOSTNAME"
 # 5) 带 --profile tunnel 启动(这个 flag 是关键:漏了它 cloudflared 根本不起,
 #    其他容器却正常,看起来「成功」实则隧道没通)。
 echo "→ 启动隧道(docker compose --profile tunnel up -d)…"
-if ! docker compose --profile tunnel up -d 2>&1; then
+UP_LOG=$(docker compose --profile tunnel up -d 2>&1) || UP_FAILED=1
+printf '%s\n' "$UP_LOG"
+if [ "${UP_FAILED:-}" = "1" ]; then
+  # Docker Hub 在中国大陆经常拉不动 cloudflare/cloudflared。这是**最常见**的
+  # 失败原因,而 docker 的原始报错("failed to fetch anonymous token: ... EOF")
+  # 完全不提示解决方向,用户只会以为是我们的脚本坏了。
+  if printf '%s' "$UP_LOG" | grep -qiE "failed to (fetch anonymous token|resolve reference)|connection reset by peer|auth\.docker\.io|registry-1\.docker\.io"; then
+    echo "" >&2
+    echo "❌ 拉取容器镜像失败 —— 这不是你的配置错了,是 Docker Hub 在中国大陆不可达。" >&2
+    echo "" >&2
+    echo "   在当前目录的 .env 里加一行镜像源,然后重跑本命令:" >&2
+    echo "     echo 'DOCKER_MIRROR=docker.1ms.run' >> .env" >&2
+    echo "" >&2
+    echo "   已实测可用(公共镜像站会轮流失效,一个不通就换下一个):" >&2
+    echo "     docker.1ms.run · dockerproxy.net · docker.m.daocloud.io · hub.rat.dev" >&2
+    echo "" >&2
+    echo "   验证某个站是否可用:" >&2
+    echo "     docker pull docker.1ms.run/cloudflare/cloudflared:latest" >&2
+    echo "" >&2
+    # 老版本部署文件里 image 是硬编码的,加了变量也不生效 —— 必须点出来,
+    # 否则用户会照做却毫无变化,然后彻底放弃。
+    if ! grep -q 'DOCKER_MIRROR' docker-compose.y*ml 2>/dev/null; then
+      echo "   ⚠️ 你的 docker-compose.yml 还不支持 DOCKER_MIRROR(旧版本)。" >&2
+      echo "      先更新部署文件(git pull 或重新下载),再设这个变量。" >&2
+      echo "" >&2
+    fi
+    echo "   TUNNEL_TOKEN 已写入 .env,备份在 $BACKUP —— 重跑时无需再取新码。" >&2
+    exit 1
+  fi
   echo "❌ docker compose 启动失败。已保留备份 $BACKUP。" >&2
   exit 1
 fi

@@ -8,7 +8,24 @@
 # unreachable and (b) can bypass a configured registry mirror. Dropping it keeps the
 # whole build on the mirror once one is set. (See #46.)
 
-FROM node:22-slim AS builder
+# ---- 基础镜像来源 ----
+# node:22-slim 来自 Docker Hub,而 **Docker Hub 在中国大陆经常拉不动**
+# (`failed to fetch anonymous token: ... EOF` / `connection reset by peer`)。
+# 这个 ARG 让墙内用户把它换成公共镜像站,与 docker-compose.yml 的
+# DOCKER_MIRROR 共用同一个值:
+#
+#   docker compose build --build-arg DOCKER_MIRROR=docker.1ms.run web
+#   # 或把 DOCKER_MIRROR 写进 .env,compose 会自动传进来
+#
+# 已实测可用(2026-08-01,大陆直连):
+#   docker.1ms.run · dockerproxy.net · docker.m.daocloud.io · hub.rat.dev
+#
+# **必须在第一个 FROM 之前声明**——FROM 只能引用此前定义的 ARG。
+# 且它在每个构建阶段都要重新声明一次(ARG 的作用域到阶段结束)。
+ARG DOCKER_MIRROR
+ARG NODE_IMAGE=node:22-slim
+
+FROM ${DOCKER_MIRROR:+${DOCKER_MIRROR}/library/}${NODE_IMAGE} AS builder
 WORKDIR /app
 # Override for faster installs behind slow/blocked registries, e.g.
 #   docker compose build --build-arg NPM_REGISTRY=https://registry.npmmirror.com
@@ -52,7 +69,12 @@ COPY . .
 ENV MEDIA_TRACK_ALLOWED_ORIGINS=${MEDIA_TRACK_ALLOWED_ORIGINS}
 RUN npm run build:web
 
-FROM node:22-slim AS runner
+# runner 阶段要重新声明:ARG 的作用域在 FROM 处结束。
+# 漏了它 ${DOCKER_MIRROR} 会展开成空串 → 这一层悄悄回落到 Docker Hub,
+# 于是 builder 走镜像站成功、runner 却卡住,报错还发生在构建末尾(最费时间)。
+ARG DOCKER_MIRROR
+ARG NODE_IMAGE=node:22-slim
+FROM ${DOCKER_MIRROR:+${DOCKER_MIRROR}/library/}${NODE_IMAGE} AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
