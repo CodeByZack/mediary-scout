@@ -326,6 +326,23 @@ describe("已付款但未入账 = 必须说钱没丢(事故防线)", () => {
     expect(html).toContain("付款不会丢失");
   });
 
+  it("不提支付宝 —— Paddle 不支持它,写了就是说谎", () => {
+    // 第一版文案写了「微信支付与支付宝」。Paddle 在中国只支持 WeChat Pay,
+    // 没有 Alipay(PR #209 已为此清过一轮合规页,我又在新文案里犯了同一个错)。
+    for (const h of [pending(1), justPaid()]) {
+      expect(h).not.toContain("支付宝");
+      expect(h).not.toContain("Alipay");
+    }
+  });
+
+  it("购买区不吹不存在的支付方式", () => {
+    // Paddle 后台勾了全部方式,但结账页按地区显示 —— 对中国用户实际就是微信。
+    // 所以主推微信 + 信用卡,并说明「按地区显示」,不逐个列 Apple/Google Pay。
+    const html = pending(0);
+    expect(html).toContain("微信支付");
+    expect(html).not.toContain("支付宝");
+  });
+
   it("解释延迟到账,并给出具体时间上限", () => {
     // 不给上限的「请稍候」等于没说 —— 用户不知道该等 10 秒还是一小时。
     const html = pending(1);

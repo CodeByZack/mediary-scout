@@ -1187,7 +1187,12 @@ async function consoleRoute(request: Request, deps: RouteDeps): Promise<Response
   let pendingPaidCount = 0;
   if (!isEntitlementActive(latestExpiry(entitlements), now) && deps.paddleApi !== undefined) {
     try {
-      const paidIds = await deps.paddleApi.listPaidTransactionIds(account.email);
+      // 传我们自己的 price_id 白名单:同一个 Paddle 账号卖多个产品,
+      // 不过滤会把用户买过的别的产品当成「Connect 已付款」(实测踩过)。
+      const paidIds = await deps.paddleApi.listPaidTransactionIds(
+        account.email,
+        Object.keys(deps.paddlePriceMonths ?? {}),
+      );
       // 减去已入账的:同一笔交易 webhook 到了就不该再提示「正在开通」。
       const granted = new Set(
         entitlements.map((e) => e.paddle_transaction_id).filter((x): x is string => x !== null),

@@ -41,7 +41,7 @@ export interface PaddleApi {
    * 绝不用于发放时长** —— 发放只认验过签的 webhook,否则任何人都能靠伪造
    * 交易状态白拿时长。
    */
-  listPaidTransactionIds(accountEmail: string): Promise<string[]>;
+  listPaidTransactionIds(accountEmail: string, ourPriceIds: readonly string[]): Promise<string[]>;
 }
 
 /** 真实 Paddle API 客户端。sandbox 与 live 的 base URL 不同。 */
@@ -91,7 +91,11 @@ export function createPaddleApi(input: {
       return { transactionId, checkoutUrl: url };
     },
 
-    async listPaidTransactionIds(accountEmail) {
+    async listPaidTransactionIds(accountEmail, ourPriceIds) {
+      // **没有白名单就什么都不认。** 空数组意味着「我们不知道自己卖什么」,
+      // 那时任何过滤都是假的 —— 宁可不提示,也不能拿别的产品的订单冒充。
+      if (ourPriceIds.length === 0) return [];
+
       // Paddle 没有「按邮箱查交易」的直接参数,得先找 customer。
       const cRes = await fetch(
         `${base}/customers?email=${encodeURIComponent(accountEmail)}&status=active`,
@@ -108,8 +112,27 @@ export function createPaddleApi(input: {
         { headers: { authorization: `Bearer ${input.apiKey}` } },
       );
       if (!tRes.ok) return [];
-      const tBody = (await tRes.json()) as { data?: Array<{ id?: unknown }> };
+      const tBody = (await tRes.json()) as {
+        data?: Array<{ id?: unknown; items?: Array<{ price?: { id?: unknown } | null }> }>;
+      };
+
+      // ---- 只认**我们自己**的档位(真实 bug 的修复)----
+      //
+      // 同一个 Paddle 账号卖多个产品。只按 customer 过滤会把用户买过的**别的
+      // 产品**也算成「Mediary Connect 已付款」。实测踩到:一个账号 2026-04-27
+      // 买过 "Shopify POD Profit Planner"($12),打开 Connect 控制台就显示
+      // 「已付款 · 正在开通」——他从没为 Connect 付过一分钱。
+      //
+      // 这个误报方向特别糟:它让一个**没付款**的人以为货在路上,于是不去付款,
+      // 然后来投诉「等了半天没开通」。
+      const ours = new Set(ourPriceIds);
       return (tBody.data ?? [])
+        .filter((t) =>
+          (t.items ?? []).some((it) => {
+            const pid = it.price?.id;
+            return typeof pid === "string" && ours.has(pid);
+          }),
+        )
         .map((t) => t.id)
         .filter((id): id is string => typeof id === "string" && id !== "");
     },

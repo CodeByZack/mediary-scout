@@ -208,8 +208,8 @@ function renderBody(
       return `<p class="sub">${confirmed ? "已收到你的付款,正在开通…" : "支付已提交,正在确认到账…"}</p>
 <div class="panel">
 <p class="lead">${confirmed ? "款项已确认,时长即将到账。" : "正在向支付平台确认这笔款项。"}</p>
-<p class="lead-sub">微信支付与支付宝是「延迟到账」——支付平台确认后我们才会开通,
-${confirmed ? "通常几秒内完成,最长约 10 分钟。" : "通常几秒内完成,微信支付最长约 10 分钟。"}
+<p class="lead-sub">微信支付是「延迟到账」——支付平台确认后我们才会开通,
+${confirmed ? "通常几秒内完成,最长约 10 分钟。" : "通常几秒内完成,最长约 10 分钟。"}
 <strong>你的付款不会丢失。</strong>刷新本页即可查看最新状态。</p>
 <button class="btn" id="recheck" type="button">刷新状态</button>
 <p class="lead-sub" style="margin-top:14px">超过 15 分钟仍未开通?那是我们这边的问题,不是你的 ——
@@ -241,7 +241,8 @@ ${t.featured ? `<span class="tier-tag">推荐</span>` : ""}
 </div>
 <p class="msg" id="buymsg" hidden></p>
 <p class="lead-sub" style="margin-top:14px">预付时长,不自动续费。买多次会叠加到同一个账号,到期日往后延。<br>
-支持 微信支付 · 银行卡 · Apple Pay · Google Pay。14 天内无条件全额退款 —— 见<a href="/refund">退款政策</a>。</p>`;
+支持<strong>微信支付</strong>与信用卡(Paddle 结账页会按你所在地区显示可用方式)。<br>
+14 天内无条件全额退款 —— 见<a href="/refund">退款政策</a>。</p>`;
   }
   if (input.endpoint === null && input.atCapacity) {
     // 满容量:**不渲染表单**。让用户输完名字、点开通、再吃 503 是最差的体验

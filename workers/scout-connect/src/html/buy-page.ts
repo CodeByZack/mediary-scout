@@ -110,7 +110,7 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
         if (!event || typeof event.name !== "string") return;
         if (event.name === "checkout.completed") {
           hint.textContent = "支付成功,正在开通…";
-          // 微信/支付宝这类延迟捕获的方式,到账可能要几分钟。说清楚,别让人干等。
+          // 微信支付是延迟捕获,到账可能要几分钟。说清楚,别让人干等。
           status.textContent = "正在确认到账(微信支付最多需要 10 分钟)。即将回到控制台。";
           // 留 1.8 秒让用户看到这句话再跳。跳过去后控制台会显示「已付款,正在开通」
           // 那一态(见 console-page 的 pendingPaid),不会再显示「尚未开通」。
