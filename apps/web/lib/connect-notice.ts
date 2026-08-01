@@ -11,6 +11,8 @@ export const CONNECT_NOTICE_DISMISSED_KEY = "connect_notice_dismissed_at";
 
 export interface ConnectNoticeConditions {
   isDemo: boolean;
+  /** 桌面版(Electron)不提供远程访问 —— 横幅绝不出现。 */
+  isDesktop: boolean;
   accountId: string | null;
   dismissedAt: string | null;
   hasTunnelToken: boolean;
@@ -32,10 +34,11 @@ export interface ConnectNoticeConditions {
 export function shouldShowConnectNotice(
   conditions: ConnectNoticeConditions
 ): boolean {
-  const { isDemo, accountId, dismissedAt } = conditions;
+  const { isDemo, isDesktop, accountId, dismissedAt } = conditions;
 
   // 任一条件不满足就不显示
   if (isDemo) return false;
+  if (isDesktop) return false;
   if (!accountId) return false;
   if (dismissedAt !== null) return false;
 

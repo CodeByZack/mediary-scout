@@ -1,6 +1,7 @@
 import { getWorkflowRepository, getCurrentAccountId, UNAUTHENTICATED_ACCOUNT_ID } from "./workflow-runtime";
 import { instanceTunnelToken } from "./remote-access";
 import { isDemoMode } from "./demo-mode";
+import { resolveIsDesktop } from "./workflow-runtime";
 import { CONNECT_NOTICE_DISMISSED_KEY, shouldShowConnectNotice } from "./connect-notice";
 import type { ConnectNoticeConditions } from "./connect-notice";
 
@@ -23,6 +24,8 @@ export async function resolveConnectNoticeConditions(): Promise<ConnectNoticeCon
 
   return {
     isDemo: isDemoMode(),
+    // 桌面版没有远程访问功能(自托管才有) —— 横幅、设置入口一律不出现。
+    isDesktop: resolveIsDesktop(),
     // 未登录时 accountId 应为 null，而不是哨兵值 —— shouldShowConnectNotice 期望
     // 已登录用户返回 true，null 返回 false。
     accountId: accountId === UNAUTHENTICATED_ACCOUNT_ID ? null : accountId,

@@ -5,6 +5,7 @@ import type { ConnectNoticeConditions } from "./connect-notice";
 describe("shouldShowConnectNotice", () => {
   const baseConditions: ConnectNoticeConditions = {
     isDemo: false,
+    isDesktop: false,
     accountId: "acc_123",
     dismissedAt: null,
     hasTunnelToken: false,
@@ -16,6 +17,10 @@ describe("shouldShowConnectNotice", () => {
 
   it("hides in demo mode", () => {
     expect(shouldShowConnectNotice({ ...baseConditions, isDemo: true })).toBe(false);
+  });
+
+  it("hides on desktop (桌面版无远程访问)", () => {
+    expect(shouldShowConnectNotice({ ...baseConditions, isDesktop: true })).toBe(false);
   });
 
   it("hides when not logged in", () => {
@@ -38,6 +43,7 @@ describe("shouldShowConnectNotice", () => {
     expect(
       shouldShowConnectNotice({
         isDemo: true,
+        isDesktop: false,
         accountId: null,
         dismissedAt: "2026-08-01T12:00:00Z",
         hasTunnelToken: true,
