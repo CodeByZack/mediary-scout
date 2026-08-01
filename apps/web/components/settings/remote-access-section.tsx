@@ -12,6 +12,7 @@ import {
 } from "../../lib/remote-access";
 import { PasswordChangeForm } from "../password-change-form";
 import { ConnectLoginForm } from "./connect-login-form";
+import { RemoteAccessTestButton } from "./remote-access-test-button";
 
 /**
  * 「上次从本机报到控制面」一行。
@@ -201,6 +202,9 @@ export async function RemoteAccessSection({
             在任何设备的浏览器打开这个地址即可（收藏它）。
           </p>
           {lastSeenLabel ? <LastSeenLine label={lastSeenLabel} /> : null}
+          <div style={{ marginTop: 8 }}>
+            <RemoteAccessTestButton />
+          </div>
         </div>
       ) : state.kind === "active" ? (
         // 早期接入的实例 .env 里没有 MEDIARY_CONNECT_HOSTNAME(connect.sh 后加的)
@@ -210,13 +214,26 @@ export async function RemoteAccessSection({
             远程访问已开启。请使用开通时收到的专属地址访问（浏览器里收藏即可）。
           </p>
           {lastSeenLabel ? <LastSeenLine label={lastSeenLabel} /> : null}
+          {/* 无 hostname 也要给探测按钮:action 会返回 no_hostname 的明确
+              说明,而不是让用户干猜(Copilot round 3)。 */}
+          <div style={{ marginTop: 8 }}>
+            <RemoteAccessTestButton />
+          </div>
         </div>
       ) : (
-        <p className="panel-note" style={{ margin: "0 0 14px" }}>
-          远程访问已开启，但暂时联系不上控制面，无法确认隧道状态。
-          这通常是本机出站网络波动；不影响已建立的隧道，稍后刷新即可。
-          {localHostname ? `（专属地址：${localHostname}）` : ""}
-        </p>
+        <>
+          <p className="panel-note" style={{ margin: "0 0 14px" }}>
+            远程访问已开启，但暂时联系不上控制面，无法确认隧道状态。
+            这通常是本机出站网络波动；不影响已建立的隧道，稍后刷新即可。
+            {localHostname ? `（专属地址：${localHostname}）` : ""}
+          </p>
+          {/* 降级态正是最需要用「入站探测」确认域名是否可达的场景
+              (出站失败 ≠ 入站失败,两个方向独立)—— 按钮必须在这里
+              也能用(Copilot round 3)。 */}
+          <div style={{ margin: "0 0 14px" }}>
+            <RemoteAccessTestButton />
+          </div>
+        </>
       )}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
