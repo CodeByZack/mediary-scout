@@ -8,6 +8,7 @@ import {
   requestSeasonAction,
   type RequestTrackingActionResult,
 } from "../app/actions";
+import { runAction } from "../lib/run-action";
 import { useAcquisitionLock } from "./acquisition-lock";
 import { AcquireResultNotice, isLockedResult } from "./request-state";
 import { isDemoModeClient } from "../lib/demo-mode";
@@ -74,7 +75,17 @@ export function RequestSeasonButton({
           }
           lock?.lock(scope);
           startTransition(async () => {
-            setResult(await requestSeasonAction({ tmdbId, seasonNumber, storageId }));
+            const r = await runAction(
+              () => requestSeasonAction({ tmdbId, seasonNumber, storageId }),
+              (msg) => {
+                setResult({ status: "unsupported", message: msg });
+                // 必须 refresh:lock.acquiring 是前端 state,靠重挂载重置。
+                // 失败不刷新,锁永远卡住,兄弟按钮全禁用(Copilot round 1)。
+                router.refresh();
+              },
+            );
+            if (!r.ok) return;
+            setResult(r.value);
             router.refresh();
           });
         }}
@@ -150,7 +161,16 @@ export function RequestRemainingButton({
           }
           lock?.lock(scope);
           startTransition(async () => {
-            setResult(await requestRemainingAction({ tmdbId, storageId }));
+            const r = await runAction(
+              () => requestRemainingAction({ tmdbId, storageId }),
+              (msg) => {
+                setResult({ status: "unsupported", message: msg });
+                // 同上一处:失败必须 refresh 清锁,否则 sibling 全禁用。
+                router.refresh();
+              },
+            );
+            if (!r.ok) return;
+            setResult(r.value);
             router.refresh();
           });
         }}

@@ -3,19 +3,30 @@
 import { X } from "lucide-react";
 import { useState, useTransition } from "react";
 import { dismissConnectNoticeAction } from "../app/actions";
+import { runAction } from "../lib/run-action";
 
 export function ConnectNoticeBanner() {
   const [dismissed, setDismissed] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   if (dismissed) return null;
 
   function handleDismiss() {
+    // 重试前复位 failed,否则上次的「关闭失败」提示会残留到本次尝试
+    // (Copilot round 4)。
+    setFailed(false);
     startTransition(async () => {
-      const result = await dismissConnectNoticeAction();
-      if (result.ok) {
-        setDismissed(true);
-      }
+      // 必须 catch(见 runAction 注释)。
+      // 失败时**不关闭**:让用户看到 banner 还在 = 关闭没生效,会再点一次。
+      // 乐观关闭会与「下次刷新又出现」矛盾 —— 用户以为关了却没关掉
+      // (Copilot round 3)。
+      const r = await runAction(
+        () => dismissConnectNoticeAction(),
+        () => setFailed(true),
+      );
+      if (!r.ok) return;
+      setDismissed(true);
     });
   }
 
@@ -41,6 +52,11 @@ export function ConnectNoticeBanner() {
           >
             了解详情
           </a>
+          {failed ? (
+            <span className="push-help tone-amber" role="alert">
+              关闭失败，请重试
+            </span>
+          ) : null}
           <button
             onClick={handleDismiss}
             disabled={isPending}
