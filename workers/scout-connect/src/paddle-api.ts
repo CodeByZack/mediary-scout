@@ -41,7 +41,15 @@ export interface PaddleApi {
    * 绝不用于发放时长** —— 发放只认验过签的 webhook,否则任何人都能靠伪造
    * 交易状态白拿时长。
    */
-  listPaidTransactionIds(accountEmail: string, ourPriceIds: readonly string[]): Promise<string[]>;
+  /**
+   * 按邮箱查「已付款/已完成」的交易 ID(仅我方档位)。
+   * **带 createdAt(交易创建时间)**:路由层要按时间窗口过滤 —— 否则删除账号后
+   * 同邮箱重新注册,会把历史已付款交易(永远不会再入账)当成「正在开通」
+   * 永久显示(真实事故)。 */
+  listPaidTransactionIds(
+    accountEmail: string,
+    ourPriceIds: readonly string[],
+  ): Promise<Array<{ id: string; createdAt: string | null }>>;
 
   /**
    * 查单笔交易的状态。供 /buy 页面的轮询用 —— 微信支付是延迟捕获,授权与
@@ -55,7 +63,15 @@ export interface PaddleApi {
    */
   getTransactionStatus(
     transactionId: string,
-  ): Promise<{ status: string; paidAt: string | null; accountEmail: string | null } | null>;
+  ): Promise<{
+    status: string;
+    paidAt: string | null;
+    accountEmail: string | null;
+    /** 最近一次支付尝试的状态(action_required=等待授权;授权后变
+     *  pending_no_action_required/authorized/capturing/captured)。
+     *  **授权信号:扣款成功后 Paddle 服务端立刻更新这里,不用等捕获。** */
+    attemptStatus: string | null;
+  } | null>;
 }
 
 /** 真实 Paddle API 客户端。sandbox 与 live 的 base URL 不同。 */
@@ -127,7 +143,11 @@ export function createPaddleApi(input: {
       );
       if (!tRes.ok) return [];
       const tBody = (await tRes.json()) as {
-        data?: Array<{ id?: unknown; items?: Array<{ price?: { id?: unknown } | null }> }>;
+        data?: Array<{
+          id?: unknown;
+          created_at?: unknown;
+          items?: Array<{ price?: { id?: unknown } | null }>;
+        }>;
       };
 
       // ---- 只认**我们自己**的档位(真实 bug 的修复)----
@@ -147,8 +167,13 @@ export function createPaddleApi(input: {
             return typeof pid === "string" && ours.has(pid);
           }),
         )
-        .map((t) => t.id)
-        .filter((id): id is string => typeof id === "string" && id !== "");
+        .map((t) => ({
+          id: t.id,
+          createdAt: typeof t.created_at === "string" ? t.created_at : null,
+        }))
+        .filter((t): t is { id: string; createdAt: string | null } =>
+          typeof t.id === "string" && t.id !== "",
+        );
     },
 
     async getTransactionStatus(transactionId) {
@@ -167,6 +192,7 @@ export function createPaddleApi(input: {
           status?: unknown;
           billed_at?: unknown;
           custom_data?: { account_email?: unknown } | null;
+          payments?: { status?: unknown }[] | null;
         };
       };
       if (typeof body.data?.id !== "string") {
@@ -192,7 +218,12 @@ export function createPaddleApi(input: {
         typeof custom?.account_email === "string" && custom.account_email !== ""
           ? custom.account_email
           : null;
-      return { status, paidAt, accountEmail };
+      const attemptStatus = Array.isArray(body.data.payments) &&
+        body.data.payments[0] &&
+        typeof body.data.payments[0].status === "string"
+        ? body.data.payments[0].status
+        : null;
+      return { status, paidAt, accountEmail, attemptStatus };
     },
   };
 }

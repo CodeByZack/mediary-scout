@@ -46,12 +46,14 @@ describe("getTransactionStatus 错误分类", () => {
         status: "completed",
         billed_at: "2026-08-01T06:56:46.198368Z",
         custom_data: { account_email: "me@example.com" },
+        payments: [{ status: "captured" }],
       },
     });
     await expect(a.getTransactionStatus(T)).resolves.toEqual({
       status: "completed",
       paidAt: "2026-08-01T06:56:46.198368Z",
       accountEmail: "me@example.com",
+      attemptStatus: "captured",
     });
   });
 
