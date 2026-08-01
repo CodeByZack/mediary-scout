@@ -231,7 +231,7 @@ ${confirmed ? "通常几秒内完成,最长约 10 分钟。" : "通常几秒内�
      「已付款」(Paddle 延迟/查询降级),会显示「尚未开通」—— 必须给一句
      话,否则刚付过钱的人看到「尚未开通」会以为自己付了个寂寞。 -->
 <p style="margin:14px 0 0;padding:12px 14px;border:1px solid #f59e0b;border-radius:10px;background:rgba(245,158,11,.08);color:var(--text);font-size:13px;line-height:1.7">
-如果您刚才已经完成付款：到账需要几分钟（<strong>最长约 10 分钟</strong>），请<strong>稍后刷新本页</strong>查看，权益到账后会自动显示。
+如果您刚才已经完成付款：<strong>微信支付</strong>到账需要几分钟（<strong>最长约 10 分钟</strong>），<strong>信用卡支付秒到</strong>。请<strong>稍后刷新本页</strong>查看，<strong>权益时长</strong>到账后会自动显示。
 超过 15 分钟仍未开通？<a href="/contact">联系我们</a>，附上付款邮箱，我们会人工核查补发 —— 你的付款不会丢失。
 </p>
 <div class="tiers">
