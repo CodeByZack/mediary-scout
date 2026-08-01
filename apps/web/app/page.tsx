@@ -25,7 +25,8 @@ import {
   getRegisteredDriveCount,
   getWorkflowRepository,
 } from "../lib/workflow-runtime";
-import { shouldShowConnectNoticeSsr } from "../lib/connect-notice-server";
+import { resolveConnectNoticeConditions } from "../lib/connect-notice-server";
+import { shouldShowConnectNotice } from "../lib/connect-notice";
 import { showHref } from "@media-track/workflow";
 import type { SearchCandidateCard, TrackedSeasonState } from "@media-track/workflow";
 
@@ -91,14 +92,18 @@ async function HomeSurface({
   const driveCount = await getRegisteredDriveCount();
 
   // Connect notice: only on the root home page (no storageId), only on search tab
-  const showConnectNotice = !storageId && activeTab === "search" && (await shouldShowConnectNoticeSsr());
+  const connectConditions = await resolveConnectNoticeConditions();
+  const showConnectNotice =
+    !storageId && activeTab === "search" && shouldShowConnectNotice(connectConditions);
 
   return (
     <div className="app-shell">
       <AppSidebar active={activeTab} searchQuery={query} basePath={basePath} activeStorageId={storageId} />
 
       <main className="main product-main">
-        {showConnectNotice ? <ConnectNoticeBanner /> : null}
+        {showConnectNotice ? (
+          <ConnectNoticeBanner hasTunnelToken={connectConditions.hasTunnelToken} />
+        ) : null}
         {activeTab === "search" ? (
           <section className="search-surface">
             <RememberQuery query={query} basePath={basePath} />

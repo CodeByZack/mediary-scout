@@ -5,7 +5,7 @@ import { useState, useTransition } from "react";
 import { dismissConnectNoticeAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
 
-export function ConnectNoticeBanner() {
+export function ConnectNoticeBanner({ hasTunnelToken = false }: { hasTunnelToken?: boolean }) {
   const [dismissed, setDismissed] = useState(false);
   const [failed, setFailed] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -41,7 +41,9 @@ export function ConnectNoticeBanner() {
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-foreground">
-              🎉 付费远程访问现已上线！扫码即通 — 详见控制台
+              {hasTunnelToken
+                ? "远程访问已上线，随时随地访问媒体库"
+                : "🎉 付费远程访问现已上线！扫码即通 — 详见控制台"}
             </p>
           </div>
         </div>
