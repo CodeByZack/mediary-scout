@@ -95,6 +95,9 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
   // _ptxn 由 Paddle 在生成支付链接时附加。没有它说明用户直接访问了本页,
   // 而不是从购买流程过来的——给指引,不要留白页。
   var txn = new URLSearchParams(location.search).get("_ptxn");
+  // 支付流程是否已开始(弹过结账窗)。只有开始后,用户切回页面才跳确认页;
+  // 没开始就只是普通页面,切 tab 不应跳转。
+  var checkoutOpened = false;
   ${
     configured
       ? `if (!window.Paddle) { fail("支付组件加载失败，请检查网络或稍后重试。"); return; }
@@ -113,6 +116,15 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
       // 而不是把用户丢到一个显示「尚未开通」的控制台 —— 那正是这次事故里
       // 最伤人的一幕:付完钱,回到控制台,看到「尚未开通」。
       eventCallback: function (event) {
+        // ---- 全事件埋点(诊断用,常驻)----
+        // checkout.completed 在 6 次真实微信付款里零触发,原因不明。把到达的
+        // 每一个事件记到 window.__paddleEvents(控制台也可读),用户付款后再
+        // 看这份清单,就知道事件到底到没到、走到哪一步断了。
+        try {
+          if (!window.__paddleEvents) window.__paddleEvents = [];
+          window.__paddleEvents.push((event && event.name) || "unknown");
+          console.log("[paddle]", event && event.name);
+        } catch (e) { /* 埋点失败不影响主流程 */ }
         if (!event || typeof event.name !== "string") return;
         if (event.name === "checkout.completed") {
           // 与轮询路径统一:只跳一次,都跳 /payment-success(确认中间页)。
@@ -135,6 +147,14 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
           
           // 留 1.8 秒让用户看到这句话再跳。跳过去后确认页显示「正在开通」。
           setTimeout(function () { window.location.href = "/payment-success?txn=" + encodeURIComponent(txn); }, 1800);
+        } else if (event.name === "checkout.closed") {
+          // **支付窗口关闭 = 用户付款流程结束**(用户手动关小窗口/overlay)。
+          // 立即带去确认页 —— 已捕获显示"已开通",未捕获显示"确认到账中"并
+          // 自动轮询。扣费后关掉支付窗口的这一刻,必须立刻有反应。
+          if (redirectScheduled) return;
+          redirectScheduled = true;
+          try { window.Paddle.Checkout.close(); } catch (e) { /* 已经关了也无妨 */ }
+          window.location.href = "/payment-success?txn=" + encodeURIComponent(txn);
         } else if (event.name === "checkout.payment.failed") {
           // 付款失败也必须说话。之前这里同样是静默的。
           hint.textContent = "这笔支付没有成功。";
@@ -190,6 +210,7 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
       openCheckout();
     })();
     function openCheckout() {
+      checkoutOpened = true;
       window.Paddle.Checkout.open({
         transactionId: txn,
         // 带交易 ID:/payment-success 需要它来轮询确认到账后自动跳 /console。
@@ -203,6 +224,27 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
       // 手动关掉小窗口。提前说清楚,别让用户以为出事了。
       status.textContent = "选择微信支付后会弹出小窗口;付款完成后若它未自动关闭,请手动关闭 —— 页面会自动继续。";
     }
+
+    // ---- 扣费后立即有反应:不依赖 Paddle 的任何事件 ----
+    //
+    // 微信支付在 Paddle 独立窗口(redirect-euw1.ppro.com)里完成。扣费成功后
+    // Paddle 窗口显示"验证中"(用户亲见),但**从不通知父页面** ——
+    // checkout.completed 在 6 次真实付款里零触发,successUrl 也从未跳转。
+    // Paddle 的前端事件不可信,唯一可靠的信号是:用户扣费后必然回到本页
+    // (关小窗口/切回标签页)。页面重新可见的瞬间,立即带去确认页 ——
+    // 确认页区分"已开通"与"确认到账中",并自动轮询,到账后自动进控制台。
+    var onReturnToPage = function () {
+      if (!checkoutOpened || redirectScheduled) return;
+      redirectScheduled = true;
+      try { window.Paddle.Checkout.close(); } catch (e) { /* 已经关了也无妨 */ }
+      window.location.href = "/payment-success?txn=" + encodeURIComponent(txn);
+    };
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") onReturnToPage();
+    });
+    window.addEventListener("focus", function () {
+      if (document.visibilityState === "visible") onReturnToPage();
+    });
 
     // ---- 自建轮询:微信支付的唯一可靠出路 ----
     //

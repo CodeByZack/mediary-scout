@@ -61,16 +61,19 @@ ${BRAND_BAR}
 <div class="ok-icon" aria-hidden="true">
 <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
 </div>
-<h1 class="ok-text">付款已完成</h1>
+<h1 class="ok-text" id="h1">付款已完成</h1>
 </div>
 
-<p><strong>Paddle 已收到你的付款请求。</strong>发票与收据会发到你的邮箱（若成功完成）。</p>
+<p id="sub"><strong>已收到你的付款请求。</strong>发票与收据会发到你的邮箱（若成功完成）。</p>
 
-<div class="note">
-<strong>时长正在开通中。</strong><br>
-微信支付需要 Paddle 完成资金确认,通常几秒内完成,<strong>最多约 10 分钟</strong>。
-开通后你的账号会自动获得时长 —— 不需要再做任何操作。
+<div class="note" id="note">
+<strong id="note-strong">正在确认到账。</strong><br>
+<span id="note-text">微信支付需要 Paddle 完成资金确认,通常几秒内完成,<strong>最多约 10 分钟</strong>。开通后你的账号会自动获得时长 —— 不需要再做任何操作。</span>
 </div>
+
+<p id="repay" style="display:none">
+<strong>如果还没有付款：</strong><a href="/buy">返回重新支付 →</a>
+</p>
 
 <a class="btn" href="/console">进入控制台查看 →</a>
 
@@ -95,6 +98,29 @@ ${BRAND_BAR}
 (function () {
   var txn = new URLSearchParams(location.search).get("txn");
   if (!txn) return;  // 直接访问本页(无交易上下文)不轮询
+  // ---- 双态首查:已捕获 = "付款已完成";未捕获 = "已收到支付请求" ----
+  // 本页可能由 checkout.closed/visibilitychange 在**捕获完成前**跳来
+  // (扣费后立即有反应,不等 Paddle 确认)。此时必须明确告诉用户:
+  // 钱收到了,正在确认到账;没付款的也能看到"返回重新支付"。
+  (function () {
+    fetch("/api/transaction/" + encodeURIComponent(txn) + "/status", { signal: timeoutSignal(5000) })
+      .then(function (res) { return res.status === 200 ? res.json() : null; })
+      .then(function (data) {
+        var paid = data && (data.status === "paid" || data.status === "completed");
+        if (paid) {
+          document.getElementById("h1").textContent = "付款已完成";
+          document.getElementById("note-strong").textContent = "时长正在开通中。";
+        } else {
+          document.getElementById("h1").textContent = "已收到支付请求";
+          document.getElementById("sub").innerHTML = "<strong>如果你已经付款：</strong>微信支付正在确认到账，页面会自动更新，无需任何操作。";
+          document.getElementById("note-text").textContent = "微信支付到账最多约 10 分钟。到账后会自动进入控制台。";
+          var repay = document.getElementById("repay");
+          repay.style.display = "block";
+          repay.innerHTML = "<strong>如果还没有付款：</strong><a href=\"/buy?_ptxn=" + encodeURIComponent(txn) + "\">返回重新支付 →</a>";
+        }
+      })
+      .catch(function () { /* 首查失败保持默认文案,轮询兜底 */ });
+  })();
   // inFlight 锁 + 超时(Copilot round 1):慢网/挂起时避免并发重叠请求或
   // fetch 永久挂起让轮询静默停住。5 秒超时保证锁一定释放。
   function timeoutSignal(ms) {
