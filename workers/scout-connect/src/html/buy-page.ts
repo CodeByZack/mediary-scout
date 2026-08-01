@@ -265,6 +265,8 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
     }
     function openCheckout() {
       checkoutOpened = true;
+      // 用户真正开始支付流程才启动轮询(付款后靠它确认到账)。
+      startPolling();
       window.Paddle.Checkout.open({
         transactionId: txn,
         // 带交易 ID:/payment-success 需要它来轮询确认到账后自动跳 /console。
@@ -338,7 +340,11 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
       setTimeout(function () { controller.abort(); }, ms);
       return controller.signal;
     }
-    (function pollTransaction() {
+    // 轮询改为**用户点「我已了解，去支付」后才启动**(openCheckout 里调用)。
+    // 之前页面加载就启动:用户啥都没做,3 秒一次跑满 10 分钟后显示
+    // 「支付已提交,正在确认到账…」—— 误导(实测事故)。
+    var pollStarted = false;
+    function pollTransaction() {
       var attempts = 0;
       // **inFlight 锁**(Copilot round 2):setInterval + async 下,某次请求/
       // 解析超过 3 秒时下一次 tick 仍会触发 → 并发重叠请求,放大上游抖动与
@@ -417,10 +423,15 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
       // 401/404/completed 时 clearInterval(timer) 清不掉 null,interval 仍会
       // 创建继续请求,覆盖已写入的提示。
       timer = setInterval(poll, intervalMs);
-      // 页面加载立即查一次:付款发生在轮询启动前的场景(如刷新后交易已完成)
-      // 也能马上抓住,不用等第一个 3 秒 tick。
+      // 启动时立即查一次:付款发生在轮询启动前的场景(如用户先付了款再点
+      // 「去支付」)也能马上抓住,不用等第一个 3 秒 tick。
       poll();
-    })();
+    }
+    function startPolling() {
+      if (pollStarted) return;
+      pollStarted = true;
+      pollTransaction();
+    }
   } catch (e) {
     fail("打开支付窗口失败：" + (e && e.message ? e.message : String(e)));
   }`
