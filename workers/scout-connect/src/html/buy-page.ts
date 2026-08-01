@@ -85,6 +85,7 @@ ${BRAND_BAR}
 <li>付款成功后请按两步操作：<strong>① 关闭微信小窗 → ② 关闭支付窗口</strong>。关闭支付窗口后，页面会自动跳转到「付款确认中」页 —— 那里会告诉你到账进度，无需任何其他操作。</li>
 <li>到账通常需要几分钟，<strong>最长约 10 分钟</strong>。期间请勿刷新或重复操作。</li>
 <li><strong>不要重复扫码，不要重复购买</strong> —— 每次扫码付款都会真实扣款。请先确认上一笔是否已付款。</li>
+<li><strong>使用信用卡支付</strong>：付款后权益<strong>立即到账</strong>，无需等待。每次支付都是<strong>单次扣款</strong>，不是订阅，不会自动续费。</li>
 </ol>
 <button id="ack-btn" type="button">我已了解，去支付</button>
 </div>
