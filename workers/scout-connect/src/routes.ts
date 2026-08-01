@@ -1308,7 +1308,7 @@ async function consoleRoute(request: Request, deps: RouteDeps): Promise<Response
     try {
       // 传我们自己的 price_id 白名单:同一个 Paddle 账号卖多个产品,
       // 不过滤会把用户买过的别的产品当成「Connect 已付款」(实测踩过)。
-      const paidIds = await deps.paddleApi.listPaidTransactionIds(
+      const paidTxns = await deps.paddleApi.listPaidTransactionIds(
         account.email,
         Object.keys(deps.paddlePriceMonths ?? {}),
       );
@@ -1316,7 +1316,21 @@ async function consoleRoute(request: Request, deps: RouteDeps): Promise<Response
       const granted = new Set(
         entitlements.map((e) => e.paddle_transaction_id).filter((x): x is string => x !== null),
       );
-      pendingPaidCount = paidIds.filter((id) => !granted.has(id)).length;
+      // **时间窗口(真实事故修复)**:只对**最近 1 小时**内的已付款交易提示
+      // 「正在开通」。微信支付捕获最长 10 分钟 + webhook 入账秒级,正常付款
+      // 几分钟内就会入账;超过 1 小时还挂在「已付款」= 历史遗留(比如账号
+      // 删除后同邮箱重新注册,继承了一笔永远不会再入账的历史交易)——
+      // 那种情况再提示「正在开通」是永久误导向,页面本就有「超过 15 分钟
+      // 仍未开通请联系我们」兜底。
+      const PAID_PENDING_WINDOW_MS = 60 * 60 * 1000;
+      const nowMs = Date.parse(deps.now());
+      pendingPaidCount = paidTxns
+        .filter((t) => {
+          if (t.createdAt === null) return false;
+          const age = nowMs - Date.parse(t.createdAt);
+          return Number.isFinite(age) && age >= 0 && age <= PAID_PENDING_WINDOW_MS;
+        })
+        .filter((t) => !granted.has(t.id)).length;
     } catch {
       // 查不到就当没有。**绝不能让它炸掉整个控制台** —— 那会把「少一句提示」
       // 升级成「页面打不开」,比原问题严重得多。

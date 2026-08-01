@@ -34,7 +34,7 @@ describe("listPaidTransactionIds 只认自己的档位", () => {
 
   it("我们的档位 → 算", async () => {
     const a = api([{ id: "txn_ours", items: [{ price: { id: OURS } }] }]);
-    await expect(a.listPaidTransactionIds("x@y.com", [OURS])).resolves.toEqual(["txn_ours"]);
+    await expect(a.listPaidTransactionIds("x@y.com", [OURS])).resolves.toEqual([{ id: "txn_ours", createdAt: null }]);
   });
 
   it("混合时只挑我们的", async () => {
@@ -42,7 +42,7 @@ describe("listPaidTransactionIds 只认自己的档位", () => {
       { id: "txn_other", items: [{ price: { id: THEIRS } }] },
       { id: "txn_ours", items: [{ price: { id: OURS } }] },
     ]);
-    await expect(a.listPaidTransactionIds("x@y.com", [OURS])).resolves.toEqual(["txn_ours"]);
+    await expect(a.listPaidTransactionIds("x@y.com", [OURS])).resolves.toEqual([{ id: "txn_ours", createdAt: null }]);
   });
 
   it("白名单为空 → 什么都不认(不做假过滤)", async () => {
@@ -50,6 +50,15 @@ describe("listPaidTransactionIds 只认自己的档位", () => {
     // 宁可不提示,也不能拿别的产品的订单冒充。
     const a = api([{ id: "txn_ours", items: [{ price: { id: OURS } }] }]);
     await expect(a.listPaidTransactionIds("x@y.com", [])).resolves.toEqual([]);
+  });
+
+  it("透传 createdAt(时间窗口过滤用)", async () => {
+    const a = api([
+      { id: "txn_ours", created_at: "2026-08-01T13:02:13Z", items: [{ price: { id: OURS } }] },
+    ]);
+    await expect(a.listPaidTransactionIds("x@y.com", [OURS])).resolves.toEqual([
+      { id: "txn_ours", createdAt: "2026-08-01T13:02:13Z" },
+    ]);
   });
 
   it("items 缺失/畸形不炸", async () => {
