@@ -70,6 +70,9 @@ ${BRAND_BAR}
 <strong id="note-strong">正在确认到账。</strong><br>
 <span id="note-text">微信支付需要 Paddle 完成资金确认,通常几秒内完成,<strong>最多约 10 分钟</strong>。开通后你的账号会自动获得时长 —— 不需要再做任何操作。</span>
 </div>
+<p class="muted" style="margin-top:14px;padding:12px 14px;border:1px solid #f59e0b;border-radius:10px;background:rgba(245,158,11,.08);color:var(--text);font-size:13.5px;line-height:1.7">
+<strong style="color:#f59e0b">已付款请勿重复购买：</strong>如果这笔付款已经成功（微信已扣款），<strong>不要再次扫码或再次购买</strong> —— 每一笔支付都会真实扣款。等待到账即可，到账后会自动进入控制台。
+</p>
 
 <p id="repay" style="display:none">
 <strong>如果还没有付款：</strong><a href="/buy">返回重新支付 →</a>
