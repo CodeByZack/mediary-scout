@@ -249,6 +249,10 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
       showNotice();
     })();
     function showNotice() {
+      // **Paddle.js 会自动恢复上次未完成的结账**(存储里的 PADDLE_TRANSACTION,
+      // 实测:全新浏览器打开 /buy,overlay 也会自己弹出来) —— 会挡住支付说明。
+      // 主动 close,让用户先读说明,点「我已了解,去支付」才重新打开。
+      try { window.Paddle.Checkout.close(); } catch (e) { /* 尚未初始化也无妨 */ }
       var notice = document.getElementById("pay-notice");
       var ack = document.getElementById("ack-btn");
       if (notice) notice.style.display = "block";
