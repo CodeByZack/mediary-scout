@@ -55,7 +55,15 @@ export interface PaddleApi {
    */
   getTransactionStatus(
     transactionId: string,
-  ): Promise<{ status: string; paidAt: string | null; accountEmail: string | null } | null>;
+  ): Promise<{
+    status: string;
+    paidAt: string | null;
+    accountEmail: string | null;
+    /** 最近一次支付尝试的状态(action_required=等待授权;授权后变
+     *  pending_no_action_required/authorized/capturing/captured)。
+     *  **授权信号:扣款成功后 Paddle 服务端立刻更新这里,不用等捕获。** */
+    attemptStatus: string | null;
+  } | null>;
 }
 
 /** 真实 Paddle API 客户端。sandbox 与 live 的 base URL 不同。 */
@@ -167,6 +175,7 @@ export function createPaddleApi(input: {
           status?: unknown;
           billed_at?: unknown;
           custom_data?: { account_email?: unknown } | null;
+          payments?: { status?: unknown }[] | null;
         };
       };
       if (typeof body.data?.id !== "string") {
@@ -192,7 +201,12 @@ export function createPaddleApi(input: {
         typeof custom?.account_email === "string" && custom.account_email !== ""
           ? custom.account_email
           : null;
-      return { status, paidAt, accountEmail };
+      const attemptStatus = Array.isArray(body.data.payments) &&
+        body.data.payments[0] &&
+        typeof body.data.payments[0].status === "string"
+        ? body.data.payments[0].status
+        : null;
+      return { status, paidAt, accountEmail, attemptStatus };
     },
   };
 }

@@ -219,7 +219,7 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
         });
         if (pre.status === 200) {
           var preData = await pre.json();
-          if (preData && (preData.status === "paid" || preData.status === "completed")) {
+          if (preData && (preData.status === "paid" || preData.status === "completed" || isAuthorizedSignal(preData))) {
             window.location.href = "/payment-success?txn=" + encodeURIComponent(txn);
             return;
           }
@@ -287,6 +287,15 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
     // AbortSignal.timeout,直接调用会抛 TypeError → 轮询永远发不出去且被
     // catch 吞掉,用户又回到"付了钱但页面没反应"。优先用原生,否则
     // AbortController + setTimeout。
+    // 授权信号:扣款成功后 Paddle 服务端立刻把支付尝试从 action_required
+    // 更新为 pending_no_action_required/authorized/capturing/captured
+    // (sandbox 实测:授权后 ~10 秒内变化,不用等捕获)。
+    // 只有这些状态代表"钱已被授权扣走"—— failed/canceled 绝不能跳。
+    function isAuthorizedSignal(data) {
+      var a = data && data.attempt_status;
+      return a === "authorized" || a === "capturing" || a === "captured" ||
+        a === "pending_no_action_required";
+    }
     function timeoutSignal(ms) {
       if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
       var controller = new AbortController();
@@ -351,12 +360,14 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
             return;
           }
           var data = await res.json();
-          if (data && (data.status === "paid" || data.status === "completed")) {
-            // 与 eventCallback 路径共享标志:只跳一次。
+          if (data && (data.status === "paid" || data.status === "completed" || isAuthorizedSignal(data))) {
+            // 授权信号 = 用户已经扣款成功(Paddle 服务端确认),立即带去确认页。
+            // 确认页区分:已捕获显示「付款已完成」,未捕获显示「已收到支付请求,
+            // 正在确认到账」并自动轮询 —— 用户不再面对 5 分钟死寂。
             if (redirectScheduled) { clearInterval(timer); return; }
             redirectScheduled = true;
             clearInterval(timer);
-            hint.textContent = "支付成功,正在开通…";
+            hint.textContent = "已收到支付,正在确认…";
             status.textContent = "正在确认到账(微信支付最多需要 10 分钟)。即将前往确认页。";
             try { window.Paddle.Checkout.close(); } catch (e) { /* 已经关了也无妨 */ }
             setTimeout(function () { window.location.href = "/payment-success?txn=" + encodeURIComponent(txn); }, 1800);

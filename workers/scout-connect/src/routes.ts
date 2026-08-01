@@ -912,7 +912,7 @@ async function getTransactionStatusHandler(
     return json({ error: "not found" }, 404, { noStore: true });
   }
 
-  return json({ status: txn.status, paid_at: txn.paidAt }, 200, { noStore: true });
+  return json({ status: txn.status, paid_at: txn.paidAt, attempt_status: txn.attemptStatus }, 200, { noStore: true });
 }
 
 /**

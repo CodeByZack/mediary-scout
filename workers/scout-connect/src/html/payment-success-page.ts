@@ -118,7 +118,7 @@ ${BRAND_BAR}
           repay.style.display = "block";
           repay.innerHTML = "<strong>如果还没有付款：</strong><a href=\"/buy?_ptxn=" + encodeURIComponent(txn) + "\">返回重新支付 →</a>";
         }
-      })
+      }).catch(function () { /* 首查失败保持默认文案,轮询兜底 */ });
       .catch(function () { /* 首查失败保持默认文案,轮询兜底 */ });
   })();
   // inFlight 锁 + 超时(Copilot round 1):慢网/挂起时避免并发重叠请求或
