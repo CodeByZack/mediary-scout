@@ -98,6 +98,10 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
   // 支付流程是否已开始(弹过结账窗)。只有开始后,用户切回页面才跳确认页;
   // 没开始就只是普通页面,切 tab 不应跳转。
   var checkoutOpened = false;
+  // 最近一次 Paddle 事件的支付方式(pmt):"none" = 信息收集/步骤切换,
+  // 真实支付方式(wechat_pay/card/...) = 用户选择了支付方式。
+  // 实测:填邮箱步骤 checkout.closed 的 pmt 是 none —— 不能当"用户关窗"。
+  var lastPmtType = null;
   ${
     configured
       ? `if (!window.Paddle) { fail("支付组件加载失败，请检查网络或稍后重试。"); return; }
@@ -118,12 +122,19 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
       eventCallback: function (event) {
         // ---- 全事件埋点(诊断用,常驻)----
         // checkout.completed 在 6 次真实微信付款里零触发,原因不明。把到达的
-        // 每一个事件记到 window.__paddleEvents(控制台也可读),用户付款后再
-        // 看这份清单,就知道事件到底到没到、走到哪一步断了。
+        // 每一个事件(含支付方式与交易状态)记到 window.__paddleEvents,
+        // 用户付款后看这份清单就知道事件走到哪一步断了。
+        // **关键字段 data.payment.method_details.type:填邮箱步骤的 closed
+        // 事件是 "none",微信授权如果是 "wechat_pay" 就能精准区分。**
         try {
           if (!window.__paddleEvents) window.__paddleEvents = [];
-          window.__paddleEvents.push((event && event.name) || "unknown");
-          console.log("[paddle]", event && event.name);
+          var evtName = (event && event.name) || "unknown";
+          var evtData = (event && event.data) || {};
+          var pmtType = ((evtData.payment || {}).method_details || {}).type || null;
+          var evtStatus = evtData.status || null;
+          window.__paddleEvents.push(evtName + "|pmt=" + pmtType + "|tx=" + evtStatus);
+          console.log("[paddle]", evtName, "pmt=", pmtType, "tx=", evtStatus);
+          lastPmtType = pmtType;
         } catch (e) { /* 埋点失败不影响主流程 */ }
         if (!event || typeof event.name !== "string") return;
         if (event.name === "checkout.completed") {
@@ -148,13 +159,20 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
           // 留 1.8 秒让用户看到这句话再跳。跳过去后确认页显示「正在开通」。
           setTimeout(function () { window.location.href = "/payment-success?txn=" + encodeURIComponent(txn); }, 1800);
         } else if (event.name === "checkout.closed") {
-          // **支付窗口关闭 = 用户付款流程结束**(用户手动关小窗口/overlay)。
-          // 立即带去确认页 —— 已捕获显示"已开通",未捕获显示"确认到账中"并
-          // 自动轮询。扣费后关掉支付窗口的这一刻,必须立刻有反应。
-          if (redirectScheduled) return;
-          redirectScheduled = true;
-          try { window.Paddle.Checkout.close(); } catch (e) { /* 已经关了也无妨 */ }
-          window.location.href = "/payment-success?txn=" + encodeURIComponent(txn);
+          // **语义陷阱(实测):Paddle 在"填邮箱/步骤切换"时也发 checkout.closed
+          // (pmt=none),不能无条件当"用户关窗/付款完成"。**
+          // 用 data.payment.method_details.type 区分:真实支付方式
+          // (wechat_pay/card/...)才代表"支付授权流程结束"→ 立即带去确认页
+          // (已捕获显示"已开通",未捕获显示"确认到账中"+ 自动轮询)。
+          // 这覆盖微信支付的授权时刻:授权成功 → Paddle 显示 capturing 屏幕
+          // 并关闭当前 checkout 会话 → closed(pmt=wechat_pay)→ 立即跳转!
+          if (lastPmtType && lastPmtType !== "none") {
+            if (redirectScheduled) return;
+            redirectScheduled = true;
+            try { window.Paddle.Checkout.close(); } catch (e) { /* 已经关了也无妨 */ }
+            window.location.href = "/payment-success?txn=" + encodeURIComponent(txn);
+          }
+          // pmt=none(步骤切换/用户取消):什么都不做,轮询兜底。
         } else if (event.name === "checkout.payment.failed") {
           // 付款失败也必须说话。之前这里同样是静默的。
           hint.textContent = "这笔支付没有成功。";
@@ -234,7 +252,10 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
     // (关小窗口/切回标签页)。页面重新可见的瞬间,立即带去确认页 ——
     // 确认页区分"已开通"与"确认到账中",并自动轮询,到账后自动进控制台。
     var onReturnToPage = function () {
+      // 用户从支付窗口切回页面 = "付款后"的可靠信号。但同样受 pmt 约束:
+      // 没选过真实支付方式(填邮箱/纯浏览)就切 tab,不能把人送去确认页。
       if (!checkoutOpened || redirectScheduled) return;
+      if (!lastPmtType || lastPmtType === "none") return;
       redirectScheduled = true;
       try { window.Paddle.Checkout.close(); } catch (e) { /* 已经关了也无妨 */ }
       window.location.href = "/payment-success?txn=" + encodeURIComponent(txn);
