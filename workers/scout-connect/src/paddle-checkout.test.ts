@@ -22,6 +22,9 @@ function fakeApi(calls: unknown[]): PaddleApi {
     async listPaidTransactionIds() {
       return [];
     },
+    async getTransactionStatus() {
+      return null;
+    },
   };
 }
 
@@ -168,6 +171,9 @@ describe("POST /api/checkout", () => {
         },
         async listPaidTransactionIds() {
           return [];
+        },
+        async getTransactionStatus() {
+          return null;
         },
       },
     });
@@ -329,5 +335,257 @@ describe("服务器时钟畸形时 fail-closed(不伪装成未登录)", () => {
       );
       expect(res.status, `${path} 应 fail-closed`).toBe(500);
     }
+  });
+});
+
+describe("GET /api/transaction/:id/status(结账轮询)", () => {
+  async function seedMe(db: ConnectDb): Promise<string> {
+    await db.insertAccount({
+      id: "act_me", email: "me@example.com", paddle_customer_id: null,
+      created_at: NOW, last_login_at: null,
+    });
+    return buildSessionCookie("act_me", { secret: SECRET, ttlMs: 3600_000, now: Date.parse(NOW) });
+  }
+
+  it("未登录 → 401", async () => {
+    const { deps } = setup();
+    const res = await handleRequest(new Request(`${BASE}/api/transaction/txn_aaaaaaaaaaaaaaaaaaaaaaaaaa/status`), deps);
+    expect(res.status).toBe(401);
+  });
+
+  it("归属校验:不是自己的交易 → 404(不泄露存在性)", async () => {
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const fake = deps.paddleApi as unknown as { getTransactionStatus: () => unknown };
+    fake.getTransactionStatus = async () => ({ status: "completed", paidAt: NOW, accountEmail: "other@example.com" });
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/txn_bbbbbbbbbbbbbbbbbbbbbbbbbb/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("自己的交易 completed → 200 返回状态与 paid_at", async () => {
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const fake = deps.paddleApi as unknown as { getTransactionStatus: () => unknown };
+    fake.getTransactionStatus = async () => ({ status: "completed", paidAt: NOW, accountEmail: "me@example.com" });
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/txn_cccccccccccccccccccccccccc/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.status).toBe("completed");
+    expect(body.paid_at).toBe(NOW);
+  });
+
+  it("ready(微信确认前)→ 200 返回 ready,前端继续轮询", async () => {
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const fake = deps.paddleApi as unknown as { getTransactionStatus: () => unknown };
+    fake.getTransactionStatus = async () => ({ status: "ready", paidAt: null, accountEmail: "me@example.com" });
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/txn_cccccccccccccccccccccccccc/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as Record<string, unknown>).status).toBe("ready");
+  });
+
+  it("Paddle 上游抖动 → 503", async () => {
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const fake = deps.paddleApi as unknown as { getTransactionStatus: () => unknown };
+    fake.getTransactionStatus = async () => { throw new Error("upstream boom"); };
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/txn_cccccccccccccccccccccccccc/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(503);
+  });
+
+  it("交易不存在 → 404", async () => {
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const fake = deps.paddleApi as unknown as { getTransactionStatus: () => unknown };
+    fake.getTransactionStatus = async () => null;
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/txn_dddddddddddddddddddddddddd/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("D1 入账记录(webhook 观测结果)→ completed,不查 Paddle", async () => {
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const fake = deps.paddleApi as unknown as { getTransactionStatus: () => unknown };
+    let paddleCalled = false;
+    fake.getTransactionStatus = async () => { paddleCalled = true; return null; };
+    const { grantEntitlement } = await import("./grant.js");
+    await grantEntitlement(
+      { email: "me@example.com", months: 3, source: "paddle", paddleTransactionId: "txn_eeeeeeeeeeeeeeeeeeeeeeeeee" },
+      { db: deps.db, now: () => NOW, newAccountId: () => "act_new", newEntitlementId: () => "ent_1" },
+    );
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/txn_eeeeeeeeeeeeeeeeeeeeeeeeee/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.status).toBe("completed");
+    // paid_at 必须为 null:entitlement.created_at 是 webhook 入账时间,不是
+    // Paddle 的真实捕获时间(billed_at),语义不能骗人(Copilot round 5)。
+    expect(body.paid_at).toBeNull();
+    expect(paddleCalled).toBe(false);
+  });
+
+  it("入账给了别人 → 404", async () => {
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const { grantEntitlement } = await import("./grant.js");
+    await grantEntitlement(
+      { email: "other@example.com", months: 3, source: "paddle", paddleTransactionId: "txn_bbbbbbbbbbbbbbbbbbbbbbbbbb" },
+      { db: deps.db, now: () => NOW, newAccountId: () => "act_new", newEntitlementId: () => "ent_2" },
+    );
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/txn_bbbbbbbbbbbbbbbbbbbbbbbbbb/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /api/transaction/:id/status —— 边界(Copilot round 1)", () => {
+  async function seedMe(db: ConnectDb): Promise<string> {
+    await db.insertAccount({
+      id: "act_me2", email: "me@example.com", paddle_customer_id: null,
+      created_at: NOW, last_login_at: null,
+    });
+    return buildSessionCookie("act_me2", { secret: SECRET, ttlMs: 3600_000, now: Date.parse(NOW) });
+  }
+  const T26 = "txn_aaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+  it("畸形交易 ID(非 txn_ 格式)→ 404 而非 500", async () => {
+    // decodeURIComponent 对畸形百分号编码会抛 URIError。格式校验在前,
+    // 客户端错误不该变 500。
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/%E0%A4%A/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("accountEmail 为 null(异常/伪造)→ 404,不让猜 ID 的人查", async () => {
+    // 创建交易必写 custom_data.account_email。null 只可能是异常,拒绝。
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const fake = deps.paddleApi as unknown as { getTransactionStatus: () => unknown };
+    fake.getTransactionStatus = async () => ({ status: "paid", paidAt: NOW, accountEmail: null });
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/${T26}/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("Paddle 5xx → 503 而非 404(上游故障要可重试)", async () => {
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const fake = deps.paddleApi as unknown as { getTransactionStatus: () => unknown };
+    fake.getTransactionStatus = async () => { throw new Error("paddle getTransactionStatus failed: 500"); };
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/${T26}/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(503);
+  });
+});
+
+describe("GET /api/transaction/:id/status —— 错误路径必须 noStore(Copilot round 3)", () => {
+  async function seedMe(db: ConnectDb): Promise<string> {
+    await db.insertAccount({
+      id: "act_me3", email: "me@example.com", paddle_customer_id: null,
+      created_at: NOW, last_login_at: null,
+    });
+    return buildSessionCookie("act_me3", { secret: SECRET, ttlMs: 3600_000, now: Date.parse(NOW) });
+  }
+  const T26 = "txn_aaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+  it("401 带 cache-control: no-store(轮询端点不能被缓存卡死)", async () => {
+    const { deps } = setup();
+    const res = await handleRequest(new Request(`${BASE}/api/transaction/${T26}/status`), deps);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("畸形 ID 的 404 带 cache-control: no-store", async () => {
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/not-a-txn/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(404);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("归属失败的 404 带 cache-control: no-store", async () => {
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const fake = deps.paddleApi as unknown as { getTransactionStatus: () => unknown };
+    fake.getTransactionStatus = async () => ({ status: "paid", paidAt: NOW, accountEmail: "other@example.com" });
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/${T26}/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(404);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+});
+
+describe("GET /api/transaction/:id/status —— D1 命中但归属失败(Copilot round 4)", () => {
+  async function seedMe(db: ConnectDb): Promise<string> {
+    await db.insertAccount({
+      id: "act_me4", email: "me@example.com", paddle_customer_id: null,
+      created_at: NOW, last_login_at: null,
+    });
+    return buildSessionCookie("act_me4", { secret: SECRET, ttlMs: 3600_000, now: Date.parse(NOW) });
+  }
+
+  it("D1 命中但入账给了别人 → 404 且带 no-store", async () => {
+    const { deps } = setup();
+    const cookie = await seedMe(deps.db);
+    const { grantEntitlement } = await import("./grant.js");
+    await grantEntitlement(
+      { email: "other@example.com", months: 3, source: "paddle", paddleTransactionId: "txn_zzzzzzzzzzzzzzzzzzzzzzzzzz" },
+      { db: deps.db, now: () => NOW, newAccountId: () => "act_new", newEntitlementId: () => "ent_4" },
+    );
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/txn_zzzzzzzzzzzzzzzzzzzzzzzzzz/status`, { headers: { cookie } }),
+      deps,
+    );
+    expect(res.status).toBe(404);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+});
+
+describe("GET /api/transaction/:id/status —— handler 抛错兜底(Copilot round 6)", () => {
+  it("服务器时钟畸形(session 解析 throw)→ 500 且带 no-store", async () => {
+    // parseSessionWithValidatedNow 在 now 坏值时 throw 500(HttpError)。
+    // 路由分支的兜底必须把它转成带 noStore 的 JSON,不能落外层 handleError。
+    const { deps } = setup();
+    // exactOptionalPropertyTypes:不能把 undefined 赋回必填属性。
+    // 直接替换整个 deps.now(测试私有),不还原 —— 本测试是最后一个用例。
+    (deps as { now: () => string }).now = () => "not-a-date";
+    const res = await handleRequest(
+      new Request(`${BASE}/api/transaction/txn_aaaaaaaaaaaaaaaaaaaaaaaaaa/status`),
+      deps,
+    );
+    expect(res.status).toBe(500);
+    expect(res.headers.get("cache-control")).toBe("no-store");
   });
 });

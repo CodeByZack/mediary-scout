@@ -42,6 +42,20 @@ export interface PaddleApi {
    * 交易状态白拿时长。
    */
   listPaidTransactionIds(accountEmail: string, ourPriceIds: readonly string[]): Promise<string[]>;
+
+  /**
+   * 查单笔交易的状态。供 /buy 页面的轮询用 —— 微信支付是延迟捕获,授权与
+   * Paddle 确认之间可能有几分钟窗口,期间 Paddle 前端不跳转。我们自己轮询
+   * 这个端点,一旦 paid/completed 就关 overlay 跳转。
+   *
+   * 返回 null = 交易不存在(或已取消)。**只返回状态与归属邮箱,不返回任何
+   * 敏感字段。** 归属邮箱(创建交易时写入的 custom_data.account_email)
+   * 用于校验"这笔交易确实属于这个登录用户"—— 防止任何人拿别人的交易 ID
+   * 探测状态。
+   */
+  getTransactionStatus(
+    transactionId: string,
+  ): Promise<{ status: string; paidAt: string | null; accountEmail: string | null } | null>;
 }
 
 /** 真实 Paddle API 客户端。sandbox 与 live 的 base URL 不同。 */
@@ -135,6 +149,50 @@ export function createPaddleApi(input: {
         )
         .map((t) => t.id)
         .filter((id): id is string => typeof id === "string" && id !== "");
+    },
+
+    async getTransactionStatus(transactionId) {
+      const res = await fetch(`${base}/transactions/${encodeURIComponent(transactionId)}`, {
+        headers: { authorization: `Bearer ${input.apiKey}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      // 区分错误类型:404 = 交易不存在(合法 null);其它非 2xx(5xx/429)是
+      // 上游故障,必须 throw —— 否则轮询端点会把 Paddle 抖动当成"交易不存在"
+      // 返回 404,前端停止轮询,用户卡死。
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`paddle getTransactionStatus failed: ${res.status}`);
+      const body = (await res.json()) as {
+        data?: {
+          id?: unknown;
+          status?: unknown;
+          billed_at?: unknown;
+          custom_data?: { account_email?: unknown } | null;
+        };
+      };
+      if (typeof body.data?.id !== "string") {
+        // 200 但缺 data.id = 上游/代理异常或协议变更,throw 让上层 503 可重试
+        // (Copilot round 7)。返回 null 会被误判成"交易不存在"→ 404 → 前端
+        // 停止轮询,用户卡死。
+        throw new Error("paddle getTransactionStatus: missing data.id");
+      }
+      // **必须校验返回的交易 ID == 请求的 ID**(Copilot round 6)。
+      // 上游/缓存/代理异常时若返回了别的交易,会把它的状态/归属邮箱带回,
+      // 后续归属校验也会被误导。不匹配 = 上游异常,throw 而非静默返回。
+      if (body.data.id !== transactionId) {
+        throw new Error(`paddle getTransactionStatus id mismatch: asked=${transactionId} got=${body.data.id}`);
+      }
+      const status = typeof body.data.status === "string" ? body.data.status : "";
+      if (status === "") {
+        // 200 但缺 status = 上游异常,同上 throw 而非 null(Copilot round 7)。
+        throw new Error("paddle getTransactionStatus: missing status");
+      }
+      const paidAt = typeof body.data.billed_at === "string" ? body.data.billed_at : null;
+      const custom = body.data.custom_data;
+      const accountEmail =
+        typeof custom?.account_email === "string" && custom.account_email !== ""
+          ? custom.account_email
+          : null;
+      return { status, paidAt, accountEmail };
     },
   };
 }

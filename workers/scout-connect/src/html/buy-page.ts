@@ -82,6 +82,12 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
 (function () {
   var hint = document.getElementById("hint");
   var status = document.getElementById("status");
+  // **共享"已安排跳转"标志**(Copilot round 9):页面里的两条完成路径
+  // (Paddle 事件回调 与 轮询命中 paid/completed)都可能触发跳转,必须只跳
+  // 一次 —— 否则两次 location.href 互相覆盖,落点不确定。
+  // (注意:此处注释不能出现回调字样 —— 未配置分支的产物会被测试断言
+  //  not.toContain,注释会误命中,本项目已多次栽在这。)
+  var redirectScheduled = false;
   function fail(msg) {
     hint.textContent = "无法打开支付窗口。";
     status.textContent = msg;
@@ -109,9 +115,12 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
       eventCallback: function (event) {
         if (!event || typeof event.name !== "string") return;
         if (event.name === "checkout.completed") {
+          // 与轮询路径统一:只跳一次,都跳 /payment-success(确认中间页)。
+          if (redirectScheduled) return;
+          redirectScheduled = true;
           hint.textContent = "支付成功,正在开通…";
           // 微信支付是延迟捕获,到账可能要几分钟。说清楚,别让人干等。
-          status.textContent = "正在确认到账(微信支付最多需要 10 分钟)。即将回到控制台。";
+          status.textContent = "正在确认到账(微信支付最多需要 10 分钟)。即将前往确认页。";
           
           // ---- 必须先关 overlay,否则跳转会被卡住(真实 bug)----
           //
@@ -124,9 +133,8 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
           // 会以为失败了,重复付款,或者来投诉「钱扣了但没开通」。
           try { window.Paddle.Checkout.close(); } catch (e) { /* 已经关了也无妨 */ }
           
-          // 留 1.8 秒让用户看到这句话再跳。跳过去后控制台会显示「已付款,正在开通」
-          // 那一态(见 console-page 的 pendingPaid),不会再显示「尚未开通」。
-          setTimeout(function () { window.location.href = "/console?paid=1"; }, 1800);
+          // 留 1.8 秒让用户看到这句话再跳。跳过去后确认页显示「正在开通」。
+          setTimeout(function () { window.location.href = "/payment-success"; }, 1800);
         } else if (event.name === "checkout.payment.failed") {
           // 付款失败也必须说话。之前这里同样是静默的。
           hint.textContent = "这笔支付没有成功。";
@@ -169,6 +177,100 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
     });
     hint.textContent = "支付窗口已打开。";
     status.textContent = "";
+
+    // ---- 自建轮询:微信支付的唯一可靠出路 ----
+    //
+    // 第四次真实事故:微信支付是延迟捕获,授权与 Paddle 确认之间有几分钟窗口。
+    // 窗口内 Paddle 前端不跳转、checkout.completed 不发、successUrl 不触发 ——
+    // 用户看到"付了钱但页面没反应",感觉被骗。上述三条路(Paddle 的 successUrl、
+    // eventCallback、服务端捕获)全都在 Paddle 手里,我们控制不了它的前端轮询。
+    //
+    // 所以**自己轮询**:每 3 秒查一次 /api/transaction/<id>/status,一旦
+    // paid/completed 就关 overlay、跳 /payment-success。这不再依赖 Paddle 前端
+    // 是否跳转 —— 只要 Paddle 服务端确认了钱,我们就能把用户接走。
+    //
+    // 轮询上限 10 分钟(Paddle 官方延迟捕获上限),之后停轮询,页面显示"稍后
+    // 刷新查看"—— 避免无限请求。交易 ID 来自 URL,归属校验在服务端做。
+    //
+    // AbortSignal.timeout 降级(与 site/main.js 同款):旧浏览器不支持
+    // AbortSignal.timeout,直接调用会抛 TypeError → 轮询永远发不出去且被
+    // catch 吞掉,用户又回到"付了钱但页面没反应"。优先用原生,否则
+    // AbortController + setTimeout。
+    function timeoutSignal(ms) {
+      if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
+      var controller = new AbortController();
+      setTimeout(function () { controller.abort(); }, ms);
+      return controller.signal;
+    }
+    (function pollTransaction() {
+      var attempts = 0;
+      // **inFlight 锁**(Copilot round 2):setInterval + async 下,某次请求/
+      // 解析超过 3 秒时下一次 tick 仍会触发 → 并发重叠请求,放大上游抖动与
+      // API 调用。上一轮未结束就跳过本轮;结束后释放锁(含异常路径)。
+      var inFlight = false;
+      var timer = setInterval(async function () {
+        if (inFlight) return;
+        inFlight = true;
+        try {
+          attempts++;
+          // 3s × 200 = 10 分钟(Paddle 官方延迟捕获上限)。
+          // 超时后停轮询并明确告诉用户下一步,不能无声无息地停。
+          if (attempts > 200) {
+            clearInterval(timer);
+            hint.textContent = "支付已提交,正在确认到账…";
+            status.textContent = "如果已经付款,请稍后刷新此页面查看开通状态。你的付款不会丢失 —— 超过 15 分钟仍未开通请联系我们。";
+            return;
+          }
+          // AbortSignal.timeout:fetch 挂起不返回时(某些网络条件下不 reject),
+          // inFlight 锁会永久占住、轮询永久停住且页面无提示(Copilot round 7)。
+          // 5 秒超时,保证锁一定释放。超时走 catch → 下次 tick 重试。
+          var res = await fetch("/api/transaction/" + encodeURIComponent(txn) + "/status", {
+            signal: timeoutSignal(5000),
+          });
+          if (res.status === 401) {
+            // 登录过期:继续轮询也没用,明确告诉用户重新登录。
+            clearInterval(timer);
+            hint.textContent = "登录状态已过期。";
+            status.textContent = "请刷新页面重新登录后,在控制台查看开通状态。你的付款不会丢失。";
+            return;
+          }
+          if (res.status === 404) {
+            // 交易不存在/不属于当前账号:继续轮询没意义。多半是会话换人了。
+            clearInterval(timer);
+            hint.textContent = "这笔交易无法确认。";
+            status.textContent = "请回到控制台重新发起购买;若已付款,请联系我们核对。";
+            return;
+          }
+          if (res.status === 503) {
+            // 503 分两种(见端点):checkout not configured = 配置缺失,重试
+            // 也没用,立即停并提示;temporarily unavailable = 上游抖动,重试。
+            var body503 = null;
+            try { body503 = await res.json(); } catch (e) { /* 读不到就当抖动 */ }
+            if (body503 && body503.error === "checkout not configured") {
+              clearInterval(timer);
+              hint.textContent = "支付通道暂时不可用。";
+              status.textContent = "请稍后刷新页面重试;持续不可用请联系我们。你的付款不会丢失。";
+              return;
+            }
+            return;
+          }
+          var data = await res.json();
+          if (data && (data.status === "paid" || data.status === "completed")) {
+            // 与 eventCallback 路径共享标志:只跳一次。
+            if (redirectScheduled) { clearInterval(timer); return; }
+            redirectScheduled = true;
+            clearInterval(timer);
+            hint.textContent = "支付成功,正在开通…";
+            status.textContent = "正在确认到账(微信支付最多需要 10 分钟)。即将前往确认页。";
+            try { window.Paddle.Checkout.close(); } catch (e) { /* 已经关了也无妨 */ }
+            setTimeout(function () { window.location.href = "/payment-success"; }, 1800);
+          }
+        } catch (e) { /* 网络抖动,下次再试 */ } finally {
+          // 释放锁:clearInterval 后 finally 仍会跑,但 timer 已停,无副作用。
+          inFlight = false;
+        }
+      }, 3000);
+    })();
   } catch (e) {
     fail("打开支付窗口失败：" + (e && e.message ? e.message : String(e)));
   }`
