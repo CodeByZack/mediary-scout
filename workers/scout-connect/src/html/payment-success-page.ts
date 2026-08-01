@@ -86,6 +86,63 @@ ${BRAND_BAR}
 14 天内无条件全额退款 —— 见<a href="/refund">退款政策</a>。
 </p>
 </main>
+<script>
+// ---- 到账后自动进入控制台 ----
+// 用户付款后停在这个确认页。时长在 Paddle 捕获完成(webhook 入账)后到账,
+// 这里轮询交易状态,completed 一到就自动跳 /console —— 用户不用手动点。
+// 到达 /console 时若 webhook 尚未入账,控制台会显示「已付款 · 正在开通」
+// 的兜底态,不会出现"尚未开通"。
+(function () {
+  var txn = new URLSearchParams(location.search).get("txn");
+  if (!txn) return;  // 直接访问本页(无交易上下文)不轮询
+  // inFlight 锁 + 超时(Copilot round 1):慢网/挂起时避免并发重叠请求或
+  // fetch 永久挂起让轮询静默停住。5 秒超时保证锁一定释放。
+  function timeoutSignal(ms) {
+    if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
+    var c = new AbortController();
+    setTimeout(function () { c.abort(); }, ms);
+    return c.signal;
+  }
+  var attempts = 0;
+  var inFlight = false;
+  var timer = null;
+  var intervalMs = 3000;
+  var poll = async function () {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      attempts++;
+      // 微信延迟捕获可到 ~10 分钟:3 分钟后降频继续,不早停(Copilot round 1)。
+      if (attempts === 61) {
+        clearInterval(timer);
+        intervalMs = 15000;
+        timer = setInterval(poll, intervalMs);
+      }
+      var res = await fetch("/api/transaction/" + encodeURIComponent(txn) + "/status", {
+        signal: timeoutSignal(5000),
+      });
+      if (res.status === 401 || res.status === 404) {
+        // 未登录/交易不存在:继续轮询没意义,与 /buy 轮询一致 fail-fast
+        // (Copilot round 2)。否则无意义请求直到页面关闭。
+        clearInterval(timer);
+        return;
+      }
+      if (res.status !== 200) return;  // 503 等可重试状态,继续等
+      var data = await res.json();
+      if (data && data.status === "completed") {
+        clearInterval(timer);
+        window.location.href = "/console";
+      }
+    } catch (e) { /* 网络抖动,下次再试 */ } finally {
+      inFlight = false;
+    }
+  };
+  // 先建 interval 再立即跑一次(Copilot round 3):首轮 401/404/completed 时
+  // clearInterval 才能清掉真实 timer,否则 interval 仍会创建继续请求。
+  timer = setInterval(poll, intervalMs);
+  poll();
+})();
+</script>
 </body>
 </html>`;
 }
