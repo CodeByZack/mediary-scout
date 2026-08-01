@@ -61,7 +61,7 @@ ${BRAND_BAR}
 <div class="ok-icon" aria-hidden="true">
 <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
 </div>
-<h1 class="ok-text" id="h1">付款已完成</h1>
+<h1 class="ok-text" id="h1">付款确认中</h1>
 </div>
 
 <p id="sub"><strong>已收到你的付款请求。</strong>发票与收据会发到你的邮箱（若成功完成）。</p>
@@ -111,12 +111,11 @@ ${BRAND_BAR}
           document.getElementById("h1").textContent = "付款已完成";
           document.getElementById("note-strong").textContent = "时长正在开通中。";
         } else {
-          document.getElementById("h1").textContent = "已收到支付请求";
-          document.getElementById("sub").innerHTML = "<strong>如果你已经付款：</strong>微信支付正在确认到账，页面会自动更新，无需任何操作。";
+          // 双态:付款了 = "确认到账中";没付款 = "可返回重新支付"。绝不谎称成功。
+          document.getElementById("h1").textContent = "付款确认中";
+          document.getElementById("sub").innerHTML = "<strong>如果你已经完成付款：</strong>微信支付正在确认到账，页面会自动更新，无需任何操作。<br><br><strong>如果还没有付款：</strong>请<a href=\"/buy?_ptxn=" + encodeURIComponent(txn) + "\">返回重新支付 →</a>";
           document.getElementById("note-text").textContent = "微信支付到账最多约 10 分钟。到账后会自动进入控制台。";
-          var repay = document.getElementById("repay");
-          repay.style.display = "block";
-          repay.innerHTML = "<strong>如果还没有付款：</strong><a href=\"/buy?_ptxn=" + encodeURIComponent(txn) + "\">返回重新支付 →</a>";
+          document.getElementById("repay").style.display = "none";
         }
       }).catch(function () { /* 首查失败保持默认文案,轮询兜底 */ });
       .catch(function () { /* 首查失败保持默认文案,轮询兜底 */ });
