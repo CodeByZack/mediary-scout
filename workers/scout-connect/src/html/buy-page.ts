@@ -60,6 +60,12 @@ p{color:var(--text-muted);font-size:14.5px;margin:10px 0 0;line-height:1.65}
 a{color:var(--accent)}
 .muted{color:var(--text-muted);font-size:13px}
 #status{font-family:var(--mono);font-size:12px;color:var(--text-muted);margin-top:16px}
+#pay-notice{margin-top:20px;padding:16px 18px;border:1px solid #f59e0b;border-radius:12px;background:rgba(245,158,11,.08)}
+#pay-notice .notice-head{font-weight:800;font-size:14.5px;color:#f59e0b;margin-bottom:10px}
+#pay-notice ol{margin:0;padding-left:20px;font-size:13.5px;line-height:1.9;color:var(--text)}
+#pay-notice li strong{color:#f59e0b}
+#ack-btn{margin-top:14px;padding:11px 22px;border-radius:999px;border:0;background:var(--accent);color:#000;font-weight:800;font-size:14px;cursor:pointer}
+#ack-btn:hover{background:var(--accent-press)}
 </style>
 </head>
 <body>
@@ -69,6 +75,19 @@ ${BRAND_BAR}
 <div class="card">
 <p id="hint">正在打开支付窗口…</p>
 <p id="status" role="status"></p>
+
+<!-- 微信支付说明:付款前必须让用户知道会发生什么,防止恐慌和重复付款。
+     放在 overlay 打开前 —— overlay 一打开就挡住本页,用户看不到这里的字。 -->
+<div id="pay-notice">
+<div class="notice-head">使用微信扫码付款前，请先读这四条：</div>
+<ol>
+<li><strong>付款后微信窗口不会自动关闭，也不会有任何反应</strong> —— 这是微信支付的正常行为，不是故障。</li>
+<li>付款成功后，<strong>请手动关闭微信支付窗口</strong>；页面会在到账后自动确认，无需任何操作。</li>
+<li>到账通常需要几分钟，<strong>最长约 10 分钟</strong>。期间请勿刷新或重复操作。</li>
+<li><strong>不要重复扫码，不要重复购买</strong> —— 每次扫码付款都会真实扣款。请先确认上一笔是否已付款。</li>
+</ol>
+<button id="ack-btn" type="button">我已了解，去支付</button>
+</div>
 <noscript><p>支付需要 JavaScript。请开启后刷新本页。</p></noscript>
 </div>
 <p class="muted" style="margin-top:22px">
@@ -225,8 +244,21 @@ ${configured ? '<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></scrip
           }
         }
       } catch (e) { /* 查询失败就正常弹结账窗,轮询兜底 */ }
-      openCheckout();
+      // 微信支付说明:必须先让用户读到再进支付窗。overlay 会挡住本页,
+      // 所以说明只能在打开 overlay 前展示 —— 用户点「我已了解，去支付」才开。
+      showNotice();
     })();
+    function showNotice() {
+      var notice = document.getElementById("pay-notice");
+      var ack = document.getElementById("ack-btn");
+      if (notice) notice.style.display = "block";
+      hint.textContent = "请先阅读支付说明，再开始付款。";
+      status.textContent = "";
+      if (ack) ack.onclick = function () {
+        if (notice) notice.style.display = "none";
+        openCheckout();
+      };
+    }
     function openCheckout() {
       checkoutOpened = true;
       window.Paddle.Checkout.open({
