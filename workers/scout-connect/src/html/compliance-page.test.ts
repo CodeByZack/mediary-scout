@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { COMPLIANCE_MARKDOWN } from "./compliance-content.gen.js";
-import { compliancePage, COMPLIANCE_PAGES } from "./compliance-page.js";
+import { compliancePage, COMPLIANCE_PAGES, type CompliancePageKey } from "./compliance-page.js";
 
 describe("generated content freshness", () => {
   it("compliance-content.gen.ts matches src/content/*.md byte-for-byte", () => {
@@ -102,6 +102,45 @@ describe("compliance pages", () => {
     expect(zh).toContain("始终只在你自己的机器上");
     expect(en).toContain("always stay on your own machine");
     expect(zh).not.toMatch(/我们会存储你的(媒体|内容)/);
+  });
+
+  // ---- 双语页的规范化信号(SEO 基线审计发现:此前 head 里既无 canonical
+  // 也无 alternate,中英两版互为重复内容,Google 无从判断谁是规范)。----
+  it("每页都有 canonical，指向自己的规范 URL(中文无参、英文带 ?lang=en)", () => {
+    for (const key of Object.keys(COMPLIANCE_PAGES) as CompliancePageKey[]) {
+      expect(compliancePage(key, "zh")).toContain(
+        `<link rel="canonical" href="https://mediaryconnect.app/${key}">`,
+      );
+      expect(compliancePage(key, "en")).toContain(
+        `<link rel="canonical" href="https://mediaryconnect.app/${key}?lang=en">`,
+      );
+    }
+  });
+
+  it("每页都有自含的 hreflang 集合(zh-Hans + en + x-default，且含自己)", () => {
+    // Google 要求 alternate 集合自含:缺了自己会被判「无返回标记」。
+    for (const key of Object.keys(COMPLIANCE_PAGES) as CompliancePageKey[]) {
+      for (const lang of ["zh", "en"] as const) {
+        const html = compliancePage(key, lang);
+        expect(html).toContain(
+          `<link rel="alternate" hreflang="zh-Hans" href="https://mediaryconnect.app/${key}">`,
+        );
+        expect(html).toContain(
+          `<link rel="alternate" hreflang="en" href="https://mediaryconnect.app/${key}?lang=en">`,
+        );
+        expect(html).toContain(
+          `<link rel="alternate" hreflang="x-default" href="https://mediaryconnect.app/${key}">`,
+        );
+      }
+    }
+  });
+
+  it("每页都有 description(SERP 摘要，此前缺失)", () => {
+    for (const key of Object.keys(COMPLIANCE_PAGES) as CompliancePageKey[]) {
+      for (const lang of ["zh", "en"] as const) {
+        expect(compliancePage(key, lang)).toMatch(/<meta name="description" content="[^"]{20,}"/);
+      }
+    }
   });
 
   it("never leaks raw markdown syntax into the page", () => {

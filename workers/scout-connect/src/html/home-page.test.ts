@@ -85,6 +85,47 @@ describe("home page(apex 落地页)", () => {
     expect(html).toContain('lang="zh-Hans"');
   });
 
+  /** 取首页的 JSON-LD 原文。缺失时给出清晰断言失败 —— 裸用 m![1] 会抛
+   *  TypeError,错误信息完全遮蔽测试意图(Copilot #231 抑制评论)。 */
+  function extractJsonLd(html: string): string {
+    const m = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(html);
+    // 断言 + 取值都要过 strict:m![1] 的类型是 string | undefined
+    // (noUncheckedIndexedAccess),CI 的 worker tsc 会拦。
+    const raw = m?.[1];
+    expect(raw, "首页缺少 JSON-LD <script>").toBeDefined();
+    return raw as string;
+  }
+
+  // ---- 结构化数据(SEO 基线审计:此前无 JSON-LD,搜索引擎无法把
+  // Scout ↔ Connect 识别成同一品牌下的产品与增值服务)----
+  it("JSON-LD 存在且可解析,声明 Product(含 Offer) 与 Organization", () => {
+    const raw = extractJsonLd(homePage());
+    const data = JSON.parse(raw) as { "@graph": Array<Record<string, unknown>> };
+    const types = data["@graph"].map((n) => n["@type"]);
+    expect(types).toContain("Product");
+    expect(types).toContain("Organization");
+  });
+
+  it("JSON-LD 覆盖页面可见的**全部三档**价格(Copilot #231:漏了两年档 ¥188)", () => {
+    // 定价区可见三档:季 ¥45 / 年 ¥108 / 两年 ¥188。JSON-LD 少一档会让富结果
+    // 呈现不完整的价格区间(最低价误导),且结构化数据与可见内容不符。
+    const html = homePage();
+    const raw = extractJsonLd(html);
+    for (const price of ["45", "108", "188"]) {
+      expect(html, `页面应可见 ¥${price}`).toContain(`¥${price}`);
+      expect(raw, `JSON-LD 应含 price ${price}`).toContain(`"price":"${price}"`);
+    }
+    expect(raw).toContain('"priceCurrency":"CNY"');
+    // offers 条数必须与可见档位数一致 —— 多一条或少一条都算不一致
+    const offers = JSON.parse(raw) as { "@graph": Array<{ offers?: unknown[] }> };
+    const product = offers["@graph"].find((n) => Array.isArray(n.offers));
+    expect(product?.offers).toHaveLength(3);
+  });
+
+  it("JSON-LD 用 isRelatedTo 把 Connect 指回 Mediary Scout 主站(品牌实体串联)", () => {
+    expect(extractJsonLd(homePage())).toContain("https://mediaryscout.app/");
+  });
+
   it("海报墙有兜底 —— TMDB 代理挂了首屏不能空一片", () => {
     const html = homePage();
     // 内联的兜底海报路径(worker 无静态目录,路径只是字符串,烤进 HTML)
