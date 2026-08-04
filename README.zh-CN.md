@@ -182,5 +182,11 @@ docker compose up -d
 
 与 115、夸克、光鸭云盘、TMDB 及任何索引器均无隶属关系。Mediary Scout 是围绕这些组件构建的、克制的独立工作流。
 
+## 社区
+
+本项目积极参与并认可 [LINUX DO 社区](https://linux.do) —— 本项目的许多用户在那里自部署、交流玩机与网盘经验，部署问题在那里也能很快得到回应。
+
+[![认可 LINUX DO](https://img.shields.io/badge/LINUX%20DO-认可-2ecc71?style=flat&labelColor=1f1f1f)](https://linux.do)
+
 ## Star History
 ![Star History Chart](https://api.star-history.com/svg?repos=fancydirty/mediary-scout)

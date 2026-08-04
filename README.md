@@ -229,5 +229,11 @@ Built on top of, and grateful to:
 
 Not affiliated with 115, Quark, 光鸭云盘 (GuangYaPan), 123网盘, 天翼云盘, TMDB, or any indexer. Mediary Scout is an independent, disciplined workflow built around these pieces.
 
+## Community
+
+This project actively participates in and endorses the [LINUX DO](https://linux.do) community — a Chinese-language technical community where many of this project's users self-host, and where deployment questions get answered fast.
+
+[![认可 LINUX DO](https://img.shields.io/badge/LINUX%20DO-认可-2ecc71?style=flat&labelColor=1f1f1f)](https://linux.do)
+
 ## Star History
 ![Star History Chart](https://api.star-history.com/svg?repos=fancydirty/mediary-scout)
