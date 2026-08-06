@@ -83,6 +83,11 @@ import {
   type VerifiedFile,
   type WorkflowRepository,
 } from "@media-track/workflow";
+import {
+  buildPanSouProviderChain,
+  resolveUserPanSouBaseUrl,
+  DEFAULT_PANSOU_BASE_URL as PUBLIC_PANSOU_BASE_URL,
+} from "./pansou-chain";
 import { findDemoCandidateById, findDemoCandidateByTmdbId } from "./demo-candidates";
 import { seedDemoWorkflowRepository } from "./demo-workflow";
 import { resolveRegistration, deriveBootstrapState, canManageAccounts } from "./account-bootstrap";
@@ -892,7 +897,7 @@ function buildAccountContextResolver(): ResolveAccountWorkerContext {
     const assrtToken = await getAssrtToken(scoped);
     return {
       storage: await getWorkerStorageExecutor(accountId, connectedStorageId),
-      resourceProvider: await getWorkerResourceProvider(scoped, driveProvider),
+      resourceProvider: await getWorkerResourceProvider(scoped, driveProvider, accountId),
       storageProvider: driveProvider,
       model,
       ...(assrtToken === undefined ? {} : { assrtToken }),
@@ -903,6 +908,39 @@ function buildAccountContextResolver(): ResolveAccountWorkerContext {
       moviesParentDirectoryId: parents.movies,
     };
   };
+}
+
+/** 记录自建搜索源的最新健康结论,供设置页徽章读取(它每 8s 轮询,不能自己打网络)。
+ *  幂等:值未变化就不写,避免每次搜索都产生一次 DB 写。 */
+//  ⚠️ 必须按账号分键:多用户模式下一个进程服务多个账号,不分键会让账号 B 的
+//  结论因为账号 A 刚写过同一个值而被跳过 —— 于是 B 的源挂了却永远不告警,
+//  正是本 PR 要消灭的那种静默。
+const lastRecordedPanSouHealth = new Map<string, string>();
+async function recordPanSouHealth(healthy: boolean, accountId?: string): Promise<void> {
+  const value = healthy ? "ok" : "unhealthy";
+  try {
+    // 有 request scope(设置页/HTTP)时用请求账号;worker 路径没有 request scope,
+    // 必须用调用方传入的 run 所属账号 —— 否则多用户模式下所有健康结论都记到
+    // acct_default 名下,B 用户永远看不到「自建源连不上」的告警。
+    const resolved = accountId ?? (await getCurrentAccountId());
+    if (lastRecordedPanSouHealth.get(resolved) === value) return;
+    await getWorkflowRepository().setAccountSetting(
+      resolved,
+      PANSOU_HEALTH_SETTING_KEY,
+      value,
+    );
+    lastRecordedPanSouHealth.set(resolved, value);
+  } catch (error) {
+    // 搜索不能因为一次设置写失败而失败。但不静默:打出来,否则就是本 PR 要修的病。
+    console.warn(
+      `[pansou-health] 记录健康态失败(不影响本次搜索): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/** Test-only: 清掉幂等缓存,免得跨用例串味。 */
+export function __resetPanSouHealthCacheForTests(): void {
+  lastRecordedPanSouHealth.clear();
 }
 
 export async function runNextQueuedWorkflow() {
@@ -1077,23 +1115,34 @@ export function resolveIsDesktop(env: Record<string, string | undefined> = proce
 
 export const PANSOU_BASE_URL_SETTING_KEY = "pansou_base_url";
 
+/** 自建搜索源的最新健康结论。取值只有三种:`"ok"` / `"unhealthy"` / `""`(未配或
+ *  已清空)—— **不是**结构化 reason,别按 reason 去解析。
+ *  两个写入方:保存时探活(actions / config-io)与每次真实搜索后的回写
+ *  (recordPanSouHealth)。设置页徽章每 8s 轮询,绝不能在那条路径上打网络,
+ *  所以它只读这里。 */
+export const PANSOU_HEALTH_SETTING_KEY = "pansou_last_probe";
+
 /** Default public PanSou instance (author-hosted), used when neither the DB
  *  setting nor env overrides it. The compose stack injects PANSOU_BASE_URL to
- *  point at the bundled `pansou` service instead. */
-export const DEFAULT_PANSOU_BASE_URL = "https://so.252035.xyz";
+ *  point at the bundled `pansou` service instead.
+ *  从 ./pansou-chain 再导出:装配链要用同一个常量判「用户配的是不是官方源」,
+ *  两份字面量一旦漂移,fallback 就会把官方源包成自己的备源、每次失败白跑两遍。 */
+export { DEFAULT_PANSOU_BASE_URL } from "./pansou-chain";
 
 /** The PanSou search aggregator base URL: DB setting > env PANSOU_BASE_URL >
  *  public default. No runtime container auto-detection — compose wires the
- *  service name and this lets a self-hoster override it by hand. */
+ *  service name and this lets a self-hoster override it by hand.
+ *  前两层复用 resolveUserPanSouBaseUrl:它和装配链共用一份优先级,免得这里改了
+ *  而检索路径没改(或反过来)。 */
 export async function getPanSouBaseUrl(
   repository: { getSetting(key: string): Promise<string | null> },
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
-  const dbValue = (await repository.getSetting(PANSOU_BASE_URL_SETTING_KEY))?.trim();
-  if (dbValue) return dbValue;
-  const envValue = env.PANSOU_BASE_URL?.trim();
-  if (envValue) return envValue;
-  return DEFAULT_PANSOU_BASE_URL;
+  const configured = resolveUserPanSouBaseUrl(
+    await repository.getSetting(PANSOU_BASE_URL_SETTING_KEY),
+    env,
+  );
+  return configured || PUBLIC_PANSOU_BASE_URL;
 }
 
 export const PROWLARR_BASE_URL_SETTING_KEY = "prowlarr_base_url";
@@ -1672,7 +1721,13 @@ function parseTvCandidateId(candidateId: string): { tmdbId: number; seasonNumber
 async function getWorkerResourceProvider(
   settings: { getSetting(key: string): Promise<string | null> } = getWorkflowRepository(),
   provider: string = "pan115",
+  accountId?: string,
 ): Promise<ResourceProvider> {
+  // accountId 仅用于健康结论回写(recordPanSouHealth)。多账户场景下,worker 在
+  // claim 后按 run 所属账号重建 provider(resolveWorkerDeps: ctx.resourceProvider
+  // ?? base),走的是 buildAccountContextResolver 那条带 accountId 的路径;这里的
+  // base provider 只在无 resolver(单用户/兜底)时被实际使用,此时 getCurrentAccountId()
+  // 正确地返回 default 账号,所以两处都不丢账号作用域。
   if (process.env.MEDIA_TRACK_WORKFLOW_ADAPTER === "pansou") {
     // Per-brand assembly: a quark drive gets PanSou restricted to quark links and
     // NO Prowlarr (磁力 115-only); a 115 drive gets PanSou(115/magnet) + Prowlarr.
@@ -1684,7 +1739,21 @@ async function getWorkerResourceProvider(
     const providers: Array<{ name: string; provider: ResourceProvider }> = [
       {
         name: "pansou",
-        provider: new PanSouResourceProvider({ baseURL: await getPanSouBaseUrl(settings), allowedTypes }),
+        // 用户配了自建源(DB 或 compose 注入的 env)就包一层 fallback:自建源挂掉时
+        // 退到官方源续命,并把结果标 degraded —— 而不是像事故里那样静默报「没找到」。
+        provider: buildPanSouProviderChain({
+          userBaseURL: resolveUserPanSouBaseUrl(
+            await settings.getSetting(PANSOU_BASE_URL_SETTING_KEY),
+          ),
+          allowedTypes,
+          // 把每次真实搜索观察到的结论回写,设置页徽章才有东西可读。缺了这条,
+          // 告警在生产中永远不触发:保存时探活只写 "ok",而本次事故恰恰是
+          // 「保存时好的、之后才挂」。写失败不能影响搜索本身,所以 catch 后
+          // 只记日志——但**不静默**,否则又是本 PR 要消灭的那个毛病。
+          onSourceHealth: (healthy) => {
+            void recordPanSouHealth(healthy, accountId);
+          },
+        }),
       },
     ];
     if (kinds.includes("prowlarr")) {

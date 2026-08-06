@@ -5,6 +5,13 @@ import type {
   ResourceType,
 } from "./domain.js";
 import type { ResourceProvider } from "./ports.js";
+import {
+  classifySourceFailure,
+  mergeSourceHealth,
+  PanSouProtocolError,
+  PanSouRequestError,
+  type SourceHealth,
+} from "./resource-source-health.js";
 
 export interface PanSouFetchInit {
   method: "POST";
@@ -80,7 +87,18 @@ export class PanSouResourceProvider implements ResourceProvider {
       body: JSON.stringify({ kw: keyword, res: "all" }),
       timeoutMs: this.requestTimeoutMs,
     });
-    const facts = isPanSouSuccessResponse(response) ? collectLinkFacts(response.data.results) : [];
+    // 两种「不是成功响应」必须区分,否则用户拿到错误的处置建议(Copilot 评审):
+    //  1. 响应带 code 字段 → 它**是** PanSou,只是报了错(限流/参数错)。
+    //     那是源侧的临时故障,不是「地址填错了」,不归 PanSouProtocolError。
+    //  2. 完全不是 PanSou 的形状(静态文件服务器 / 反代错误页 / 换了协议)
+    //     → 地址指错了地方,这才是 PanSouProtocolError。
+    if (isPanSouErrorResponse(response)) {
+      throw new PanSouRequestError(`PanSou 返回错误: ${JSON.stringify(response).slice(0, 200)}`);
+    }
+    if (!isPanSouSuccessResponse(response)) {
+      throw new PanSouProtocolError(`not a PanSou payload from ${this.baseURL}`);
+    }
+    const facts = collectLinkFacts(response.data.results);
     // Per-brand filter: a quark drive only sees quark links; a 115 drive only
     // sees 115/magnet. Keeps a candidate set that its executor can actually transfer.
     return this.allowedTypes ? facts.filter((fact) => this.allowedTypes!.has(fact.type)) : facts;
@@ -93,12 +111,16 @@ export class PanSouResourceProvider implements ResourceProvider {
     // judges the COMPLETE evidence — never a partial slice (no 抢跑). Speed comes
     // from the agent issuing FEWER searches, not from cutting this short.
     let facts: PanSouLinkFact[] = [];
+    let failure: unknown = null;
     for (let attempt = 0; attempt < this.maxSearchAttempts; attempt += 1) {
       let next: PanSouLinkFact[];
       try {
         next = await this.fetchFacts(input.keyword);
-      } catch {
-        break; // network/parse error mid-poll — keep the most complete set so far
+      } catch (error) {
+        // 只有「一条证据都没拿到」才算源不可用。中途失败但先前已有结果时,
+        // 保留旧行为(保住已拿到的最完整集合)——那不是源挂了,是轮询被打断。
+        failure = error;
+        break;
       }
       if (next.length > facts.length) {
         facts = next;
@@ -109,6 +131,10 @@ export class PanSouResourceProvider implements ResourceProvider {
         await this.wait(this.searchPollMs);
       }
     }
+    const health: SourceHealth =
+      failure !== null && facts.length === 0
+        ? { status: classifySourceFailure(failure), source: "pansou" }
+        : { status: "healthy", source: "pansou" };
     const snapshotId = createSnapshotId(input.keyword, facts, input.workflowRunId);
     const candidates: ResourceCandidate[] = facts.map((fact, index) => ({
       id: `${snapshotId}_candidate_${index + 1}`,
@@ -131,6 +157,7 @@ export class PanSouResourceProvider implements ResourceProvider {
       keyword: input.keyword,
       candidates,
       createdAt: this.now(),
+      sourceHealth: mergeSourceHealth([health]),
     };
   }
 }
@@ -156,6 +183,13 @@ async function defaultFetchJson(url: string, init: PanSouFetchInit): Promise<unk
     throw new Error(`PanSou search failed with HTTP ${response.status}`);
   }
   return response.json();
+}
+
+/** 响应带 code 字段 = 它按 PanSou 协议应答了,只是没成功(限流/参数错/服务端错)。
+ *  与「根本不是 PanSou」的关键区别:后者没有 code 字段。 */
+function isPanSouErrorResponse(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value["code"] === "number" && value["code"] !== 0;
 }
 
 function isPanSouSuccessResponse(value: unknown): value is {

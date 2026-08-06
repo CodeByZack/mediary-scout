@@ -13,6 +13,7 @@ import {
   PREFERRED_LANGUAGE_SETTING_KEY,
   DAILY_SWEEP_TIME_SETTING_KEY,
   PANSOU_BASE_URL_SETTING_KEY,
+  PANSOU_HEALTH_SETTING_KEY,
   PROWLARR_BASE_URL_SETTING_KEY,
   PROWLARR_API_KEY_SETTING_KEY,
   TMDB_API_KEY_SETTING_KEY,
@@ -195,10 +196,24 @@ export async function writeAgentConfig(
 
   if (input.pansouBaseUrl !== undefined) {
     const trimmed = input.pansouBaseUrl.trim();
-    if (trimmed && !/^https?:\/\//.test(trimmed)) {
-      return { ok: false, field: "pansouBaseUrl", message: "baseURL 需以 http(s):// 开头" };
+    if (trimmed) {
+      // 格式校验与设置页共用同一 helper(validatePanSouBaseUrlFormat),免得两条
+      // 入口的校验与文案再次漂移(Copilot 评审)。
+      const { probePanSou, validatePanSouBaseUrlFormat } = await import("../pansou-probe");
+      const format = validatePanSouBaseUrlFormat(trimmed);
+      if (!format.ok) {
+        return { ok: false, field: "pansouBaseUrl", message: format.message };
+      }
+      // 与设置页同一条规矩:存之前真打一次,打不通/不是 PanSou 就不存。
+      // agent 走这条路径改配置时同样不能把一个坏地址写进去。
+      const probe = await probePanSou(trimmed);
+      if (!probe.ok) {
+        return { ok: false, field: "pansouBaseUrl", message: probe.message };
+      }
     }
     await setAccount(PANSOU_BASE_URL_SETTING_KEY, trimmed);
+    // 清空时一并清掉探活结论,免得设置页对着不存在的自建源继续告警。
+    await setAccount(PANSOU_HEALTH_SETTING_KEY, trimmed ? "ok" : "");
     updated.push("pansouBaseUrl");
   }
 
