@@ -403,6 +403,87 @@ export function runRepositoryContract(name: string, harness: RepoHarness): void 
         ).toBe(true);
       });
 
+      it("requeueRunningWorkflowRuns terminates an orphaned type3_monitor instead of queueing it", async () => {
+        const repo = await fresh();
+        const snap = queued("orphan3", { startedAt: "2026-06-11T00:00:00.000Z" });
+        await repo.saveWorkflowRunSnapshot({
+          ...snap,
+          workflowRun: {
+            ...snap.workflowRun,
+            id: "orphan3",
+            kind: "type3_monitor",
+            status: "running",
+            finishedAt: null,
+          },
+        });
+
+        const count = await repo.requeueRunningWorkflowRuns("2026-06-11T02:00:00.000Z");
+        expect(count).toBe(0);
+
+        const recovered = await repo.getWorkflowRunSnapshot("orphan3");
+        expect(recovered?.workflowRun.status).toBe("failed");
+        expect(recovered?.workflowRun.finishedAt).toBe("2026-06-11T02:00:00.000Z");
+        // Assert both presence and position: `.some` matches the neighbouring
+        // poison-cap test's convention and survives a future trailing event,
+        // while `.at(-1)` additionally pins that recovery appended it last.
+        expect(recovered?.workflowRun.auditEvents.some((e) => e.type === "orphan_unclaimable")).toBe(
+          true,
+        );
+        expect(recovered?.workflowRun.auditEvents.at(-1)?.type).toBe("orphan_unclaimable");
+        // The unclaimable path must NOT pretend a requeue happened.
+        expect(
+          recovered?.workflowRun.auditEvents.some((e) => e.type === "orphan_requeued"),
+        ).toBe(false);
+      });
+
+      it("a recovered type3_monitor no longer blocks the season from being reserved again", async () => {
+        const repo = await fresh();
+        const snap = queued("orphan3b", { startedAt: "2026-06-11T00:00:00.000Z" });
+        await repo.saveWorkflowRunSnapshot({
+          ...snap,
+          workflowRun: {
+            ...snap.workflowRun,
+            id: "orphan3b",
+            kind: "type3_monitor",
+            status: "running",
+            finishedAt: null,
+          },
+        });
+        await repo.requeueRunningWorkflowRuns("2026-06-11T02:00:00.000Z");
+
+        // Reserving the same season + kind must now succeed rather than report
+        // already_active — that was the user-visible hang: patrol permanently
+        // blocked by a dead run. Deliberately no stale-expiry field is passed,
+        // so this proves the fix works on its own rather than leaning on the
+        // 30-minute stale sweep (which also deletes episode_states).
+        const reservation = await repo.reserveWorkflowRun({
+          connectedStorageId: snap.connectedStorageId,
+          title: snap.title,
+          season: snap.season,
+          workflowRun: {
+            ...snap.workflowRun,
+            id: "fresh3",
+            kind: "type3_monitor",
+            status: "running",
+            trackedSeasonId: snap.season.id,
+            startedAt: "2026-06-11T03:00:00.000Z",
+            finishedAt: null,
+            auditEvents: [
+              { type: "type3_scheduled", message: "Scheduled Type 3 monitoring reserved" },
+            ],
+          },
+          episodes: snap.episodes,
+          resourceSnapshots: [],
+          decisions: [],
+          transferAttempts: [],
+          notifications: [],
+        });
+        // Pin the positive status, not merely "not already_active":
+        // WorkflowRunReservationResult has a third arm (already_has_episode_state),
+        // so a negative assertion would silently pass on it.
+        expect(reservation.status).toBe("reserved");
+      });
+
       it("pruneFinishedWorkflowRuns drops old finished runs and keeps active ones", async () => {
         const repo = await fresh();
         const old = queued("old_done", { startedAt: "2026-05-01T00:00:00.000Z" });
@@ -919,6 +1000,35 @@ export function runRepositoryContract(name: string, harness: RepoHarness): void 
           now: "2030-01-01T00:00:00.000Z",
         });
         expect(claimed?.workflowRun.id).toBe("failed_r");
+      });
+
+      it("retryFailedWorkflowRun refuses a failed run whose kind no worker claims", async () => {
+        const repo = await fresh();
+        const snap = queuedRun({ id: "failed_r3", status: "failed", connectedStorageId: "cs_r3" });
+        await repo.saveWorkflowRunSnapshot({
+          ...snap,
+          workflowRun: {
+            ...snap.workflowRun,
+            kind: "type3_monitor",
+            status: "failed",
+            finishedAt: "2026-06-11T02:00:00.000Z",
+          },
+        });
+        const scope = { accountId: "acct_default", connectedStorageId: "cs_r3" };
+        // No claimNextQueuedWorkflowRun call site asks for type3_monitor, so a run
+        // pushed back to `queued` can never leave it — and since `queued` counts as
+        // active, reserveWorkflowRun returns already_active for that season FOREVER
+        // (the user-visible "巡检永久卡在排队中"). Task 1 terminates such orphans as
+        // `failed`; letting the activity page's retry button flip them back to
+        // `queued` would re-strand the run and re-block the season — exactly the bug
+        // isQueueClaimableKind exists to prevent.
+        expect(await repo.retryFailedWorkflowRun("failed_r3", scope)).toEqual({
+          status: "not_retriable",
+        });
+        const after = await repo.getWorkflowRunSnapshot("failed_r3", scope);
+        expect(after?.workflowRun.status).toBe("failed");
+        // retriedWorkflowRun clears finishedAt — it must not have run at all.
+        expect(after?.workflowRun.finishedAt).toBe("2026-06-11T02:00:00.000Z");
       });
 
       it("retryFailedWorkflowRun refuses a non-failed (queued) run", async () => {

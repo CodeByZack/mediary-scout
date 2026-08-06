@@ -4,7 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { CheckCircle2, ChevronDown, ChevronRight, Clock3, Loader2, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { showHref } from "@media-track/workflow/scope";
-import type { ActivityActiveRun, ActivityCompletedItem, ActivityView } from "../lib/activity-view";
+import type {
+  ActivityActiveRun,
+  ActivityCompletedItem,
+  ActivityView,
+  RetryRefusalReason,
+} from "../lib/activity-view";
 import { seasonLabelText } from "../lib/activity-season-label";
 import { isDemoModeClient } from "../lib/demo-mode";
 import { demoCompletedItems, demoInProgressActivityItems } from "../lib/demo-session";
@@ -261,9 +266,19 @@ function RetryButton({ runId, title }: { runId: string; title: string }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ runId }),
       });
-      const result = (await res.json()) as { status?: string };
+      const result = (await res.json()) as {
+        status?: string;
+        reason?: RetryRefusalReason;
+      };
       if (result.status !== "retried") {
-        window.alert(`「${title}」无法重试（可能已在处理）。`);
+        // Distinguish the two refusal causes. "可能已在处理" is wrong — and
+        // misleading — for a patrol run: patrols are not queue-claimable, so they
+        // can never be retried this way; the user should re-trigger a patrol.
+        window.alert(
+          result.reason === "kind_not_retriable"
+            ? `「${title}」是巡检任务，不能单独重试。请在设置里触发一次巡检，或等待下一次自动巡检。`
+            : `「${title}」无法重试（可能已在处理）。`,
+        );
       }
       // The next poll reconciles: the run re-appears in 排队中/获取中.
     } catch {
