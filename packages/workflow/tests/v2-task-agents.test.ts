@@ -63,7 +63,7 @@ describe("TV/anime system prompt carries the 字字泣血 invariants", () => {
     [/(foreign|different work)[^.]*(never|discard|wipe)|discardStaging wipes/i, "foreign work → discarded with staging, never mapped (NOT isolated for review)"],
     [/LAST (action|step)|never mark before|in place|only after/i, "mark is the LAST step, only after files are placed"],
     [/stop|no (more|further).*(transfer|side effect)|once cover/i, "stop once coverage met"],
-    [/do not rename|never rename|keep.*original name/i, "no renaming"],
+    [/renameVideo|Title\.S\d{2}E\d{2}|canonical/i, "canonical rename (was: no renaming)"],
     [/multi-season|complete-series|distribute.*season|moveToSeason\(\{moves:/i, "multi-season pack distribution"],
     [/plan the (whole|full) distribution|lay out.*distribution plan|before.*moveToSeason.*plan/i, "plan the full distribution before the batch move"],
     [/not recopied|already has|never recopy|leave the rest/i, "already-covered seasons not recopied"],
@@ -74,6 +74,28 @@ describe("TV/anime system prompt carries the 字字泣血 invariants", () => {
     [/lag the disk|inspect[^.]*(first|before)[^.]*search|already in its season director[^.]*mark/i, "patrol: inspect landing point FIRST, mark what 115 already has, don't re-acquire (§6b#8)"],
   ])("mentions %s (%s)", (re) => {
     expect(prompt).toMatch(re);
+  });
+});
+
+describe("canonical video rename prompt contract (§3.6 / §4.5)", () => {
+  it("TV prompt: renameVideo + Title.SxxExx shape + rename-before-move order", () => {
+    const prompt = buildTvAnimeSystemPrompt({});
+    expect(prompt).toMatch(/renameVideo/);
+    expect(prompt).toMatch(/Title\.S\d{2}E\d{2}/);
+    // order: rename comes BEFORE move — renameVideo appears before moveToSeason in the loop
+    expect(prompt.indexOf("renameVideo")).toBeGreaterThan(-1);
+    expect(prompt.indexOf("renameVideo")).toBeLessThan(prompt.indexOf("moveToSeason"));
+    // subtitle rename AFTER video rename
+    expect(prompt).toMatch(/renameSubtitle/);
+  });
+
+  it("movie prompt: Title (Year).ext + flattenMovie auto-rename (movies must NOT call renameVideo)", () => {
+    const prompt = buildMovieSystemPrompt({});
+    expect(prompt).toMatch(/Title \(Year\)\.ext/);
+    expect(prompt).toMatch(/flattenMovie/);
+    expect(prompt).toMatch(/renames|AUTOMATIC|自动改名/i);
+    // movies never call renameVideo — the prompt says so explicitly (flattenMovie handles it)
+    expect(prompt).toMatch(/do NOT call renameVideo/);
   });
 });
 

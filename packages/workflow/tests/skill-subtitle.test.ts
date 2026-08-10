@@ -14,6 +14,13 @@ describe("subtitle skill section", () => {
     expect(body).toMatch(/soft|不阻塞|does not block/i); // soft-fail philosophy
   });
 
+  it("teaches the hard order: renameSubtitle AFTER renameVideo (subtitle prefix follows the canonical video name)", () => {
+    const body = readSkillSection("subtitle");
+    expect(body).toMatch(/renameVideo/);
+    expect(body).toMatch(/AFTER `?renameVideo|Call this AFTER|video rename comes FIRST/i);
+    expect(body).not.toMatch(/ONLY files you may rename/); // videos are renamed too now
+  });
+
   it("both movie and tv skill indexes point at the subtitle section", () => {
     const movie = skillIndexForAgent("movie");
     const tv = skillIndexForAgent("tv");

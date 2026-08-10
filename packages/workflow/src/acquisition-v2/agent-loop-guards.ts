@@ -20,7 +20,7 @@ export const REMIND_WITHIN_STEPS = 10;
 export const STEP_50_REMINDER =
   "【进度提醒】本次任务已接近步数预算(约剩 10 步)。这是正常的收尾信号,不是失败。请:" +
   "① 不要再发起任何新的搜索或转存(searchResources / transferCandidate / transferUntilLanded 都不要);" +
-  "② 把已转存好的归位(TV/动漫用 moveToSeason 入季;电影用 flattenMovie 收进影片目录)、对确实落盘的 markObtained;" +
+  "② 把已转存好的先规范化文件名(TV/动漫 renameVideo 得 Title.SxxExx、renameSubtitle 配对字幕;电影 flattenMovie 自动改名入影片目录),再 moveToSeason 入季 / markObtained 确实落盘的;" +
   "③ 打扫战场:TV/动漫用 discardStaging 清空 staging;电影没有独立 staging——由 flattenMovie(见②)负责就地清掉包装目录,不要用 discardStaging;④ finish。" +
   "这次没来得及拿的集不要紧——只要没被 markObtained,下次每日巡检会自动发现并补齐。" +
   "请稳妥收尾,绝不要为赶进度草率丢弃还能拿到的资源。";
@@ -47,7 +47,7 @@ export function budgetSoftThreshold(hardBudget: number): number {
 export const BUDGET_REMINDER =
   "【网盘调用提醒】本次任务的 115 接口调用已接近预算上限。这是正常的收尾信号,不是失败。请:" +
   "① 不要再发起任何新的搜索或转存(searchResources / transferCandidate / transferUntilLanded 都不要);" +
-  "② 对确实落盘的 markObtained、把已转存好的归位(TV/动漫用 moveToSeason 入季;电影用 flattenMovie 收进影片目录);" +
+  "② 对确实落盘的 markObtained、把已转存好的先规范化文件名(TV/动漫 renameVideo 得 Title.SxxExx、renameSubtitle 配对字幕;电影 flattenMovie 自动改名入影片目录),再 moveToSeason 入季;" +
   "③ 打扫战场:TV/动漫用 discardStaging 清空 staging;电影已落影片目录、flattenMovie 已就地清理,不要再 discardStaging;④ finish。" +
   "这次没来得及拿的集不要紧——只要没被 markObtained,下次每日巡检会自动补齐。" +
   "请立刻稳妥收尾:调用一旦到硬上限会被强制中断,别把预算耗在还没收尾上。";

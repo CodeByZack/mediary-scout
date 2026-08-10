@@ -120,6 +120,11 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
     // The agent's search keywords must reference the title — reject genre/year-only
     // fallbacks ("2026 电影") at the tool boundary so they never burn a search.
     titleTerms: [request.target.title, ...request.target.aliases],
+    // Canonical rename context: TV/anime titles drive renameVideo's TV-shape guard
+    // + the skill's naming examples; movies additionally carry the year so
+    // flattenMovie auto-renames the film + subtitles to `Title (Year).ext`.
+    canonicalTitle: request.target.title,
+    ...(request.target.kind === "movie" ? { canonicalYear: request.target.year } : {}),
     ...(request.searchBudget === undefined ? {} : { searchBudget: request.searchBudget }),
     ...(request.searchProfile === undefined ? {} : { searchProfile: request.searchProfile }),
   });

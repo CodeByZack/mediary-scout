@@ -128,4 +128,9 @@ describe("interpretTool — subtitle tools (mirror contract with buildSandboxToo
     expect(interpretTool("renameSubtitle", { renames: [{ fileId: "f", newName: "Show.S01E01.ass" }] })).toEqual({ activity: "正在重命名字幕…", phase: "organize" });
     expect(interpretTool("renameSubtitle", { renames: [{ fileId: "a", newName: "A.ass" }, { fileId: "b", newName: "B.ass" }] })).toEqual({ activity: "正在重命名 2 个字幕…", phase: "organize" });
   });
+
+  it("renameVideo → 规范化视频文件名 (organize)", () => {
+    expect(interpretTool("renameVideo", { renames: [{ fileId: "f", newName: "Show.S01E01.mkv" }] })).toEqual({ activity: "正在规范化视频文件名…", phase: "organize" });
+    expect(interpretTool("renameVideo", { renames: [{ fileId: "a", newName: "A.mkv" }, { fileId: "b", newName: "B.mkv" }] })).toEqual({ activity: "正在规范化 2 个视频文件名…", phase: "organize" });
+  });
 });
