@@ -891,9 +891,13 @@ function buildAccountContextResolver(): ResolveAccountWorkerContext {
     const parents = await getWorkerStorageParents(accountId, connectedStorageId);
     const { model, preferredLanguage, qualityPreference } = await getAgentModel(scoped);
     // The run's drive brand selects its resource sources (quark→PanSou quark-only;
-    // 115→PanSou+Prowlarr). null when no drive resolves → default 115 fallback.
+    // 115→PanSou+Prowlarr). null when no drive resolves → env MEDIA_TRACK_DEFAULT_STORAGE_BRAND
+    // → default 115 fallback. (env was previously ignored here: a fake/dev deploy with no
+    // connected drive hard-fell back to pan115, filtering out quark links → 0 candidates.)
     const driveProvider =
-      (await getAccountStorageCredentials(accountId, connectedStorageId))?.provider ?? "pan115";
+      (await getAccountStorageCredentials(accountId, connectedStorageId))?.provider ??
+      process.env.MEDIA_TRACK_DEFAULT_STORAGE_BRAND ??
+      "pan115";
     const assrtToken = await getAssrtToken(scoped);
     return {
       storage: await getWorkerStorageExecutor(accountId, connectedStorageId),
@@ -1720,7 +1724,7 @@ function parseTvCandidateId(candidateId: string): { tmdbId: number; seasonNumber
 
 async function getWorkerResourceProvider(
   settings: { getSetting(key: string): Promise<string | null> } = getWorkflowRepository(),
-  provider: string = "pan115",
+  provider: string = process.env.MEDIA_TRACK_DEFAULT_STORAGE_BRAND ?? "pan115",
   accountId?: string,
 ): Promise<ResourceProvider> {
   // accountId 仅用于健康结论回写(recordPanSouHealth)。多账户场景下,worker 在
@@ -2237,6 +2241,13 @@ async function getWorkerStorageExecutor(
   }
   fakeStorageExecutor ??= new FakeStorageExecutor({
     transferOutcomes: fakeTransferOutcomes(),
+    defaultTransferOutcome: {
+      status: "succeeded",
+      providerMessage: "fake transfer completed",
+      files: [1, 2, 3].flatMap((season) =>
+        episodeCodes(season, 24).map((code) => fakeVerifiedFile("fake_s" + season, code)),
+      ),
+    },
   });
   return fakeStorageExecutor;
 }
