@@ -41,12 +41,24 @@ describe("buildSandboxToolSet — the agent's tool surface over the cage", () =>
         "markObtained",
         "moveToSeason",
         "readSkill",
+        "renameVideo",
         "reportNoCoverage",
         "searchResources",
         "transferCandidate",
         "viewResourceSnapshot",
       ].sort(),
     );
+  });
+
+  it("registers renameVideo for BOTH TV and movie toolsets, with both shape contracts in the description", async () => {
+    const { sandbox } = await setup();
+    const tvTools = buildSandboxToolSet(sandbox);
+    const movieTools = buildSandboxToolSet(sandbox, { movie: true });
+    expect("renameVideo" in tvTools).toBe(true);
+    expect("renameVideo" in movieTools).toBe(true);
+    const description = (tvTools["renameVideo"] as { description?: string }).description ?? "";
+    expect(description).toMatch(/Title\.S\d{2}E\d{2}/); // TV/anime shape
+    expect(description).toMatch(/Title \(Year\)\.ext/); // movie shape
   });
 
   it("adds the movie-only transferUntilLanded tool ONLY for a movie task (TV/anime never gets it)", async () => {

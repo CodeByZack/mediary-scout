@@ -19,7 +19,8 @@ export function buildServerEnv(input: { port: number; sqlitePath: string; baseEn
     // (e.g. MEDIA_TRACK_STORAGE_ADAPTER=fake) from the launching shell.
     // storage=115 is "live storage mode"; the actual brand (115/quark/guangya) is
     // resolved per-drive from the DB. agent=vercel-ai is required whenever storage=115
-    // or workflow=pansou (validateRuntimeConfig); the LLM model is built lazily from
+    // (validateRuntimeConfig) — pansou alone no longer forces vercel-ai (真实搜索 +
+    // fake 盘 + stub 是受支持的 dev/preview 组合); the LLM model is built lazily from
     // per-account DB settings, so a keyless/driveless desktop still BOOTS and idles.
     MEDIA_TRACK_SEARCH_PROVIDER: "tmdb",
     MEDIA_TRACK_WORKFLOW_ADAPTER: "pansou",

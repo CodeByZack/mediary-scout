@@ -83,4 +83,70 @@ describe("TaskSandbox.flattenMovie — automatic video+subtitle extraction (movi
     expect(result.movie.map((f) => f.path).sort()).toEqual(["Inception.mkv", "Inception.zh.ass"]);
     expect(await sandbox.inspectStagingDirs()).toEqual([]); // wrapper removed
   });
+
+  it("auto-renames the film + subtitles to Title (Year).ext when canonicalTitle+canonicalYear are present", async () => {
+    const provider = new FakeResourceProviderV2({
+      results: { x: [{ id: "film", title: "Oppenheimer" }] },
+    });
+    const storage = new Storage115Simulator({
+      packs: {
+        film: {
+          files: [
+            { path: "Oppenheimer.2023.1080p/Oppenheimer.mkv", sizeBytes: 100 },
+            { path: "Oppenheimer.2023.1080p/Oppenheimer.zh.sc.ass", sizeBytes: 3 },
+          ],
+        },
+      },
+    });
+    const movieDir = await storage.createDirectory({ name: "Oppenheimer (2023)", parentId: "root" });
+    const sandbox = new TaskSandbox({
+      provider,
+      storage,
+      stagingDirectoryId: movieDir,
+      targetMovieDirectoryId: movieDir,
+      need: ["MOVIE"],
+      canonicalTitle: "奥本海默",
+      canonicalYear: 2023,
+    });
+    const search = await sandbox.searchResources("x");
+    await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "film" });
+
+    const result = await sandbox.flattenMovie();
+
+    // video → `Title (Year).mkv`; subtitle keeps the .sc 简繁 infix →
+    // `Title (Year).sc.ass` (same infix rule renameSubtitle teaches).
+    expect(result.movie.map((f) => f.path).sort()).toEqual(["奥本海默 (2023).mkv", "奥本海默 (2023).sc.ass"]);
+    expect(await sandbox.inspectStagingDirs()).toEqual([]); // wrapper still removed
+  });
+
+  it("keeps the ORIGINAL names when canonicalTitle is absent (zero-breakage regression)", async () => {
+    const provider = new FakeResourceProviderV2({
+      results: { x: [{ id: "film", title: "Inception" }] },
+    });
+    const storage = new Storage115Simulator({
+      packs: {
+        film: {
+          files: [
+            { path: "Inception.2010.1080p/Inception.mkv", sizeBytes: 100 },
+            { path: "Inception.2010.1080p/Inception.zh.ass", sizeBytes: 3 },
+          ],
+        },
+      },
+    });
+    const movieDir = await storage.createDirectory({ name: "Inception (2010)", parentId: "root" });
+    const sandbox = new TaskSandbox({
+      provider,
+      storage,
+      stagingDirectoryId: movieDir,
+      targetMovieDirectoryId: movieDir,
+      need: ["MOVIE"],
+      // no canonicalTitle/canonicalYear — flatten must behave exactly as before
+    });
+    const search = await sandbox.searchResources("x");
+    await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "film" });
+
+    const result = await sandbox.flattenMovie();
+
+    expect(result.movie.map((f) => f.path).sort()).toEqual(["Inception.mkv", "Inception.zh.ass"]);
+  });
 });

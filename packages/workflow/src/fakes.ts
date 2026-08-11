@@ -76,6 +76,11 @@ export class FakeResourceProvider implements ResourceProvider {
 export class FakeStorageExecutor implements StorageExecutor {
   private readonly directories: Map<string, VerifiedFile[]>;
   private readonly transferOutcomes: Record<string, TransferOutcome>;
+  /** Fallback outcome for candidates NOT in transferOutcomes. When set, any
+   *  real (pansou) candidate can "land" files in the fake drive — this is what
+   *  makes the fake drive usable for end-to-end previews of the rename flow
+   *  without a real 115/quark cookie. Unset ⇒ unknown candidates fail (tests). */
+  private readonly defaultTransferOutcome: TransferOutcome | undefined;
   private readonly nestedDirectories: Set<string>;
   private nextDirectoryNumber = 1;
   private nextTransferNumber = 1;
@@ -87,6 +92,7 @@ export class FakeStorageExecutor implements StorageExecutor {
   constructor(input: {
     directories?: Record<string, VerifiedFile[]>;
     transferOutcomes?: Record<string, TransferOutcome>;
+    defaultTransferOutcome?: TransferOutcome;
     nestedDirectories?: Set<string>;
     packageTrees?: Record<string, FakePackageTreeFile[]>;
     unparsedFiles?: Record<string, UnparsedVideoFile[]>;
@@ -110,6 +116,7 @@ export class FakeStorageExecutor implements StorageExecutor {
       ]),
     );
     this.transferOutcomes = cloneTransferOutcomes(input.transferOutcomes ?? {});
+    this.defaultTransferOutcome = input.defaultTransferOutcome;
     this.nestedDirectories = new Set(input.nestedDirectories ?? []);
   }
 
@@ -184,11 +191,13 @@ export class FakeStorageExecutor implements StorageExecutor {
     directoryId: string;
     candidate: ResourceCandidate;
   }): Promise<TransferAttempt> {
-    const outcome = this.transferOutcomes[input.candidate.id] ?? {
-      status: "failed",
-      providerMessage: "no fake transfer outcome configured",
-      files: [],
-    };
+    const outcome =
+      this.transferOutcomes[input.candidate.id] ??
+      this.defaultTransferOutcome ?? {
+        status: "failed",
+        providerMessage: "no fake transfer outcome configured",
+        files: [],
+      };
     const materializedFileIds = outcome.files.map((file) => file.id);
 
     if (outcome.status === "succeeded") {
@@ -197,7 +206,10 @@ export class FakeStorageExecutor implements StorageExecutor {
     }
 
     const attempt: TransferAttempt = {
-      id: `transfer_${this.nextTransferNumber}`,
+      // Scope the id to the run, same as the real executors: the fake's
+      // per-instance counter resets on every run, so a bare `transfer_N`
+      // collides on the global transfer_attempts.id primary key across runs.
+      id: `${input.workflowRunId}_transfer_${this.nextTransferNumber}`,
       workflowRunId: input.workflowRunId,
       candidateId: input.candidate.id,
       status: outcome.status,

@@ -143,7 +143,7 @@ export function buildSandboxToolSet(
     },
     moveToSeason: {
       description:
-        "Submit your WHOLE distribution plan in ONE call: `{moves:[{season,fileIds},...]}` — which files go into which season's directory. Each video's SUBTITLES go in the SAME season's fileIds (never leave subtitles behind — they must land beside their video). Move ONLY still-missing episodes; never recopy a season the library already has. A movie move OMITS `season` (the file lands in the movie directory). Returns every touched season dir + the remaining staging so you verify the whole distribution at once and fix any misplacement with another call. Every fileId must currently be in staging.",
+        "Submit your WHOLE distribution plan in ONE call: `{moves:[{season,fileIds},...]}` — which files go into which season's directory. Files should already carry their CANONICAL names (renameVideo first — video, then its subtitles, then move). Each video's SUBTITLES go in the SAME season's fileIds (never leave subtitles behind — they must land beside their video). Move ONLY still-missing episodes; never recopy a season the library already has. A movie move OMITS `season` (the file lands in the movie directory). Returns every touched season dir + the remaining staging so you verify the whole distribution at once and fix any misplacement with another call. Every fileId must currently be in staging.",
       inputSchema: z.object({
         moves: z.array(z.object({ season: z.number().int().positive().optional(), fileIds: z.array(z.string()) })),
       }),
@@ -163,7 +163,7 @@ export function buildSandboxToolSet(
     },
     flattenMovie: {
       description:
-        'Movie only — AUTOMATIC: pull every video AND subtitle file out of the resource wrapper(s) up into the movie directory and remove the wrappers, in one call (no file selection — a movie is one film, take it all, subtitles included). Then delete any extras (trailers/花絮) with deleteFiles and markObtained(["MOVIE"]).',
+        'Movie only — AUTOMATIC: pull every video AND subtitle file out of the resource wrapper(s) up into the movie directory and remove the wrappers, in one call (no file selection — a movie is one film, take it all, subtitles included). It ALSO renames the film and its subtitles to the canonical `Title (Year).ext` form (e.g. 奥本海默 (2023).mkv) in place. Then delete any extras (trailers/花絮) with deleteFiles and markObtained(["MOVIE"]).',
       inputSchema: z.object({}),
       execute: () => asEvidence(() => sandbox.flattenMovie()),
     },
@@ -192,6 +192,13 @@ export function buildSandboxToolSet(
       inputSchema: z.object({ reason: z.string() }),
       execute: (args: { reason: string }) => asEvidence(() => sandbox.reportNoCoverage(args.reason)),
     },
+    renameVideo: {
+      description:
+        "Rename landed video files to CANONICAL names BEFORE moving them, in ONE BATCH: decide EVERY video's canonical name first (fileIds from inspectStaging), then submit them all as renames:[{fileId,newName},…]. TV/anime: Title.S01E01.ext — must carry the episode code (SxxExx), keep the video extension (video Show - 01.mkv → Show.S01E01.mkv). Movie: Title (Year).ext — keep the video extension, the year must match. This is the FIRST rename: rename the videos, THEN renameSubtitle so each subtitle's prefix matches its video, THEN moveToSeason/flattenMovie. NEVER rename one file per call; per-item guard violations come back in `errors` without aborting the rest.",
+      inputSchema: z.object({ renames: z.array(z.object({ fileId: z.string(), newName: z.string() })).min(1) }),
+      execute: (args: { renames: Array<{ fileId: string; newName: string }> }) =>
+        asEvidence(() => sandbox.renameVideo(args)),
+    },
   };
   if (options.movie) {
     tools["transferUntilLanded"] = {
@@ -210,14 +217,14 @@ export function buildSandboxToolSet(
     };
     tools["transferSubtitle"] = {
       description:
-        "Land a chosen assrt subtitle package's files into staging. Pass the candidateId from viewSubtitleSnapshot. The system resolves the package's filelist (per-episode .ass/.srt with SxxExx filenames) and lands each via the drive's offline-task path. Returns the filenames that landed. Then RENAME each landed subtitle to match its video (same prefix, different extension) — subtitles are the ONLY files you may rename (a documented exception to the keep-original-name rule) so the scraper auto-loads them. Subtitle miss/empty filelist is a SOFT fail — it does NOT block video coverage; just proceed without subtitles.",
+        "Land a chosen assrt subtitle package's files into staging. Pass the candidateId from viewSubtitleSnapshot. The system resolves the package's filelist (per-episode .ass/.srt with SxxExx filenames) and lands each via the drive's offline-task path. Returns the filenames that landed. Then RENAME each landed subtitle to match its video (same prefix, different extension) AFTER the video was renamed to its canonical name — the scraper auto-loads the subtitle next to the video. Subtitle miss/empty filelist is a SOFT fail — it does NOT block video coverage; just proceed without subtitles.",
       inputSchema: z.object({ candidateId: z.number().int().positive() }),
       execute: (args: { candidateId: number }) =>
         asEvidence(() => sandbox.transferSubtitle({ candidateId: args.candidateId })),
     };
     tools["renameSubtitle"] = {
       description:
-        "Rename landed subtitle files to match their videos, in ONE BATCH: decide EVERY subtitle↔episode pairing first (fileIds from inspectStaging), then submit them all as renames:[{fileId,newName},…] — same filename prefix as each episode's video, keep the subtitle extension (video Show.S02E01.mkv → subtitle Show.S02E01.ass; 简/繁 variants keep their .sc/.tc infix). NEVER rename one file per call — at 77 episodes that collapses; the batch is one call regardless of count. Subtitles are the ONLY files you may rename (the documented exception) so the scraper auto-loads them. Per-item guard violations come back in `errors` without aborting the rest. Then move each subtitle into its season with its video via moveToSeason.",
+        "Rename landed subtitle files to match their videos, in ONE BATCH: decide EVERY subtitle↔episode pairing first (fileIds from inspectStaging), then submit them all as renames:[{fileId,newName},…] — same filename prefix as each episode's video, keep the subtitle extension (video Show.S02E01.mkv → subtitle Show.S02E01.ass; 简/繁 variants keep their .sc/.tc infix). NEVER rename one file per call — at 77 episodes that collapses; the batch is one call regardless of count. Call this AFTER renameVideo — the subtitles are renamed to match their ALREADY-canonical video names (the video rename comes FIRST so the prefix is canonical; a subtitle renamed before its video pairs against the wrong prefix). Per-item guard violations come back in `errors` without aborting the rest. Then move each subtitle into its season with its video via moveToSeason.",
       inputSchema: z.object({
         renames: z.array(z.object({ fileId: z.string(), newName: z.string() })).min(1),
       }),

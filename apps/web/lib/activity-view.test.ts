@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   InMemoryWorkflowRepository,
+  type AgentStep,
   type EpisodeState,
   type MediaTitle,
   type PersistWorkflowRunSnapshotInput,
@@ -91,6 +92,16 @@ function run(input: {
   };
 }
 
+function step(
+  ordinal: number,
+  toolName: string,
+  activity: string,
+  phase: AgentStep["phase"],
+  args: Record<string, unknown>,
+): AgentStep {
+  return { ordinal, toolName, activity, phase, args, at: "2026-06-17T00:00:10.000Z" };
+}
+
 describe("getActivityView", () => {
   it("active run over multiple seasons exposes the distinct sorted seasonNumbers", async () => {
     const repo = new InMemoryWorkflowRepository();
@@ -168,5 +179,67 @@ describe("getActivityView", () => {
 
     const viewB = await getActivityView({ repository: repo, accountId: "acct_default", connectedStorageId: "cs_b" });
     expect(viewB.active.map((r) => r.title)).toEqual(["Beta"]);
+  });
+
+  it("running run carries its agent steps; the last step is marked running (⏳), earlier ones success", async () => {
+    const repo = new InMemoryWorkflowRepository();
+    await repo.saveWorkflowRunSnapshot(run({ id: "r_run", tmdbId: 1, name: "Running", status: "running", startedAt: "2026-06-17T00:00:00Z" }));
+    await repo.appendAgentStep("r_run", step(0, "searchResources", "正在搜索资源:庆余年", "search", { keyword: "庆余年" }));
+    await repo.appendAgentStep("r_run", step(1, "transferCandidate", "正在转存到网盘…", "transfer", {}));
+
+    const view = await getActivityView({ repository: repo });
+    const r = view.active.find((x) => x.runId === "r_run")!;
+    expect(r.steps.map((s) => s.stepStatus)).toEqual(["success", "running"]);
+    expect(r.steps[1]!.activity).toBe("正在转存到网盘…");
+    expect(r.steps[1]!.failReason).toBeUndefined();
+  });
+
+  it("completed failed run marks its last step failed with the report's wording", async () => {
+    const repo = new InMemoryWorkflowRepository();
+    const snap = run({ id: "r_fail", tmdbId: 2, name: "Fail", status: "failed", startedAt: "2026-06-17T00:01:00Z", finishedAt: "2026-06-17T00:01:30Z" });
+    snap.notifications[0]!.report!.status = "failed";
+    snap.notifications[0]!.report!.lines = ["转存失败:配额不足"];
+    await repo.saveWorkflowRunSnapshot(snap);
+    await repo.appendAgentStep("r_fail", step(0, "searchResources", "正在搜索资源…", "search", {}));
+    await repo.appendAgentStep("r_fail", step(1, "transferCandidate", "正在转存到网盘…", "transfer", {}));
+
+    const view = await getActivityView({ repository: repo });
+    const done = view.recentCompleted.find((c) => c.title === "Fail")!;
+    expect(done.steps.map((s) => s.stepStatus)).toEqual(["success", "failed"]);
+    expect(done.steps[1]!.failReason).toBe("转存失败:配额不足");
+  });
+
+  it("completed successful run marks every step success", async () => {
+    const repo = new InMemoryWorkflowRepository();
+    const snap = run({ id: "r_done", tmdbId: 3, name: "Done", status: "succeeded", startedAt: "2026-06-17T00:02:00Z", finishedAt: "2026-06-17T00:02:30Z" });
+    snap.notifications[0]!.report!.status = "complete";
+    await repo.saveWorkflowRunSnapshot(snap);
+    await repo.appendAgentStep("r_done", step(0, "searchResources", "正在搜索资源…", "search", {}));
+    await repo.appendAgentStep("r_done", step(1, "markObtained", "已确认 12 集入库", "mark", { codes: ["S01E01"] }));
+
+    const view = await getActivityView({ repository: repo });
+    const done = view.recentCompleted.find((c) => c.title === "Done")!;
+    expect(done.steps.map((s) => s.stepStatus)).toEqual(["success", "success"]);
+    expect(done.steps[1]!.failReason).toBeUndefined();
+  });
+
+  it("queued run without a trace has empty steps (no failure inference)", async () => {
+    const repo = new InMemoryWorkflowRepository();
+    await repo.saveWorkflowRunSnapshot(run({ id: "r_q", tmdbId: 4, name: "Queue", status: "queued", startedAt: "2026-06-17T00:03:00Z" }));
+
+    const view = await getActivityView({ repository: repo });
+    const q = view.active.find((x) => x.runId === "r_q")!;
+    expect(q.steps).toEqual([]);
+  });
+
+  it("queued run with a leftover trace marks its last step failed (上一轮执行失败，等待重试)", async () => {
+    const repo = new InMemoryWorkflowRepository();
+    await repo.saveWorkflowRunSnapshot(run({ id: "r_q", tmdbId: 4, name: "Queue", status: "queued", startedAt: "2026-06-17T00:03:00Z" }));
+    await repo.appendAgentStep("r_q", step(0, "searchResources", "正在搜索资源…", "search", {}));
+
+    const view = await getActivityView({ repository: repo });
+    const q = view.active.find((x) => x.runId === "r_q")!;
+    expect(q.steps[0]!.stepStatus).toBe("failed");
+    expect(q.steps[0]!.failReason).toBe("上一轮执行失败，等待重试");
   });
 });

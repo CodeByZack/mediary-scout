@@ -1,0 +1,17 @@
+appname                    = mediary-scout
+version                    = 1.0.0
+display_name               = MediaTrack
+desc                       = MediaTrack 影音追更与自动入库工具：追踪剧集更新、搜索网盘资源（PanSou/TMDB）、自动下载并整理入库（115）。
+platform                   = arm
+source                     = thirdparty
+maintainer                 = mediary-scout
+maintainer_url             = https://github.com/mediary-scout
+distributor                = mediary-scout
+distributor_url            = https://github.com/mediary-scout
+desktop_uidir              = ui
+desktop_applaunchname      = mediary-scout.Application
+checkport                  = false
+service_port               = 3333
+ctl_stop                   = true
+disable_authorization_path = true
+install_dep_apps           = nodejs_v24

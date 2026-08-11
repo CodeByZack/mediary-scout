@@ -93,6 +93,10 @@ export function interpretTool(toolName: string, args: Record<string, unknown> = 
       const count = asArray(args.renames).length;
       return { activity: count > 1 ? `正在重命名 ${count} 个字幕…` : "正在重命名字幕…", phase: "organize" };
     }
+    case "renameVideo": {
+      const count = asArray(args.renames).length;
+      return { activity: count > 1 ? `正在规范化 ${count} 个视频文件名…` : "正在规范化视频文件名…", phase: "organize" };
+    }
     case "finish":
       return { activity: "正在收尾…", phase: "finalize" };
     case "reportNoCoverage":

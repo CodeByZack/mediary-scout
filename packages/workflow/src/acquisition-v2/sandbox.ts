@@ -7,6 +7,7 @@ import {
   normalizeSearchKeyword,
 } from "../planning-search-gate.js";
 import type { AssrtCandidate, AssrtSubtitleFile, AssrtProviderPort } from "../subtitle-provider.js";
+import { canonicalMovieFileName, episodeCodeFromFileName } from "../episode-code.js";
 import type { ResourceProviderV2, ResourceSnapshotV2 } from "./fake-provider.js";
 import type { SimTreeFile, StorageV2, TransferAttemptResult } from "./storage-115-simulator.js";
 import { isSystemicTransferBlockMessage } from "./transfer-block.js";
@@ -22,6 +23,10 @@ const QUALITY_SUBTITLE_TOKEN =
   /\b(?:4k|2160p|1080p|720p|hdr|dv|remux|web-?dl|bluray|bdrip)\b|蓝光|中字|国语|双语|字幕/gi;
 
 const SUBTITLE_NAME_PATTERN = /\.(srt|ass|ssa|sub|idx|vtt|sup|smi)$/i;
+
+/** Video extensions the canonical-rename guard keeps — aligned with the simulator's
+ *  VIDEO_EXTENSIONS so a renamed file stays a playable video (renameVideo §1.3 #4). */
+const VIDEO_NAME_PATTERN = /\.(mkv|mp4|avi|ts|m2ts|mov|flv|wmv)$/i;
 
 const STRIP_NOTICE =
   "已从关键词移除画质/字幕词(如 4K/1080p/蓝光/中字/字幕):PanSou 是通配符匹配,加这些只会把召回打成子集或归零,raw 裸标题召回最全。已改用裸标题搜索。";
@@ -112,6 +117,12 @@ export interface TaskSandboxOptions {
   /** The task's fine-grained search profile — enables the anime taboo-keyword
    *  validator (warnings only, never blocking). 病2b。 */
   searchProfile?: SearchProfile;
+  /** 规范改名上下文:TV/动漫标题(供 skill 提示 / flattenMovie 电影名);电影带 year。
+   *  renameVideo 用它区分两种形状:TV 要 `Title.SxxExx.ext`,电影要 `Title (Year).ext`。 */
+  canonicalTitle?: string;
+  /** 电影规范名 `Title (Year).ext` 的年份(仅电影传)。存在 ⇒ renameVideo 走电影形状
+   *  校验(年份必须精确相等),flattenMovie 自动改名用它拼 `Title (Year).ext`。 */
+  canonicalYear?: number;
 }
 
 export interface SearchToolResult {
@@ -162,6 +173,9 @@ export class TaskSandbox {
   private readonly need: readonly string[];
   private readonly titleTerms: readonly string[];
   private readonly subtitleFallback: boolean;
+  /** 规范改名上下文 — 见 TaskSandboxOptions.canonicalTitle / canonicalYear。 */
+  private readonly canonicalTitle: string | undefined;
+  private readonly canonicalYear: number | undefined;
   /** Reserve-zone threshold (movie 8+2) — undefined disables the reserve zone. */
   private readonly softThreshold: number | undefined;
   private readonly profile: SearchProfile | undefined;
@@ -206,6 +220,8 @@ export class TaskSandbox {
     this.movieDir = options.targetMovieDirectoryId;
     this.need = options.need ?? [];
     this.titleTerms = options.titleTerms ?? [];
+    this.canonicalTitle = options.canonicalTitle;
+    this.canonicalYear = options.canonicalYear;
     this.subtitleProvider = options.subtitleProvider;
   }
 
@@ -690,7 +706,15 @@ export class TaskSandbox {
    *  subtitle file up to the movie dir root (§1.14 — subtitles ride along), then
    *  remove the now-residual wrapper subdirs (non-media like covers/nfo go with
    *  them). Fully automatic — no per-file selection (a movie is one film, take it
-   *  all); the agent removes any extras (花絮) afterward with deleteFiles. */
+   *  all); the agent removes any extras (花絮) afterward with deleteFiles.
+   *
+   *  Canonical auto-rename: when the orchestrator passed a canonicalTitle (movie
+   *  tasks always do), every video and subtitle is ALSO rewritten to the
+   *  `Title (Year).ext` canonical form — videos via canonicalMovieFileName
+   *  (extension carried over), subtitles to the same prefix with the .sc/.tc
+   *  简繁 infix preserved. Without canonicalTitle (sandboxes tests construct
+   *  without the context) the flatten behaves exactly as before — zero breakage
+   *  for existing callers. */
   async flattenMovie(): Promise<{ movie: SimTreeFile[] }> {
     if (!this.storage || this.movieDir === undefined) {
       throw new Error("SANDBOX_NOT_A_MOVIE: flattenMovie is movie-only");
@@ -702,10 +726,48 @@ export class TaskSandbox {
     if (nested.length > 0) {
       await this.storage.moveFiles({ fileIds: nested.map((file) => file.id), targetDirectoryId: root });
     }
+    if (this.canonicalTitle !== undefined) {
+      await this.renameMovieMediaToCanonical(this.storage, root);
+    }
     for (const wrapper of await this.storage.listSubdirectories({ directoryId: root })) {
       await this.storage.removeDirectory({ directoryId: wrapper.id });
     }
     return { movie: await this.storage.listTree({ directoryId: root }) };
+  }
+
+  /** Canonical movie auto-rename (flattenMovie only): every video at the movie
+   *  dir root becomes `Title (Year).ext` via canonicalMovieFileName (extension
+   *  carried over so the film stays playable); subtitles become
+   *  `Title (Year).ext` with the .sc/.tc 简繁 infix preserved
+   *  (`Title (Year).sc.ass`) — the same infix rule renameSubtitle teaches.
+   *  Shapes are generated, not agent-submitted, so no guard failures are
+   *  possible here. */
+  private async renameMovieMediaToCanonical(storage: StorageV2, directoryId: string): Promise<void> {
+    const year = this.canonicalYear ?? "";
+    const title = this.canonicalTitle!;
+    for (const file of await storage.listTree({ directoryId })) {
+      // All media files sit at the movie dir root after the lift — path is the
+      // bare filename there; a basename split keeps this robust regardless.
+      const sourceName = file.path.split("/").pop() ?? file.path;
+      if (file.isVideo) {
+        await storage.renameFile({
+          directoryId,
+          fileId: file.id,
+          newName: canonicalMovieFileName({ title, year, sourceName }),
+        });
+      } else if (file.isSubtitle) {
+        const infix = /\.(sc|tc)(\.[A-Za-z0-9]+)$/i.exec(sourceName);
+        // infix[1] is "sc"/"tc" WITHOUT the leading dot (the regex consumed it as
+        // the separator) — rebuild with the dot so `Show.zh.sc.ass` →
+        // `Title (Year).sc.ass`, not `Title (Year)sc.ass`.
+        const suffix = infix ? `.${infix[1]}${infix[2]}` : (/\.[A-Za-z0-9]+$/.exec(sourceName)?.[0] ?? "");
+        await storage.renameFile({
+          directoryId,
+          fileId: file.id,
+          newName: `${title} (${year})${suffix}`,
+        });
+      }
+    }
   }
 
   /** The agent declares it is done. Returns the honest coverage picture from the
@@ -1021,6 +1083,102 @@ export class TaskSandbox {
         if (!SUBTITLE_NAME_PATTERN.test(newName)) {
           throw new Error(
             `SANDBOX_INVALID_SUBTITLE_NAME: newName must keep a subtitle extension (.srt/.ass/.ssa/.sub/.idx/.vtt/.sup/.smi)`,
+          );
+        }
+        await this.storage.renameFile({
+          directoryId: this.stagingDirectoryId,
+          fileId,
+          newName,
+        });
+        renamed.push(newName);
+      } catch (error) {
+        errors.push({ fileId, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { renamed, ...(errors.length > 0 ? { errors } : {}) };
+  }
+
+  /** Rename landed VIDEO files in staging to CANONICAL names — the FIRST rename,
+   *  before renameSubtitle (each subtitle's newName must follow its video's
+   *  canonical prefix). BATCH shape mirrors renameSubtitle: the agent decides
+   *  EVERY video's canonical name (fileIds from inspectStaging), then submits
+   *  them in ONE call — the same 77-episode collapse lesson applies to videos.
+   *  One staging listing serves the whole batch; guards stay per-item and
+   *  violations are collected instead of aborting the batch.
+   *
+   *  Per-item guards (§1.3, in order):
+   *   1. fileId is in THIS task's staging;
+   *   2. source is a video (isVideo);
+   *   3. newName is a bare filename (no path separators);
+   *   4. newName keeps a video extension;
+   *   5. shape contract by task kind — TV/anime: `Title.SxxExx.ext`, i.e.
+   *      episodeCodeFromFileName(newName) must not be null (the file must stay
+   *      "visible" as an episode under the identity contract); movie: the
+   *      `Title (YYYY).ext` shape, with the year exactly equal to
+   *      canonicalYear when the sandbox carries one (movie tasks always do);
+   *   6. no filename-hostile characters `[\\/:*?"<>|]`.
+   *
+   *  Deliberately NOT enforced: newName's prefix need not equal the title — a
+   *  real pack often uses 场景名/罗马音/原名 (庆余年 → Qing.Yu.Nian.S01E01.mkv)
+   *  and the scraper matches the season DIRECTORY; and newName's code need not
+   *  equal the source's parsed code — `第3集` in Season 03 must become S03E03, a
+   *  season context only the agent knows (episode-code.ts contract). */
+  async renameVideo(input: {
+    renames: Array<{ fileId: string; newName: string }>;
+  }): Promise<{ renamed: string[]; errors?: Array<{ fileId: string; error: string }> }> {
+    if (!this.storage || !this.stagingDirectoryId) {
+      throw new Error("SANDBOX: no storage/staging handle configured for video rename");
+    }
+    if (input.renames.length === 0) {
+      throw new Error(
+        "SANDBOX_EMPTY_RENAMES: renames must not be empty — decide every video's canonical name first (至少一项)",
+      );
+    }
+    const staging = await this.storage.listTree({ directoryId: this.stagingDirectoryId });
+    const renamed: string[] = [];
+    const errors: Array<{ fileId: string; error: string }> = [];
+    // Movie tasks always carry canonicalYear (orchestrator passes it); its
+    // presence flips the shape contract from TV to movie.
+    const movieMode = this.canonicalYear !== undefined;
+    for (const { fileId, newName } of input.renames) {
+      try {
+        const target = staging.find((file) => file.id === fileId);
+        if (!target) {
+          throw new Error(`SANDBOX_FILE_NOT_IN_STAGING: ${fileId} is not in this task's staging`);
+        }
+        if (!target.isVideo) {
+          throw new Error(
+            `SANDBOX_NOT_A_VIDEO: ${fileId} is not a video file; only videos may be renamed`,
+          );
+        }
+        if (/[\\/]/.test(newName)) {
+          throw new Error(
+            "SANDBOX_INVALID_VIDEO_NAME: newName must be a bare filename without path separators",
+          );
+        }
+        if (!VIDEO_NAME_PATTERN.test(newName)) {
+          throw new Error(
+            "SANDBOX_INVALID_VIDEO_NAME: newName must keep a video extension (.mkv/.mp4/.avi/.ts/.m2ts/.mov/.flv/.wmv)",
+          );
+        }
+        if (movieMode) {
+          const yearMatch = /\((\d{4})\)\./.exec(newName);
+          if (!yearMatch) {
+            throw new Error(`SANDBOX_INVALID_VIDEO_NAME: movie name must be "Title (Year).ext"`);
+          }
+          if (Number(yearMatch[1]) !== this.canonicalYear) {
+            throw new Error(
+              `SANDBOX_INVALID_VIDEO_NAME: movie name must be "Title (Year).ext" with year ${this.canonicalYear}`,
+            );
+          }
+        } else if (episodeCodeFromFileName(newName) === null) {
+          throw new Error(
+            "SANDBOX_INVALID_VIDEO_NAME: newName must carry the episode code (SxxExx)",
+          );
+        }
+        if (/[\\/:*?"<>|]/.test(newName)) {
+          throw new Error(
+            "SANDBOX_INVALID_VIDEO_NAME: newName contains characters not allowed in file names",
           );
         }
         await this.storage.renameFile({

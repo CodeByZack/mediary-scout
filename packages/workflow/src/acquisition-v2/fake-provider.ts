@@ -82,3 +82,4 @@ function contentAddressedId(candidates: SimResourceCandidate[]): string {
   }
   return `snap_${hash.toString(36)}`;
 }
+// test

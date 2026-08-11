@@ -61,6 +61,23 @@ describe("acquisition skill — localized, sectioned, on-demand manual", () => {
     expect(tv.toLowerCase()).toMatch(/subtitle/); // each video's subtitle rides in the same season's fileIds
   });
 
+  it("the tv section teaches canonical renaming BEFORE distribution (renameVideo, hard order)", () => {
+    const tv = readSkillSection("tv");
+    expect(tv).toMatch(/renameVideo/);
+    expect(tv).toMatch(/Title\.S\d{2}E\d{2}/); // canonical TV shape
+    expect(tv).toMatch(/Canonical naming/);
+    expect(tv).toMatch(/rename.*BEFORE.*distribute|before.*moveToSeason/i); // order is hard
+    expect(tv).not.toMatch(/Keep the ORIGINAL names \(never rename\)/); // old no-rename doctrine gone
+  });
+
+  it("the movie section teaches flattenMovie AUTO-renames the film to Title (Year).ext (no renameVideo)", () => {
+    const movie = readSkillSection("movie");
+    expect(movie).toMatch(/flattenMovie/);
+    expect(movie).toMatch(/Title \(Year\)\.ext/);
+    expect(movie).toMatch(/AUTOMATICALLY|自动改名|renamed AUTOMATICALLY/i);
+    expect(movie).toMatch(/do NOT call renameVideo/); // movies never call renameVideo
+  });
+
   it("gives each agent an index pointing at exactly its responsibility sections", () => {
     const movieIndex = skillIndexForAgent("movie");
     expect(movieIndex).toMatch(/movie/);

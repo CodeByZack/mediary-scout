@@ -89,6 +89,10 @@ afterEach(() => {
 });
 
 describe("connectPan123Token (bind)", () => {
+  // The FIRST boot() cold-imports the whole @media-track/workflow dist graph via
+  // vi.importActual — measured ~5.5s on a cold cache, just past vitest's 5s
+  // default. Logic is fast once the module graph is warm; give the cold boot
+  // headroom so the suite is stable on slower machines.
   it("same-account re-login (refresh): providerUid from JWT payload id, blob is exactly {token}+meta, keeps resolved CIDs", async () => {
     const rt = await boot();
     const repository = rt.getWorkflowRepository();
@@ -127,7 +131,7 @@ describe("connectPan123Token (bind)", () => {
     expect(stored!.tvCid).toBe("tv-1");
     expect(stored!.animeCid).toBe("anime-1");
     expect(stored!.createdAt).toBe("2020-01-01T00:00:00.000Z");
-  });
+  }, 20_000);
 
   it("cross-account: the 123 account already belongs to another account → StorageOwnedByOtherAccountError, other row untouched", async () => {
     const rt = await boot();
