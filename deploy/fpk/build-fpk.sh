@@ -86,8 +86,9 @@ mkdir -p "${DIST_DIR}"
 rm -f "${FPK_DIR}/${FPK_NAME}"
 
 cd "${FPK_DIR}"
+# fnpack 输出名固定为 manifest 的 appname（mediary-scout.fpk），按架构重命名到 dist/。
 "${FNPACK_BIN}" build -d .
-mv "${FPK_NAME}" "${DIST_DIR}/"
+mv mediary-scout.fpk "${DIST_DIR}/${FPK_NAME}"
 
 echo
 echo "======================================================"
