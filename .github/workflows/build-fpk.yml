@@ -1,0 +1,148 @@
+name: Build FPK (arm + x86)
+
+# 双架构 fpk 打包：arm64（GitHub 官方 ARM runner）+ x64（原生 x86_64）。
+# 触发方式：
+#   - 手动：workflow_dispatch（可带 tag 输入，发布到对应 GitHub Release）
+#   - 自动：push tag v*（产物同时挂到 GitHub Release）
+#
+# 关键点：
+#   - setup-node 用 Node 24（ABI 137），因为 fpk manifest 声明 install_dep_apps=nodejs_v24，
+#     目标 NAS 运行时是 Node 24；better-sqlite3 会按当前 Node ABI 下载预编译二进制
+#     （v12.11.1 有 node-v137 的 linux-x64 / linux-arm64 prebuild），CI 无需交叉编译。
+#   - npm run build:web 复用 ci.yml 的空库构建方式（MEDIA_TRACK_POSTGRES_URL: ""）。
+#   - fnpack 官方二进制：https://static2.fnnas.com/fnpack/fnpack-<ver>-linux-<amd64|arm64>
+#     （statically linked，两个 runner 直接可跑；sha256 已按官方发布值固定校验）。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to publish (e.g. v1.2.0, 与 fpk 版本号一致)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  FNPACK_VERSION: "1.2.1"
+  # 与 ci.yml 相同的"空库构建"条件：值被设置为空字符串，不会被 next.config 的 ??= 覆盖。
+  MEDIA_TRACK_POSTGRES_URL: ""
+
+jobs:
+  build:
+    name: Build fpk (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: arm
+            fnpack_arch: arm64
+            fnpack_sha256: aad9e16b101267d30017f39ab969e3c085fbce209716f8bd3b1e167eaf15e0cf
+            artifact: fpk-arm64
+          - arch: x64
+            runner: ubuntu-latest
+            platform: x86
+            fnpack_arch: amd64
+            fnpack_sha256: 72d2a4095da676b64510b023731a227b369d80f8079bc45ff8a2f802ec0480c1
+            artifact: fpk-x64
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # workflow_dispatch 指定了 tag 时，切到该 tag 对应的提交再构建，
+      # 保证产物与发布的版本一致（与 release-desktop.yml 行为一致）。
+      - name: Checkout tag commit (workflow_dispatch with tag)
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        run: |
+          git fetch --tags
+          if git rev-parse "refs/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
+            git checkout "${{ inputs.tag }}"
+          else
+            echo "::error::Tag ${{ inputs.tag }} does not exist. Create it first: git tag ${{ inputs.tag }} && git push origin ${{ inputs.tag }}"
+            exit 1
+          fi
+
+      # Node 24（ABI 137）= fpk 依赖的 nodejs_v24 运行时，保证原生模块 ABI 匹配。
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install fnpack (${{ matrix.fnpack_arch }})
+        run: |
+          curl -fsSL -o /tmp/fnpack "https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-linux-${{ matrix.fnpack_arch }}"
+          echo "${{ matrix.fnpack_sha256 }}  /tmp/fnpack" | sha256sum -c -
+          chmod +x /tmp/fnpack
+          echo "/tmp" >> "${GITHUB_PATH}"
+          fnpack --help >/dev/null
+          echo "fnpack OK: $(command -v fnpack)"
+
+      - name: Resolve fpk version
+        id: version
+        run: |
+          V=""
+          if [ "${{ github.event_name }}" = "push" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            V="${{ inputs.tag }}"
+            V="${V#v}"
+          fi
+          echo "version=${V}" >> "${GITHUB_OUTPUT}"
+
+      # 复用现有打包脚本：tsc workflow + next build standalone + 填充 app/server + fnpack build。
+      # VERSION 为空时脚本回退读 package.json；ARCH 决定 manifest platform 与产物名。
+      - name: Build fpk (VERSION + ARCH)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.platform }}
+        run: ./deploy/fpk/build-fpk.sh
+
+      - name: Upload fpk artifact (${{ matrix.arch }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: deploy/fpk/dist/mediary-scout-${{ matrix.platform }}.fpk
+          if-no-files-found: error
+          retention-days: 7
+
+  # 发布闸门：只有两个架构的 build 都成功才发 Release（避免只挂上一个架构）。
+  # 仅 tag push 或 workflow_dispatch 带 tag 输入时执行；纯手动验证（不带 tag）只传 artifact。
+  release:
+    needs: [build]
+    if: needs.build.result == 'success' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag != ''))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "tag=${{ inputs.tag }}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Download fpk artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload fpk files to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: dist/*.fpk
+          fail_on_unmatched_files: true
+          generate_release_notes: true
