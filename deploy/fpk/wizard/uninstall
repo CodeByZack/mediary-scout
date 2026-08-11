@@ -1,0 +1,21 @@
+[{
+  "stepTitle": "卸载 MediaTrack",
+  "items": [{
+    "type": "radio",
+    "field": "wizard_delete_data",
+    "label": "是否同时删除应用数据（含 mediary.db 数据库与运行日志）？",
+    "options": [{
+      "label": "保留数据",
+      "value": "false"
+    }, {
+      "label": "删除数据",
+      "value": "true"
+    }],
+    "rules": [
+      {
+        "required": true,
+        "message": "请选择是否删除数据"
+      }
+    ]
+  }]
+}]
