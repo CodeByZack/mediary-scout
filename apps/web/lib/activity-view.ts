@@ -1,9 +1,11 @@
 import {
   landedSize,
+  type AgentStep,
   type MediaType,
   type NotificationReportStatus,
   type WorkflowRepository,
   type WorkflowRunProgress,
+  type WorkflowScope,
 } from "@media-track/workflow";
 import { distinctSeasons, seasonLabelText } from "./activity-season-label";
 
@@ -12,6 +14,24 @@ import { distinctSeasons, seasonLabelText } from "./activity-season-label";
 // `activity-season-label.ts` — the "use client" activity-feed must import from
 // there (not here), since this module pulls the Postgres-backed runtime.
 export { distinctSeasons, seasonLabelText };
+
+/** Per-step status for the expandable step list. Inferred from the run's overall
+ *  state (see `inferStepStatuses`) — the trace itself records no outcome. */
+export type ActivityStepStatus = "success" | "running" | "failed";
+
+/** One agent tool-call step of a run, as shown in the activity row's expandable
+ *  step list. A projection of the durable AgentStep trace plus the inferred
+ *  status the UI renders (✅/⏳/❌). */
+export interface ActivityStepView {
+  ordinal: number;
+  toolName: string;
+  activity: string;
+  phase: string;
+  at: string;
+  args: Record<string, unknown>;
+  stepStatus: ActivityStepStatus;
+  failReason?: string;
+}
 
 /** One title currently in the pipeline (queued or running). */
 export interface ActivityActiveRun {
@@ -37,6 +57,9 @@ export interface ActivityActiveRun {
   missingCount: number;
   /** Live agent progress (running only). */
   progress: WorkflowRunProgress | null;
+  /** The run's agent tool-call trace with inferred per-step status, shown in the
+   *  expandable step list. [] while queued with no history, or on query failure. */
+  steps: ActivityStepView[];
 }
 
 /** A recently-finished run. The client session-scopes 已完成 by matching these
@@ -50,6 +73,9 @@ export interface ActivityCompletedItem {
   /** "每集 约 410 MB" / "体积 1.4 GB"; null when unknown. */
   sizeText: string | null;
   createdAt: string;
+  /** The run's agent tool-call trace with inferred per-step status, shown in the
+   *  expandable step list. [] when the trace is empty or its query failed. */
+  steps: ActivityStepView[];
 }
 
 export interface ActivityView {
@@ -60,6 +86,85 @@ export interface ActivityView {
   recentCompleted: ActivityCompletedItem[];
 }
 
+/** Run-level state the step-status inference consumes. Decided by the caller
+ *  from the run's workflow status (active) or report status (completed). */
+export type StepRunState =
+  | { kind: "success" } // run finished OK → every step ✅
+  | { kind: "failed"; failReason: string } // terminal failure / retrying → last step ❌
+  | { kind: "running" } // live run, still working → last step ⏳
+  | { kind: "queued" }; // queued: no failure unless a stale trace survives
+
+/** Report statuses that count as an overall SUCCESS (all steps ✅). `partial` is
+ *  a genuine aired gap but the run itself completed — the steps all ran. */
+const SUCCESS_REPORT_STATUSES: ReadonlySet<NotificationReportStatus> = new Set([
+  "complete",
+  "acquired",
+  "airing",
+  "partial",
+  "no_coverage",
+]);
+
+/**
+ * Infer each step's status from the run's overall state. Boundaries:
+ *  - Empty trace → [] (nothing to show; the UI renders 暂无步骤记录).
+ *  - Overall success → every step ✅.
+ *  - failed/retrying → the LAST step ❌ (+failReason), earlier steps ✅ — the
+ *    trace captures tool calls pre-execution, so everything before the crash ran.
+ *  - running → the LAST step ⏳ (the live frontier), earlier steps ✅.
+ *  - queued → fresh reservations have no trace → []. A leftover trace means a
+ *    prior attempt failed and the auto-requeue is waiting → last step ❌.
+ */
+function inferStepStatuses(input: { runState: StepRunState; steps: AgentStep[] }): ActivityStepView[] {
+  const { runState, steps } = input;
+  if (steps.length === 0) {
+    return [];
+  }
+  return steps.map((step, index) => {
+    const isLast = index === steps.length - 1;
+    let stepStatus: ActivityStepStatus = "success";
+    let failReason: string | undefined;
+    if (isLast) {
+      if (runState.kind === "running") {
+        stepStatus = "running";
+      } else if (runState.kind === "failed") {
+        stepStatus = "failed";
+        failReason = runState.failReason;
+      } else if (runState.kind === "queued") {
+        stepStatus = "failed";
+        failReason = "上一轮执行失败，等待重试";
+      }
+    }
+    return {
+      ordinal: step.ordinal,
+      toolName: step.toolName,
+      activity: step.activity,
+      phase: step.phase,
+      at: step.at,
+      args: step.args,
+      stepStatus,
+      ...(failReason !== undefined ? { failReason } : {}),
+    };
+  });
+}
+
+/** Load one run's step trace and infer statuses. A query failure returns [] so a
+ *  single broken trace can never take down the whole activity page. Shared by
+ *  the activity page and the notifications feed (notifications render steps for
+ *  runs that never appeared on the activity page, e.g. routine patrols). */
+export async function runSteps(input: {
+  repository: Pick<WorkflowRepository, "listAgentSteps">;
+  runId: string;
+  scope: WorkflowScope | undefined;
+  runState: StepRunState;
+}): Promise<ActivityStepView[]> {
+  try {
+    const steps = await input.repository.listAgentSteps(input.runId, input.scope);
+    return inferStepStatuses({ runState: input.runState, steps });
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Assemble the activity page view: the live queue+running set, plus the recent
  * completed runs (the client decides which to show in 已完成 by matching against
@@ -68,7 +173,10 @@ export interface ActivityView {
 export async function getActivityView(input: {
   repository: Pick<
     WorkflowRepository,
-    "listActiveWorkflowRuns" | "listNotifications" | "listTrackedSeasonStates"
+    | "listActiveWorkflowRuns"
+    | "listNotifications"
+    | "listTrackedSeasonStates"
+    | "listAgentSteps"
   >;
   /** Scope the queue/notifications to one account (§7). Omitted → default. */
   accountId?: string;
@@ -101,60 +209,89 @@ export async function getActivityView(input: {
     .sort((a, b) => a.workflowRun.startedAt.localeCompare(b.workflowRun.startedAt))
     .map((snapshot) => snapshot.workflowRun.id);
 
-  const active: ActivityActiveRun[] = activeRuns.map((snapshot) => {
-    const status = snapshot.workflowRun.status === "running" ? "running" : "queued";
-    const missingCount = snapshot.episodes.filter(
-      (episode) => episode.airStatus === "aired" && !episode.obtained,
-    ).length;
-    const queueIndex = queuedOrder.indexOf(snapshot.workflowRun.id);
-    return {
-      runId: snapshot.workflowRun.id,
-      tmdbId: snapshot.title.tmdbId,
-      title: snapshot.title.title,
-      year: snapshot.title.year ?? null,
-      type: snapshot.title.type,
-      posterPath: snapshot.title.posterPath ?? null,
-      seasonNumber: snapshot.season.seasonNumber ?? null,
-      seasonNumbers: distinctSeasons(snapshot.episodes),
-      status,
-      queuePosition: status === "queued" && queueIndex >= 0 ? queueIndex + 1 : null,
-      missingCount,
-      progress: snapshot.workflowRun.progress ?? null,
-    };
-  });
+  const active: ActivityActiveRun[] = await Promise.all(
+    activeRuns.map(async (snapshot) => {
+      const status = snapshot.workflowRun.status === "running" ? "running" : "queued";
+      const missingCount = snapshot.episodes.filter(
+        (episode) => episode.airStatus === "aired" && !episode.obtained,
+      ).length;
+      const queueIndex = queuedOrder.indexOf(snapshot.workflowRun.id);
+      const runState: StepRunState = status === "running" ? { kind: "running" } : { kind: "queued" };
+      return {
+        runId: snapshot.workflowRun.id,
+        tmdbId: snapshot.title.tmdbId,
+        title: snapshot.title.title,
+        year: snapshot.title.year ?? null,
+        type: snapshot.title.type,
+        posterPath: snapshot.title.posterPath ?? null,
+        seasonNumber: snapshot.season.seasonNumber ?? null,
+        seasonNumbers: distinctSeasons(snapshot.episodes),
+        status,
+        queuePosition: status === "queued" && queueIndex >= 0 ? queueIndex + 1 : null,
+        missingCount,
+        progress: snapshot.workflowRun.progress ?? null,
+        steps: await runSteps({
+          repository: input.repository,
+          runId: snapshot.workflowRun.id,
+          scope,
+          runState,
+        }),
+      };
+    }),
+  );
 
   // recentCompleted = recent finished-run notifications (one per run), skipping
   // no-op patrol checks. NO time filter — the client session-scopes by matching
   // against the runIds it observed active (notification createdAt ≈ run-start, so
   // a server-side since filter wrongly drops runs the user opened the page after).
+  // limit: 1000 = "all history" for personal use — the repository default would
+  // truncate at 100 and silently hide older finished runs from the step list.
   const notifications = await input.repository.listNotifications({
-    limit: 30,
+    limit: 1000,
     ...(input.accountId
       ? { accountId: input.accountId, connectedStorageId: input.connectedStorageId ?? null }
       : {}),
   });
-  const recentCompleted: ActivityCompletedItem[] = notifications
-    .filter(
-      (notification) => notification.kind !== "already_current" && notification.report !== undefined,
-    )
-    .map((notification) => {
-      const report = notification.report!;
-      const size = landedSize(report);
-      const posterPath =
-        report.posterPath ??
-        (report.tmdbId != null ? posterByTmdb.get(report.tmdbId) : undefined) ??
-        posterByName.get(report.titleName) ??
-        null;
-      return {
-        workflowRunId: notification.workflowRunId,
-        title: report.titleName,
-        seasonLabel: report.seasonLabel,
-        status: report.status,
-        posterPath,
-        sizeText: size ? `${size.label} ${size.value}` : null,
-        createdAt: notification.createdAt,
-      };
-    });
+  const recentCompleted: ActivityCompletedItem[] = await Promise.all(
+    notifications
+      .filter(
+        (notification) => notification.kind !== "already_current" && notification.report !== undefined,
+      )
+      .map(async (notification) => {
+        const report = notification.report!;
+        const size = landedSize(report);
+        const posterPath =
+          report.posterPath ??
+          (report.tmdbId != null ? posterByTmdb.get(report.tmdbId) : undefined) ??
+          posterByName.get(report.titleName) ??
+          null;
+        // Report status → step run-state. failed takes the report's own wording
+        // (the honest reason, e.g. 转存失败:配额不足); retrying explains itself.
+        let runState: StepRunState;
+        if (SUCCESS_REPORT_STATUSES.has(report.status)) {
+          runState = { kind: "success" };
+        } else if (report.status === "retrying") {
+          runState = { kind: "failed", failReason: "上一轮执行失败，自动重试中" };
+        } else {
+          runState = { kind: "failed", failReason: report.lines.join(" ") };
+        }
+        return {
+          workflowRunId: notification.workflowRunId,
+          title: report.titleName,
+          seasonLabel: report.seasonLabel,
+          status: report.status,
+          posterPath,
+          sizeText: size ? `${size.label} ${size.value}` : null,
+          createdAt: notification.createdAt,
+          steps: await runSteps({
+            repository: input.repository,
+            runId: notification.workflowRunId,
+            scope,
+            runState,
+          }),
+        };
+      }),
+  );
 
   return { active, recentCompleted };
 }

@@ -26,9 +26,12 @@ export function validateRuntimeConfig(env: WorkflowRuntimeEnv): void {
 }
 
 export function assertWorkflowAgentAdapterPolicy(env: WorkflowRuntimeEnv): void {
-  const usesLiveProvider = env.MEDIA_TRACK_WORKFLOW_ADAPTER === "pansou";
+  // 方案 A (2026-08-10): 真实搜索源 (pansou) 不再强制 vercel-ai —— 真实 PanSou
+  // 搜索 + fake 网盘 + 确定性脚本 stub 是受支持的 dev/preview 组合 (改名前功能
+  // 全链路验证用), 零 LLM 调用。只有 LIVE 115 存储仍强制 vercel-ai: 真实盘绝
+  // 不能拿脚本/stub 去跑 (会误转存、错入库)。
   const usesLiveStorage = env.MEDIA_TRACK_STORAGE_ADAPTER === "115";
-  if (!usesLiveProvider && !usesLiveStorage) {
+  if (!usesLiveStorage) {
     return;
   }
 
@@ -37,6 +40,6 @@ export function assertWorkflowAgentAdapterPolicy(env: WorkflowRuntimeEnv): void 
   }
 
   throw new Error(
-    "MEDIA_TRACK_AGENT_ADAPTER_REQUIRED_FOR_LIVE_WORKFLOW: set MEDIA_TRACK_AGENT_ADAPTER=vercel-ai when MEDIA_TRACK_WORKFLOW_ADAPTER=pansou or MEDIA_TRACK_STORAGE_ADAPTER=115.",
+    "MEDIA_TRACK_AGENT_ADAPTER_REQUIRED_FOR_LIVE_WORKFLOW: set MEDIA_TRACK_AGENT_ADAPTER=vercel-ai when MEDIA_TRACK_STORAGE_ADAPTER=115 (real drive).",
   );
 }

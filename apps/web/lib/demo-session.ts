@@ -122,6 +122,9 @@ export function demoCompletedItems(entries: DemoAcquisitionEntry[]): ActivityCom
     posterPath: e.posterPath,
     sizeText: null,
     createdAt: "2026-06-12T08:00:00.000Z",
+    // Demo acquisitions have no real agent trace — the expanded list falls back
+    // to 暂无步骤记录.
+    steps: [],
   }));
 }
 

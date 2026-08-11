@@ -1560,6 +1560,17 @@ p {
   color: var(--text-muted);
 }
 
+/* Expandable step list inside a routine item — mirrors .act-step-list but
+   indented under the routine-item (which already has 40px left padding). */
+.routine-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--border-soft);
+}
+
 .feed-time {
   font-size: 12px;
   color: var(--text-muted);
@@ -3020,6 +3031,124 @@ select.setting-control {
 .act-row-queued,
 .act-row-done {
   opacity: 0.92;
+}
+
+/* Expandable rows: the header (toggle) + the step list share one card. Padding
+   moves from the row to the toggle so the step list can sit flush underneath. */
+.act-row-expandable {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
+  overflow: hidden;
+}
+
+.act-row-toggle {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  padding: 12px;
+  cursor: pointer;
+}
+
+.act-row-active .act-row-toggle {
+  align-items: flex-start;
+}
+
+.act-poster-link {
+  flex: none;
+  line-height: 0;
+}
+
+.act-row-chevron {
+  flex: none;
+  color: var(--text-soft);
+  align-self: center;
+}
+
+.act-row-active .act-row-chevron {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.act-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  /* 58px = poster (46) + row gap (12) — steps align with the row body. */
+  padding-left: 70px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-card);
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.act-step {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.act-step-icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.act-step-icon.act-step-success { color: var(--accent); }
+.act-step-icon.act-step-running { color: var(--info); }
+.act-step-icon.act-step-failed { color: var(--negative); }
+
+.act-step-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.act-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.act-step-activity {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.act-step-tool {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.act-step-at {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.act-step-fail {
+  font-size: 12px;
+  color: var(--negative);
+}
+
+.act-step-args {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.act-steps-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .act-poster {

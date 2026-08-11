@@ -7,6 +7,7 @@ import { showHref } from "@media-track/workflow/scope";
 import type {
   ActivityActiveRun,
   ActivityCompletedItem,
+  ActivityStepView,
   ActivityView,
   RetryRefusalReason,
 } from "../lib/activity-view";
@@ -114,30 +115,142 @@ function seasonLabel(run: ActivityActiveRun): string {
   return seasonLabelText(run.type, run.seasonNumbers ?? [], run.seasonNumber);
 }
 
+/** Chevron affordance on an expandable row header (rotates with open state). */
+export function ExpandChevron({ open }: { open: boolean }) {
+  return open ? (
+    <ChevronDown size={15} className="act-row-chevron" aria-hidden />
+  ) : (
+    <ChevronRight size={15} className="act-row-chevron" aria-hidden />
+  );
+}
+
+/** Extract a short display line from a step's raw tool args. Returns null when
+ *  nothing user-meaningful exists (ids/paths only) — the UI then omits the args
+ *  row instead of dumping the whole JSON. Rename steps are prioritized: the raw
+ *  args carry `renames:[{fileId,newName}]` where fileId is an internal id, so we
+ *  surface the canonical target names ("改名 …"). */
+export function stepArgsText(step: ActivityStepView): string | null {
+  const args = step.args;
+  if (!args || typeof args !== "object") {
+    return null;
+  }
+  if (args._truncated === true) {
+    return "参数过长已省略";
+  }
+  const renames = args.renames;
+  if (Array.isArray(renames) && renames.length > 0) {
+    const names = renames
+      .map((rename) => {
+        const newName = (rename as { newName?: unknown } | null)?.newName;
+        return typeof newName === "string" && newName.trim() ? newName.trim() : null;
+      })
+      .filter((name): name is string => name !== null);
+    if (names.length > 0) {
+      const shown = names.slice(0, 3).join("、");
+      return names.length > 3 ? `改名 ${shown} 等 ${names.length} 个` : `改名 ${shown}`;
+    }
+  }
+  const moves = args.moves;
+  if (Array.isArray(moves) && moves.length > 0) {
+    const parts = moves.map((move) => {
+      const season = (move as { season?: unknown } | null)?.season;
+      return typeof season === "number" ? `第 ${season} 季` : "影片目录";
+    });
+    return `分发到 ${parts.join("、")}`;
+  }
+  const codes = args.codes;
+  if (Array.isArray(codes) && codes.length > 0) {
+    return `已标记 ${codes.length} 集`;
+  }
+  const keyword = args.keyword;
+  if (typeof keyword === "string" && keyword.trim()) {
+    return `关键词: ${keyword.trim()}`;
+  }
+  const fileIds = args.fileIds;
+  if (Array.isArray(fileIds) && fileIds.length > 0) {
+    return `${fileIds.length} 个文件`;
+  }
+  return null;
+}
+
+export function StepStatusIcon({ status }: { status: ActivityStepView["stepStatus"] }) {
+  if (status === "running") {
+    return <Clock3 size={13} className="act-step-icon act-step-running" aria-hidden />;
+  }
+  if (status === "failed") {
+    return <TriangleAlert size={13} className="act-step-icon act-step-failed" aria-hidden />;
+  }
+  return <CheckCircle2 size={13} className="act-step-icon act-step-success" aria-hidden />;
+}
+
+/** The expandable step list under a row header: one line per agent tool call,
+ *  status icon + 中文 activity + toolName + localized time + key args. */
+export function StepList({ steps }: { steps: ActivityStepView[] }) {
+  if (steps.length === 0) {
+    return (
+      <div className="act-step-list">
+        <p className="act-steps-empty">暂无步骤记录</p>
+      </div>
+    );
+  }
+  return (
+    <div className="act-step-list">
+      {steps.map((step) => {
+        const argsText = stepArgsText(step);
+        return (
+          <div className="act-step" key={step.ordinal}>
+            <StepStatusIcon status={step.stepStatus} />
+            <div className="act-step-main">
+              <div className="act-step-head">
+                <span className="act-step-activity">{step.activity}</span>
+                <span className="act-step-tool">{step.toolName}</span>
+                <span className="act-step-at">{new Date(step.at).toLocaleString("zh-CN")}</span>
+              </div>
+              {step.failReason ? <div className="act-step-fail">{step.failReason}</div> : null}
+              {argsText ? <div className="act-step-args">{argsText}</div> : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function RunningRow({ run, storageId }: { run: ActivityActiveRun; storageId?: string | undefined }) {
+  const [open, setOpen] = useState(false);
   const percent = Math.max(3, Math.min(100, run.progress?.percent ?? 3));
   const headline =
     run.progress?.needed && run.progress.needed > 0
       ? `已确认 ${run.progress.obtained ?? 0} / ${run.progress.needed} 集`
       : null;
   return (
-    <Link className="act-row act-row-active" href={showHref(run.tmdbId, "library", storageId, run.type)}>
-      {poster(run.posterPath, run.title, "info")}
-      <div className="act-row-body">
-        <div className="act-row-head">
-          <strong>{run.title}</strong>
-          {seasonLabel(run) ? <span className="act-sub">{seasonLabel(run)}</span> : null}
-          {headline ? <span className="act-frac">{headline}</span> : null}
+    <div className="act-row act-row-active act-row-expandable">
+      <div className="act-row-toggle" onClick={() => setOpen((value) => !value)}>
+        <Link
+          className="act-poster-link"
+          href={showHref(run.tmdbId, "library", storageId, run.type)}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {poster(run.posterPath, run.title, "info")}
+        </Link>
+        <div className="act-row-body">
+          <div className="act-row-head">
+            <strong>{run.title}</strong>
+            {seasonLabel(run) ? <span className="act-sub">{seasonLabel(run)}</span> : null}
+            {headline ? <span className="act-frac">{headline}</span> : null}
+          </div>
+          <div className="act-bar">
+            <div className="act-bar-fill" style={{ width: `${percent}%` }} />
+          </div>
+          <div className="act-ticker-row">
+            <Loader2 size={14} className="act-spin" aria-hidden />
+            <Ticker text={run.progress?.activity ?? "正在准备…"} />
+          </div>
         </div>
-        <div className="act-bar">
-          <div className="act-bar-fill" style={{ width: `${percent}%` }} />
-        </div>
-        <div className="act-ticker-row">
-          <Loader2 size={14} className="act-spin" aria-hidden />
-          <Ticker text={run.progress?.activity ?? "正在准备…"} />
-        </div>
+        <ExpandChevron open={open} />
       </div>
-    </Link>
+      {open ? <StepList steps={run.steps} /> : null}
+    </div>
   );
 }
 
@@ -205,17 +318,22 @@ function DemoRunningRow({ item }: { item: DemoActivityItem }) {
 }
 
 function QueuedRow({ run }: { run: ActivityActiveRun }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="act-row act-row-queued">
-      {poster(run.posterPath, run.title, "muted")}
-      <div className="act-row-body act-row-inline">
-        <strong>{run.title}</strong>
-        {seasonLabel(run) ? <span className="act-sub">{seasonLabel(run)}</span> : null}
-        <span className="act-pill">
-          <Clock3 size={12} aria-hidden />第 {run.queuePosition} 位{run.missingCount > 0 ? ` · 缺 ${run.missingCount} 集` : ""}
-        </span>
-        <CancelButton runId={run.runId} title={run.title} />
+    <div className="act-row act-row-queued act-row-expandable">
+      <div className="act-row-toggle" onClick={() => setOpen((value) => !value)}>
+        {poster(run.posterPath, run.title, "muted")}
+        <div className="act-row-body act-row-inline">
+          <strong>{run.title}</strong>
+          {seasonLabel(run) ? <span className="act-sub">{seasonLabel(run)}</span> : null}
+          <span className="act-pill">
+            <Clock3 size={12} aria-hidden />第 {run.queuePosition} 位{run.missingCount > 0 ? ` · 缺 ${run.missingCount} 集` : ""}
+          </span>
+          <CancelButton runId={run.runId} title={run.title} />
+        </div>
+        <ExpandChevron open={open} />
       </div>
+      {open ? <StepList steps={run.steps} /> : null}
     </div>
   );
 }
@@ -236,21 +354,26 @@ function completedPillLabel(status: ActivityCompletedItem["status"]): string {
 }
 
 function CompletedRow({ item }: { item: ActivityCompletedItem }) {
+  const [open, setOpen] = useState(false);
   const ok = item.status === "complete" || item.status === "acquired" || item.status === "airing";
   const failed = item.status === "failed";
   return (
-    <div className="act-row act-row-done">
-      {poster(item.posterPath, item.title, ok ? "success" : "warn")}
-      <div className="act-row-body act-row-inline">
-        <strong>{item.title}</strong>
-        {item.seasonLabel ? <span className="act-sub">{item.seasonLabel}</span> : null}
-        <span className={`act-pill ${ok ? "tone-success" : "tone-warn"}`}>
-          {ok ? <CheckCircle2 size={12} aria-hidden /> : <TriangleAlert size={12} aria-hidden />}
-          {completedPillLabel(item.status)}
-        </span>
-        {item.sizeText ? <span className="act-sub">{item.sizeText}</span> : null}
-        {failed ? <RetryButton runId={item.workflowRunId} title={item.title} /> : null}
+    <div className="act-row act-row-done act-row-expandable">
+      <div className="act-row-toggle" onClick={() => setOpen((value) => !value)}>
+        {poster(item.posterPath, item.title, ok ? "success" : "warn")}
+        <div className="act-row-body act-row-inline">
+          <strong>{item.title}</strong>
+          {item.seasonLabel ? <span className="act-sub">{item.seasonLabel}</span> : null}
+          <span className={`act-pill ${ok ? "tone-success" : "tone-warn"}`}>
+            {ok ? <CheckCircle2 size={12} aria-hidden /> : <TriangleAlert size={12} aria-hidden />}
+            {completedPillLabel(item.status)}
+          </span>
+          {item.sizeText ? <span className="act-sub">{item.sizeText}</span> : null}
+          {failed ? <RetryButton runId={item.workflowRunId} title={item.title} /> : null}
+        </div>
+        <ExpandChevron open={open} />
       </div>
+      {open ? <StepList steps={item.steps} /> : null}
     </div>
   );
 }
@@ -298,7 +421,17 @@ function RetryButton({ runId, title }: { runId: string; title: string }) {
     );
   }
   return (
-    <button type="button" className="act-retry" aria-label={`重试获取 ${title}`} onClick={retry}>
+    <button
+      type="button"
+      className="act-retry"
+      aria-label={`重试获取 ${title}`}
+      onClick={(event) => {
+        // The row header toggles the step list — a click on 重试 must not also
+        // expand/collapse the row.
+        event.stopPropagation();
+        void retry();
+      }}
+    >
       <RotateCcw size={13} aria-hidden /> 重试
     </button>
   );
@@ -332,13 +465,41 @@ function CancelButton({ runId, title }: { runId: string; title: string }) {
   if (confirming) {
     return (
       <span className="act-confirm">
-        <button type="button" className="act-confirm-yes" onClick={cancel}>取消并移出</button>
-        <button type="button" className="act-confirm-no" onClick={() => setConfirming(false)}>留着</button>
+        <button
+          type="button"
+          className="act-confirm-yes"
+          onClick={(event) => {
+            event.stopPropagation();
+            void cancel();
+          }}
+        >
+          取消并移出
+        </button>
+        <button
+          type="button"
+          className="act-confirm-no"
+          onClick={(event) => {
+            event.stopPropagation();
+            setConfirming(false);
+          }}
+        >
+          留着
+        </button>
       </span>
     );
   }
   return (
-    <button type="button" className="act-cancel" aria-label={`取消获取 ${title}`} onClick={() => setConfirming(true)}>
+    <button
+      type="button"
+      className="act-cancel"
+      aria-label={`取消获取 ${title}`}
+      onClick={(event) => {
+        // The row header toggles the step list — a click on 取消 must not also
+        // expand/collapse the row.
+        event.stopPropagation();
+        setConfirming(true);
+      }}
+    >
       <X size={15} aria-hidden />
     </button>
   );

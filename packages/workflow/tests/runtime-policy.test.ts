@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { assertWorkflowAgentAdapterPolicy } from "../src/index.js";
 
 describe("assertWorkflowAgentAdapterPolicy", () => {
-  it("rejects a fake agent when the live PanSou provider is enabled", () => {
+  it("allows the fake agent when only the PanSou workflow adapter is set (方案 A: 真实搜索+fake盘+stub, pansou 不再强制 vercel-ai)", () => {
     expect(() =>
       assertWorkflowAgentAdapterPolicy({
         MEDIA_TRACK_WORKFLOW_ADAPTER: "pansou",
       }),
-    ).toThrow(/MEDIA_TRACK_AGENT_ADAPTER_REQUIRED_FOR_LIVE_WORKFLOW/);
+    ).not.toThrow();
   });
 
   it("rejects a fake agent when the live 115 storage executor is enabled", () => {

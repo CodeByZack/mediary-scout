@@ -892,12 +892,11 @@ function buildAccountContextResolver(): ResolveAccountWorkerContext {
     const { model, preferredLanguage, qualityPreference } = await getAgentModel(scoped);
     // The run's drive brand selects its resource sources (quark→PanSou quark-only;
     // 115→PanSou+Prowlarr). null when no drive resolves → env MEDIA_TRACK_DEFAULT_STORAGE_BRAND
-    // → default 115 fallback. (env was previously ignored here: a fake/dev deploy with no
-    // connected drive hard-fell back to pan115, filtering out quark links → 0 candidates.)
+    // → default quark fallback (2026-08-10: 用户要求默认盘改为夸克, 暂不用 115).
     const driveProvider =
       (await getAccountStorageCredentials(accountId, connectedStorageId))?.provider ??
       process.env.MEDIA_TRACK_DEFAULT_STORAGE_BRAND ??
-      "pan115";
+      "quark";
     const assrtToken = await getAssrtToken(scoped);
     return {
       storage: await getWorkerStorageExecutor(accountId, connectedStorageId),
@@ -1724,7 +1723,7 @@ function parseTvCandidateId(candidateId: string): { tmdbId: number; seasonNumber
 
 async function getWorkerResourceProvider(
   settings: { getSetting(key: string): Promise<string | null> } = getWorkflowRepository(),
-  provider: string = process.env.MEDIA_TRACK_DEFAULT_STORAGE_BRAND ?? "pan115",
+  provider: string = process.env.MEDIA_TRACK_DEFAULT_STORAGE_BRAND ?? "quark",
   accountId?: string,
 ): Promise<ResourceProvider> {
   // accountId 仅用于健康结论回写(recordPanSouHealth)。多账户场景下,worker 在
