@@ -49,6 +49,10 @@ VERSION="${VERSION:-1.0.0}"
 echo "==> fpk version: ${VERSION}"
 
 # ---- 0.6 fnpack：FNPACK_BIN 环境变量 > PATH ----
+# ⚠️ 必须用 fnpack 1.2.0！static2.fnnas.com 的 fnpack-1.2.1-linux-arm64（2026-08-12 实测）有打包 bug：
+#   它打的 fpk 在飞牛安装器解包设置目录权限时必报 acl_get_file failed / "设置目录权限失败"，
+#   而 1.2.0 打的包正常可装（内容/属主/权限任意均验证过）。1.2.1 与 1.2.0 二进制不同
+#   （sha256 各异）但 --help 版本号都显示 1.2.0，无法程序化区分，请勿自行升级！
 FNPACK_BIN="${FNPACK_BIN:-fnpack}"
 command -v "${FNPACK_BIN}" >/dev/null 2>&1 || { echo "fnpack 不存在: ${FNPACK_BIN}（本机 /usr/local/bin/fnpack，CI 由 workflow 下载）" >&2; exit 1; }
 echo "==> fnpack: ${FNPACK_BIN}"
@@ -172,6 +176,25 @@ mkdir -p "${DIST_DIR}"
 rm -f "${FPK_DIR}/${FPK_NAME}"
 
 cd "${FPK_DIR}"
+
+# ---- 3.5 统一源内容属主为 root（仅 CI 需要）----
+# GitHub Actions runner 的文件属主是 runner(uid 1001)，目标飞牛系统里不存在该 uid，
+# 安装器 set app dir permissions 时对这类文件调用 acl_get_file 会失败（错误码 10234，
+# "acl_get_file failed"）。本地容器属主（如 980）在 NAS 上存在，故本地无需处理。
+# FPK_CHOWN_ROOT=1 时把会打进 app.tgz 的内容统一 chown 为 0:0；
+# 只 chown 源内容、不动 dist/ 与 fpk 目录本身，保证后续 mv 仍可写。
+if [ -n "${FPK_CHOWN_ROOT:-}" ]; then
+    if [ "$(id -u)" = "0" ]; then
+        chown -R 0:0 "${FPK_DIR}"/app "${FPK_DIR}"/cmd "${FPK_DIR}"/config "${FPK_DIR}"/wizard "${FPK_DIR}"/manifest "${FPK_DIR}"/ICON.PNG "${FPK_DIR}"/ICON_256.PNG
+        echo "    fpk 源内容属主已统一为 root (uid 0)"
+    elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+        sudo chown -R 0:0 "${FPK_DIR}"/app "${FPK_DIR}"/cmd "${FPK_DIR}"/config "${FPK_DIR}"/wizard "${FPK_DIR}"/manifest "${FPK_DIR}"/ICON.PNG "${FPK_DIR}"/ICON_256.PNG
+        echo "    fpk 源内容属主已统一为 root (uid 0, 经 sudo)"
+    else
+        echo "    [warn] FPK_CHOWN_ROOT=1 但无 root/sudo 权限，跳过属主统一（本地打包属主存在时无需处理）" >&2
+    fi
+fi
+
 # fnpack 输出名固定为 manifest 的 appname（release: mediary-scout.fpk / test: mediary-scout-dev.fpk），
 # 按模式+架构重命名到 dist/。
 "${FNPACK_BIN}" build -d .

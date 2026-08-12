@@ -37,7 +37,10 @@ permissions:
   contents: read
 
 env:
-  FNPACK_VERSION: "1.2.1"
+  # 注意：必须用 1.2.0！fnpack 1.2.1（static2 上 arm64 最新）有打包 bug——
+  # 实测 1.2.1 打的 fpk 在飞牛安装器解包设置目录权限时必报 acl_get_file failed，
+  # 1.2.0 打的正常可装（2026-08-12 实测闭环）。
+  FNPACK_VERSION: "1.2.0"
   # 与 ci.yml 相同的"空库构建"条件：值被设置为空字符串，不会被 next.config 的 ??= 覆盖。
   MEDIA_TRACK_POSTGRES_URL: ""
 
@@ -57,13 +60,13 @@ jobs:
             runner: ubuntu-24.04-arm
             platform: arm
             fnpack_arch: arm64
-            fnpack_sha256: aad9e16b101267d30017f39ab969e3c085fbce209716f8bd3b1e167eaf15e0cf
+            fnpack_sha256: 33a76a7c685832b8de1adff3a6362c384bf367988d819e98bcf85569bb219d30
             artifact: fpk-arm
           - arch: x86
             runner: ubuntu-latest
             platform: x86
             fnpack_arch: amd64
-            fnpack_sha256: 72d2a4095da676b64510b023731a227b369d80f8079bc45ff8a2f802ec0480c1
+            fnpack_sha256: 523227c950a589ab3af327cf91c45511154265487bf723b29da9cfa2e0dc9d5a
             artifact: fpk-x86
 
     steps:
@@ -121,6 +124,11 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           ARCH: ${{ matrix.platform }}
           FPK_MODE: ${{ inputs.mode }}
+          # GitHub runner 文件属主 uid 1001 在目标飞牛系统不存在，会导致安装时报
+          # "set app dir permissions failed: acl_get_file failed"（错误码 10234）。
+          # FPK_CHOWN_ROOT=1 让 build-fpk.sh 在 fnpack build 前把打进 app.tgz 的
+          # 内容统一 chown 为 root(0:0)（本地打包属主存在，无需此选项）。
+          FPK_CHOWN_ROOT: "1"
         run: ./deploy/fpk/build-fpk.sh
 
       - name: Upload fpk artifact (${{ matrix.arch }})
