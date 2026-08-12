@@ -1,6 +1,6 @@
 name: Build FPK (arm + x86)
 
-# 双架构 fpk 打包：arm64（GitHub 官方 ARM runner）+ x64（原生 x86_64）。
+# 双架构 fpk 打包：arm（aarch64）+ x86（x86_64）。
 # 触发方式：
 #   - 手动：workflow_dispatch（可带 tag 输入，发布到对应 GitHub Release）
 #   - 自动：push tag v*（产物同时挂到 GitHub Release）
@@ -8,10 +8,11 @@ name: Build FPK (arm + x86)
 # 关键点：
 #   - setup-node 用 Node 24（ABI 137），因为 fpk manifest 声明 install_dep_apps=nodejs_v24，
 #     目标 NAS 运行时是 Node 24；better-sqlite3 会按当前 Node ABI 下载预编译二进制
-#     （v12.11.1 有 node-v137 的 linux-x64 / linux-arm64 prebuild），CI 无需交叉编译。
+#     （v12.11.1 有 node-v137 的 x86_64 / aarch64 prebuild），CI 无需交叉编译。
 #   - npm run build:web 复用 ci.yml 的空库构建方式（MEDIA_TRACK_POSTGRES_URL: ""）。
 #   - fnpack 官方二进制：https://static2.fnnas.com/fnpack/fnpack-<ver>-linux-<amd64|arm64>
-#     （statically linked，两个 runner 直接可跑；sha256 已按官方发布值固定校验）。
+#     （amd64|arm64 是官方下载 URL 的后缀，官方只提供这两种命名；二进制 statically linked，
+#      两个 runner 直接可跑；sha256 已按官方发布值固定校验）。
 
 on:
   push:
@@ -40,18 +41,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: arm64
+          # arch / artifact / platform 统一为 arm | x86（影响 job 名与 artifact 名）；
+          # runner 是 GitHub 官方 runner 名（ubuntu-24.04-arm / ubuntu-latest）、
+          # fnpack_arch 是官方下载 URL 的后缀（static2.fnnas.com 只提供 amd64 | arm64），
+          # 均为外部命名无法修改，保持不变。
+          - arch: arm
             runner: ubuntu-24.04-arm
             platform: arm
             fnpack_arch: arm64
             fnpack_sha256: aad9e16b101267d30017f39ab969e3c085fbce209716f8bd3b1e167eaf15e0cf
-            artifact: fpk-arm64
-          - arch: x64
+            artifact: fpk-arm
+          - arch: x86
             runner: ubuntu-latest
             platform: x86
             fnpack_arch: amd64
             fnpack_sha256: 72d2a4095da676b64510b023731a227b369d80f8079bc45ff8a2f802ec0480c1
-            artifact: fpk-x64
+            artifact: fpk-x86
 
     steps:
       - uses: actions/checkout@v7
@@ -83,9 +88,10 @@ jobs:
           curl -fsSL -o /tmp/fnpack "https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-linux-${{ matrix.fnpack_arch }}"
           echo "${{ matrix.fnpack_sha256 }}  /tmp/fnpack" | sha256sum -c -
           chmod +x /tmp/fnpack
+          # GITHUB_PATH 只对后续 step 生效，当前 step 内 PATH 未更新，故用完整路径调用。
           echo "/tmp" >> "${GITHUB_PATH}"
-          fnpack --help >/dev/null
-          echo "fnpack OK: $(command -v fnpack)"
+          /tmp/fnpack --help >/dev/null
+          echo "fnpack OK: /tmp/fnpack"
 
       - name: Resolve fpk version
         id: version
