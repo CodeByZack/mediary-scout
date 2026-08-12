@@ -13,6 +13,9 @@
 | 2026-08-11 | feat | 飞牛 fnOS fpk 打包方案（deploy/fpk/） |
 | 2026-08-11 | fix | 应用图标四角白边清理 |
 | 2026-08-11 | chore | 清理功能 TODO 文档，收拢为本变更日志 |
+| 2026-08-11 | fix | Server Actions CSRF 修复（反代下被 Next 16 拦截，PR #2） |
+| 2026-08-11 | feat | 双架构 fpk 打包 workflow（arm64 + x64，PR #3） |
+| 2026-08-12 | chore | 完全移除 Mediary Connect 远程访问功能及全部残留 |
 
 ---
 
@@ -71,6 +74,33 @@
 - 删除根目录 9 个阶段性 TODO/PLAN 文档（ACTIVITY_* / CANONICAL_VIDEO_RENAME / FPK_* / IMPACT_VIDEO_RENAME / RENAMEVIDEO_PLAN / STUB_FIX / VIDEO_RENAME_IMPL_PLAN）
 - 其中 `VIDEO_RENAME_IMPL_PLAN.md` 曾随 `3e64c28` 提交入库，本次用 `git rm` 移除
 - 功能记录统一收拢到本文件（`docs/FORK-CHANGES.md`）
+
+### 7. Server Actions CSRF 修复（PR #2）
+
+**提交**: `869ca66` — fix(web): 修复反代下 Server Actions 被 Next 16 CSRF 校验拦截（合并 `f4720ee`）
+
+- 通过反代/中继域名（如 `office.app.5ddd.com` 动态端口）访问时，所有 server action 请求（点"获取第几季"等）被 Next 16 丢弃（E80）：`x-forwarded-host`（内网 IP）与浏览器 `origin`（动态端口公网域名）不匹配
+- `apps/web/proxy.ts`：对带 `Next-Action` header 的请求，若 `x-forwarded-host` 与 `new URL(origin).host` 不一致则改写为 origin host；其余请求原样放行，auth gate 零改动
+- `proxy.test.ts` 新增 8 个用例；全量回归 3016 passed / 0 failed
+
+### 8. 双架构 fpk 打包 workflow（PR #3）
+
+**提交**: `7215199` — ci: 新增双架构 fpk 打包 workflow（arm64 + x64）；`0564de6` — fix(fpk): fnpack 产物按 appname 命名，mv 目标改为架构化文件名（合并 `c2e96e2`）
+
+- 新增 `.github/workflows/build-fpk.yml`：matrix 双架构（arm64 → `ubuntu-24.04-arm`，x64 → `ubuntu-latest`），触发方式 = push tag `v*` 自动构建 + `workflow_dispatch`（可带 tag 输入发布 Release）
+- Node 24（ABI 137）与飞牛 fpk manifest `install_dep_apps=nodejs_v24` 对齐，better-sqlite3 无需交叉编译；fnpack 1.2.1 官方二进制（amd64/arm64）sha256 固定校验
+- `build-fpk.sh` 产物按架构化文件名输出；README 同步
+
+### 9. 完全移除 Mediary Connect 远程访问功能（含残留清理）
+
+**提交**: `6edecc0` — chore: 完全移除 Mediary Connect 远程访问功能；`3f93251` — chore: 清理 Mediary Connect 残留（文档/SEO/站点文案/死 CSS）
+
+- 删除 `workers/scout-connect/` 控制面 Worker（117 文件，约 2.4 万行，Cloudflare Tunnel + D1 + Paddle 支付）
+- 删除 apps/web 11 个 connect 文件（remote-access-section / connect-login-form / connect-notice-banner / remote-access*.ts / connect-notice*.ts / remote-access-test-button）
+- 清理引用：page.tsx banner、settings RemoteAccessSection、globals.css `.connect-notice` 样式、docker-compose cloudflared 服务、.env.example TUNNEL_TOKEN、ci.yml 步骤
+- 删除纯 Connect 文档（cf-tunnel 转售许可邮件、seo-interlink-findings），清理 SEO-STATE / site/index.html / sitemap.xml / style.css 死 CSS（60 行）
+- **保留**：网盘绑定 connect*Action（connectQuark/GuangYa/TianyiSson）、Next `connection()` API、`.qr-connect` 样式
+- 验证：apps/web typecheck EXIT 0；全仓库 grep 零残留
 
 ---
 
