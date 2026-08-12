@@ -95,8 +95,7 @@ deploy/fpk/
 | `MEDIA_TRACK_DEMO_SEED` | `0` | 与 compose 一致，不种演示数据 |
 
 明确**未设置**（对齐 compose 缺省行为）：`PANSOU_BASE_URL`（用官方源默认值，设置页可改）、
-`MEDIA_TRACK_ALLOWED_ORIGINS`（iframe 同源无需跨域）、`MEDIA_TRACK_AGENT_LOG`（排障可选）、
-`TUNNEL_TOKEN`（Cloudflare Tunnel 可选）。
+`MEDIA_TRACK_ALLOWED_ORIGINS`（iframe 同源无需跨域）、`MEDIA_TRACK_AGENT_LOG`（排障可选）。
 
 如需修改：编辑 `deploy/fpk/cmd/main` 中的 `export` 后重新打包即可。
 

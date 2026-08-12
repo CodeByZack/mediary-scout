@@ -26,7 +26,7 @@ export async function probePanSou(
       headers: { "Content-Type": "application/json" },
       // 探活用一个无意义关键词：命中与否不重要，响应形状才重要。
       body: JSON.stringify({ kw: "__probe__", res: "all" }),
-      // 与仓库其余处一致(fetch-with-timeout.ts / remote-access-probe.ts):
+      // 与仓库其余处一致(fetch-with-timeout.ts):
       // 用 AbortSignal.timeout 而不是手搓 controller + setTimeout。
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
@@ -50,9 +50,8 @@ export async function probePanSou(
     }
     return { ok: true };
   } catch (error) {
-    // AbortSignal.timeout 到期时 fetch 抛的是 TimeoutError(仓库既有测试
-    // remote-access.test.ts 断言的就是这个),不是 AbortError。两个都认,
-    // 否则超时会被误归成「连不上」的泛泛提示。
+    // AbortSignal.timeout 到期时 fetch 抛的是 TimeoutError,不是 AbortError。
+    // 两个都认,否则超时会被误归成「连不上」的泛泛提示。
     const aborted =
       error instanceof Error &&
       (error.name === "TimeoutError" || error.name === "AbortError");

@@ -47,7 +47,6 @@ export MEDIA_TRACK_DEMO_SEED=0                    # 与 compose 一致：非演�
 #   PANSOU_BASE_URL          —— 不设即用官方源默认值（设置页可改）
 #   MEDIA_TRACK_ALLOWED_ORIGINS —— iframe 同源访问，无需跨域 server action
 #   MEDIA_TRACK_AGENT_LOG    —— 可选，排障时再开
-#   TUNNEL_TOKEN             —— Cloudflare Tunnel 可选，用户自行配置
 
 CMD="cd \"${SERVER_DIR}\" && exec node apps/web/server.js"
 

@@ -893,66 +893,6 @@ section {
   background: linear-gradient(180deg, transparent, #242424 25%, #242424 75%, transparent);
 }
 
-/* Mediary Connect banner */
-.connect-banner {
-  margin-top: 56px;
-  padding: 28px 32px;
-  border: 1px solid #2a3a2f;
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(30, 215, 96, 0.06), rgba(30, 215, 96, 0.02));
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  flex-wrap: wrap;
-}
-
-.connect-text {
-  flex: 1;
-  min-width: 260px;
-}
-
-.connect-text b {
-  display: block;
-  color: var(--accent);
-  font-size: 17px;
-  font-weight: 700;
-  margin-bottom: 8px;
-}
-
-/* 对比度修复（用户实拍反馈「字都看不清」，浏览器实测确认）：
-   1. 这里的 <a> 此前没有任何规则，于是拿到浏览器默认的 rgb(0,0,238) 纯蓝
-      （访问过变紫），压在深绿渐变底上几乎不可读；
-   2. 正文继承来的 #b3b3b3 配 14px 小字在这块深底上偏灰。
-   链接改品牌绿 + 常显下划线（不靠颜色单独承载「这是链接」这一信息，
-   对色觉障碍用户同样可辨）；正文由 --text-muted(#b3b3b3) 提到 #cbcbcb、
-   字号 14→14.5px。注意：正文规则只有下面那一条（曾误加成两条同优先级
-   规则，后者胜，导致改动看似无效）。 */
-.connect-text a {
-  color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.connect-text a:hover {
-  color: var(--accent-press);
-}
-
-.connect-text p {
-  color: #cbcbcb;
-  font-size: 14.5px;
-  line-height: 1.75;
-  margin: 0;
-}
-
-@media (max-width: 640px) {
-  .connect-banner {
-    padding: 22px 20px;
-    flex-direction: column;
-    align-items: flex-start;
-  }
-}
-
 @media (max-width: 860px) {
   .deploy-split {
     grid-template-columns: 1fr;
