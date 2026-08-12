@@ -96,6 +96,10 @@ else
     echo "    @img 目录不存在，跳过 sharp musl 清理"
 fi
 
+# ---- 2.6 确保 cmd/wizard 脚本可执行（git mode 可能丢失，打包前强制补上）----
+chmod +x "${FPK_DIR}"/cmd/* "${FPK_DIR}"/wizard/*
+echo "    cmd/wizard 脚本执行位已确认"
+
 # ---- 3. 写入版本号 + 平台 + fnpack 打包 ----
 echo "==> [3/3] fnpack build ..."
 sed -i.bak "s/^version[[:space:]]*=.*/version                    = ${VERSION}/" "${FPK_DIR}/manifest"
