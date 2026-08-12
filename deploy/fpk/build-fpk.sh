@@ -124,6 +124,32 @@ fi
 chmod +x "${FPK_DIR}"/cmd/* "${FPK_DIR}"/wizard/*
 echo "    cmd/wizard 脚本执行位已确认"
 
+# ---- 2.7 app/ui/config 桌面入口随模式改写 ----
+# fnpack 校验：".url" 下的入口键名必须以 appname 开头（如 mediary-scout.Application）；
+# 端口/标题也必须与当前模式一致。release 和 test 都全量写一次，避免残留污染。
+UI_CONFIG="${FPK_DIR}/app/ui/config"
+if [ -f "${UI_CONFIG}" ]; then
+    APPNAME="${APPNAME}" SERVICE_PORT="${SERVICE_PORT}" DISPLAY_NAME="${DISPLAY_NAME}" node -e '
+const fs = require("fs");
+const p = process.argv[1];
+const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+const url = cfg[".url"] || {};
+for (const k of Object.keys(url)) delete url[k];
+url[process.env.APPNAME + ".Application"] = {
+    title: process.env.DISPLAY_NAME,
+    icon: "images/icon_{0}.png",
+    type: "iframe",
+    protocol: "http",
+    port: process.env.SERVICE_PORT,
+    allUsers: true,
+};
+fs.writeFileSync(p, JSON.stringify(cfg, null, 4) + "\n");
+console.log("    app/ui/config 入口已改为 " + process.env.APPNAME + ".Application (port=" + process.env.SERVICE_PORT + ")");
+' "${UI_CONFIG}"
+else
+    echo "    app/ui/config 不存在，跳过"
+fi
+
 # ---- 3. 写入 appname/显示名/端口/版本号/平台 + fnpack 打包 ----
 echo "==> [3/3] fnpack build ..."
 # 无论 release 还是 test 都全量写一次，避免上次 test 残留污染 release（反之亦然）。
