@@ -10,7 +10,6 @@ import { RememberQuery } from "../components/search-memory";
 import { SearchForm } from "../components/search-form";
 import { SeasonRequestMenu } from "../components/season-request-menu";
 import { TrendingRow } from "../components/trending-row";
-import { ConnectNoticeBanner } from "../components/connect-notice-banner";
 import type { TrendingKind } from "../lib/trending";
 import { getSearchView } from "../lib/search-page";
 import {
@@ -25,8 +24,6 @@ import {
   getRegisteredDriveCount,
   getWorkflowRepository,
 } from "../lib/workflow-runtime";
-import { resolveConnectNoticeConditions } from "../lib/connect-notice-server";
-import { shouldShowConnectNotice } from "../lib/connect-notice";
 import { showHref } from "@media-track/workflow";
 import type { SearchCandidateCard, TrackedSeasonState } from "@media-track/workflow";
 
@@ -91,19 +88,11 @@ async function HomeSurface({
   const basePath = storageId ? `/w/${storageId}` : "/";
   const driveCount = await getRegisteredDriveCount();
 
-  // Connect notice: only on the root home page (no storageId), only on search tab
-  const connectConditions = await resolveConnectNoticeConditions();
-  const showConnectNotice =
-    !storageId && activeTab === "search" && shouldShowConnectNotice(connectConditions);
-
   return (
     <div className="app-shell">
       <AppSidebar active={activeTab} searchQuery={query} basePath={basePath} activeStorageId={storageId} />
 
       <main className="main product-main">
-        {showConnectNotice ? (
-          <ConnectNoticeBanner hasTunnelToken={connectConditions.hasTunnelToken} />
-        ) : null}
         {activeTab === "search" ? (
           <section className="search-surface">
             <RememberQuery query={query} basePath={basePath} />

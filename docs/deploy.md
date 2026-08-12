@@ -15,7 +15,7 @@ Mediary Scout 有两种部署方式:
 
 ---
 
-> **English summary.** Self-host with one command — `docker compose up -d` brings up web (Next.js + in-process worker) + Postgres + a bundled PanSou. Open `http://<host>:3000`, go to Settings, scan-login your drive (115 / Quark / 123 / Tianyi by QR; GuangYaPan by pasted token), add an OpenAI-compatible LLM endpoint, and you're running. To reach it from your phone / TV / on the go, use **Tailscale** (private mesh — safest) or a **Cloudflare Tunnel** (public HTTPS, no public IP). **Never expose `:3000` raw to the internet.** Full walkthrough below (Chinese).
+> **English summary.** Self-host with one command — `docker compose up -d` brings up web (Next.js + in-process worker) + Postgres + a bundled PanSou. Open `http://<host>:3000`, go to Settings, scan-login your drive (115 / Quark / 123 / Tianyi by QR; GuangYaPan by pasted token), add an OpenAI-compatible LLM endpoint, and you're running. To reach it from your phone / TV / on the go, use **Tailscale** (private mesh — safest). **Never expose `:3000` raw to the internet.** Full walkthrough below (Chinese).
 
 一行命令起整套:**web(Next + 进程内 worker)+ Postgres + 自带 PanSou**。本指南覆盖:选宿主 → compose 起服务 → 从自己的设备访问 → 安全/升级。
 
@@ -52,7 +52,7 @@ docker compose up -d        # 首次会构建 web 镜像,几分钟
 
 > ### ⚠️ 墙内先看这个:Docker Hub 大概率拉不动
 >
-> 本项目有三个镜像来自 Docker Hub(`postgres`、构建 web 用的 `node`、`cloudflared`),
+> 本项目有两个镜像来自 Docker Hub(`postgres`、构建 web 用的 `node`),
 > 而 **Docker Hub 在中国大陆常年不稳定**。典型报错:
 >
 > ```
@@ -182,9 +182,9 @@ docker compose up -d        # 首次会构建 web 镜像,几分钟
 
 ## 从你的设备访问
 
-默认 web 只监听宿主的 `:3000`(局域网内手机 / 电视浏览器直接开 `http://<宿主局域网IP>:3000` 即可)。想在外网(手机流量、出门在外)也能用,二选一——**都不需要公网 IP、都别把 `:3000` 裸暴露公网**:
+默认 web 只监听宿主的 `:3000`(局域网内手机 / 电视浏览器直接开 `http://<宿主局域网IP>:3000` 即可)。想在外网(手机流量、出门在外)也能用,用 Tailscale——**不需要公网 IP、也别把 `:3000` 裸暴露公网**:
 
-### 方式一:Tailscale(私有 mesh,推荐家用)
+### Tailscale(私有 mesh,推荐家用)
 
 最简单也最安全。把宿主和你的手机 / 电脑 / 电视都加入同一个 Tailscale 网络(tailnet),它们之间用稳定私有 IP 互访,不经公网、自动加密。
 
@@ -194,142 +194,10 @@ docker compose up -d        # 首次会构建 web 镜像,几分钟
 
 家人也想用:把他们的设备加进你的 tailnet(或用 Tailscale 分享)即可,无需开放任何公网端口。
 
-### 方式二:Cloudflare Tunnel(需要公网 HTTPS 域名时)
-
-想要一个任意设备浏览器都能直接打开的 `https://media.yourdomain.com`,又没有公网 IP——用 Cloudflare Tunnel(`cloudflared`)把宿主**出站**反连到 Cloudflare,路由器不开任何端口、不暴露公网 IP。本仓库的 `docker-compose.yml` 已内置一个**可选** `cloudflared` 服务(`tunnel` profile,默认不启),随栈一条命令起。
-
-前提:一个托管在 Cloudflare 的域名(本指南以 `media.yourdomain.com` 为例)。
-
-**1. 在 Cloudflare 控制台建隧道、拿 token(推荐 dashboard 托管,配置集中、好接 Access)**
-
-- **Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared**,起个名(如 `mediary`)。
-- 连接方式选 **Docker**,**复制那串连接器 token**(`eyJ...` 一长串)。下一步用它,先不用管它给的 docker 命令。
-- 建好后进隧道的 **Public Hostname → Add a public hostname**:
-  - Subdomain `media`,Domain 选 `yourdomain.com`(→ `media.yourdomain.com`)。
-  - **Service:Type = HTTP,URL = `web:3000`**。⚠️ 这里必须填 compose 服务名 `web`,**不是 `localhost`**——`cloudflared` 跑在 compose 网络里,`localhost` 指的是它自己那个容器。
-  - 保存。DNS 的 CNAME 由 Cloudflare 自动建,无需手动加记录。
-
-**2. 在宿主放 token、随栈起隧道**
-
-```bash
-echo 'TUNNEL_TOKEN=粘贴你的连接器token' >> .env
-docker compose --profile tunnel up -d        # 多起一个 cloudflared 容器
-docker compose logs -f cloudflared           # 看到 "Registered tunnel connection" 即通
-```
-
-隧道通了之后,`https://media.yourdomain.com` 就能从任意设备打开。`.env` 里的 token 不会进 git(`.env` 已被忽略)。
-
-> 隧道连不上 / 老掉线? cloudflared 默认是 `auto`(优先 QUIC/UDP,理论上会回退 HTTP/2)。但有些网络(部分校园网、运营商、严格防火墙)封/限 UDP 时,auto 未必干净回退,隧道就注册不上或老掉线。这时在 `.env` 设 `TUNNEL_TRANSPORT_PROTOCOL=http2` 强制走 TCP 上的 HTTP/2,再 `docker compose --profile tunnel up -d` 重起即可。
-
-**3. ⚠️ 必须有门禁(否则等于把实例裸挂公网)**
-
-Mediary Scout 默认单用户、无登录。公网入口必须挡住,二选一:
-
-**方案 A(推荐):在应用里设访问密码**
-
-设置 → 账号 → 设置访问密码。设好之后:
-
-| 来源 | 行为 |
-|---|---|
-| 局域网(手机/电视/电脑直连 `:3000`) | **免登录,零摩擦** |
-| 经隧道从外网访问 | 需要输入密码,登录状态保持 30 天 |
-
-内外之别靠「请求是否带 Cloudflare 注入的头」判定(`CF-Ray` 等,访客摘不掉)。
-
-> ⚠️ **这条判定的前提:实例只能经「局域网 + 隧道」两条路到达,不能有第三条。**
-> 家庭 NAT 天然满足,但你必须确认:
-> - **别在路由器上给 web 端口做端口映射 / DMZ**;
-> - **关掉路由器的 UPnP 自动打洞**(Emby 曾因「局域网免密 + UPnP 自动打洞」导致数千台服务器被入侵,暴露面正是 UPnP);
-> - 若把实例放在有公网 IP 的 VPS 上,把 compose 的端口发布改成只监听本机(`127.0.0.1:3000:3000`),让隧道从容器网络内访问。
->
-> 一旦存在第三条不经 Cloudflare 的入站路径,那条路上的请求会被判成「局域网」而免登录。
-
-**方案 B:Cloudflare Access(前置鉴权,与方案 A 可叠加)**
-
-- **Zero Trust → Access → Applications → Add an application → Self-hosted**。
-- Application domain 填 `media.yourdomain.com`。
-- 加一条 **Allow** 策略,例如 Include = **Emails** = 你自己的邮箱(进站会先要求邮箱一次性验证码登录)。想给家人用就把他们的邮箱也加进白名单。
-- 保存后,任何访问 `media.yourdomain.com` 的人都要先过 Access 这关,才能到达应用。
-
-Access 免费版有 50 个席位上限,超出后按人月计费;只给自己/家人用时方案 A 更省事。
-
-> 想自启:`cloudflared` 容器已 `restart: unless-stopped`,宿主重启会自动拉起;隧道配置在 Cloudflare 侧托管,改公网主机名 / Access 策略都在控制台改,不用动宿主。
-
-**让 agent 帮你配(方式二提示词)** — 把下面这段整体复制给 Claude Code / Codex / opencode,它会带你走完上面整个流程:
-
-```text
-你是在帮用户把自托管的 Mediary Scout 暴露到公网,走 Cloudflare Tunnel(无需公网 IP、不开路由器端口)。
-
-前提(不满足就先停,或考虑 Tailscale 替代):
-- 用户有一个域名,且其 NS(域名服务器)已切到 Cloudflare——仅在别家注册商买了域名但没切 NS 是不行的。
-- 用户能登录 Cloudflare Zero Trust(免费档;注意开通流程可能要求绑一张卡或 PayPal,但不会扣费)。
-- 若用户没有域名/不想切 NS/不想绑卡:改建议 Tailscale(私有 mesh,无需域名,适合自己/家人),并停下。
-
-安全红线:
-- TUNNEL_TOKEN 是机密,不进 git、不写进文档/截图、不打印日志,只写入实例 .env。
-- 禁止在路由器/防火墙上把 3000 端口转发到公网;compose 默认映射到宿主局域网是允许的。
-
-第 0 步·环境门:
-1. `docker info` — 失败则提示用户,停止。
-2. `docker compose ls` — 找到 mediary-scout 部署目录的 project,`cd` 进去,确认有 web 服务。
-
-第 1 步·建隧道(在 Cloudflare Zero Trust dashboard):
-a. Networks → Tunnels → Create a tunnel → 选 Cloudflared → 起名(如 mediary)
-b. 连接器页面会给一段 docker run 命令,里面有 token(eyJ... 一长串)。只复制 token 那串,不要复制整条命令。
-c. 进这条隧道的 Public Hostname → Add a public hostname:
-   - Subdomain 填子域(如 media),Domain 选你的域名
-   - Service: Type=HTTP, URL=web:3000(必须是 compose 服务名 web,不是 localhost)
-   - DNS CNAME 由 Cloudflare 自动创建,不要手动加记录。
-
-第 2 步·写凭证:
-- 确保 .env 中有且仅有一行有效: TUNNEL_TOKEN=<上一步复制的 token>
-- 若已有旧 TUNNEL_TOKEN,先用 # 注释备份那行,再写新行;不要动其它配置。
-- 若 .env 不在 git 忽略里(git check-ignore .env 返回非 0),先把 .env 加进 .git/info/exclude。
-
-第 3 步·启动:
-- 在部署目录执行 `docker compose --profile tunnel up -d`
-- 首次会拉取 cloudflared 镜像(慢网络几分钟,正常)。
-  **墙内若报 `failed to fetch anonymous token` / `connection reset by peer`,重试没用** ——
-  那是 Docker Hub 常年不稳定,在 `.env` 里加 `DOCKER_MIRROR=docker.1ms.run` 再重跑
-  (见上方「Compose 快速开始」里的镜像源小节)。`connect.sh` 遇到这个错会直接把解法打出来。
-
-第 4 步·确认连通:
-1. 先 `docker compose ps cloudflared` 应显示 Up(若 Starting/空,等 30 秒再看,别判失败)。
-2. 再 `docker compose logs cloudflared --tail 30` 看到 "Registered tunnel connection" 即成功。
-3. 若 1 分钟后仍无 Registered:
-   a. token 是否完整一行; b. 目录/服务名 web/cloudflared 与 web 同网络; c. 出站 7844 没被拦;
-   d. .env 追加 TUNNEL_TRANSPORT_PROTOCOL=http2,重新 `docker compose --profile tunnel up -d`(不是 restart)。
-
-第 5 步·必须加 Cloudflare Access(否则等于裸挂公网):
-a. Zero Trust → Access → Applications → Add an application → Self-hosted
-b. Application domain 填你的完整子域(如 media.你的域名)
-c. 加一条 Policy: Action=Allow,Include 选择器选 **Emails**(注意不是 "Emails ending in"),填用户自己(及家人)邮箱。
-d. 登录身份默认走 One-time PIN(邮箱一次性验证码);若登录页提示无 IdP,去 Settings → Authentication 确认 One-time PIN 已启用。
-
-第 6 步·验证(由人来完成):
-- 浏览器打开子域 → 应先 Access 邮箱验证 → 通过后进 Mediary Scout。
-- 若直接进应用(没拦),立刻回第 5 步检查 policy 是否 Enable、domain 是否精确匹配子域。
-- agent 不要自行声称验证结果,让用户确认。
-
-完成后用简短中文汇报:隧道是否 Registered、Access 是否配置、面板是否(由用户确认)能进。
-```
-
-### 方式三:Mediary Connect（受邀）
-
-若你收到作者的 Mediary Connect 邀请链接（`https://mediaryconnect.app/i/...`）:
-
-1. 打开链接，按页显示一次连接信息（含 `TUNNEL_TOKEN`）。
-2. 写入实例 `.env` 的 `TUNNEL_TOKEN=...`（可复制页上的 Agent 提示词交给 coding agent 代配）。
-3. `docker compose --profile tunnel up -d`
-4. 浏览器打开页上的 `https://<slug>.mediaryconnect.app`，完成 Cloudflare Access 邮箱验证。
-
-Public Hostname 与 Access 已由 Connect 控制面配好，服务目标固定为 compose 内 `http://web:3000`。
-网络不稳时可加 `TUNNEL_TRANSPORT_PROTOCOL=http2`。
-
 ## 安全
 
 - 本项目只走**自部署**,作者不托管(见 [distribution-and-legal-positioning.md](distribution-and-legal-positioning.md))。默认单用户、无登录。
-- **别在公网裸暴露 `:3000`**。要远程用就走上面的 Tailscale(私有)或 Cloudflare Tunnel + Access(带鉴权)。
+- **别在公网裸暴露 `:3000`**。要远程用就走上面的 Tailscale(私有,自带鉴权)。
 - 想多人合用同一实例(各绑各的网盘、各看各的库):设环境变量 `MEDIA_TRACK_MULTI_USER=1` 开多用户模式(出注册 / 登录页)。即便开了多用户,也仍建议放在 Tailscale / Access 之后。
 
 ## 多用户与忘记密码
@@ -352,7 +220,7 @@ Public Hostname 与 Access 已由 Connect 控制面配好，服务目标固定�
 
   不给新密码就随机生成并打印。登录后到「设置 → 修改密码」改成你自己的。
 
-即便开了多用户,也仍建议放在 Tailscale / Cloudflare Access 之后——登录只为隔离用户数据,不是给公网当门禁。
+即便开了多用户,也仍建议放在 Tailscale 之后——登录只为隔离用户数据,不是给公网当门禁。
 
 ## 国内构建加速(Docker Hub 常年不稳定)
 
@@ -385,7 +253,7 @@ DeadlineExceeded / dial tcp ...:443: i/o timeout
 docker compose build --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 ```
 
-> 镜像地址会失效/限速,`docker.1ms.run` 只是示例;搜「Docker 镜像加速 可用」找当前能用的即可。配好后,所有 **Docker Hub** 镜像(`postgres`、构建 web 用的 `node`、`cloudflared`)都会走镜像 —— 本仓库 Dockerfile 已**特意不写 `# syntax=` 指令**,避免它绕过镜像、第一步就卡死(见 #46)。
+> 镜像地址会失效/限速,`docker.1ms.run` 只是示例;搜「Docker 镜像加速 可用」找当前能用的即可。配好后,所有 **Docker Hub** 镜像(`postgres`、构建 web 用的 `node`)都会走镜像 —— 本仓库 Dockerfile 已**特意不写 `# syntax=` 指令**,避免它绕过镜像、第一步就卡死(见 #46)。
 
 **⚠️ 注意 `pansou` 例外**:它来自 **ghcr.io**(`ghcr.io/fish2018/pansou-web`),而 Docker 的 `registry-mirrors` **只对 Docker Hub 生效、管不到 ghcr**。若 ghcr 也连不上,二选一:
 - 在 `.env` 设 `PANSOU_IMAGE=` 指向一个 ghcr 镜像/代理(如 `ghcr.nju.edu.cn/fish2018/pansou-web:latest`,镜像可用性自行确认),再 `docker compose up -d`;

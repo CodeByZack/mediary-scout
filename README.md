@@ -67,7 +67,7 @@ Then open `http://<host>:3000` and configure in **Settings**. Full walkthrough: 
 | **Agent API** | ✅ | ✅ |
 | **Always-on patrol** | ❌ (runs when app is open) | ✅ |
 | **Multi-user** | ❌ | ✅ |
-| **Remote access** | Local only | Tailscale / Cloudflare Tunnel |
+| **Remote access** | Local only | Tailscale |
 
 Both paths share **one codebase** — all product logic is identical. The data layer (SQLite vs Postgres) is selected by the `MEDIA_TRACK_SQLITE_PATH` env var, not the process shell — desktop sets it automatically, Docker defaults to Postgres.
 
@@ -170,7 +170,7 @@ A public, **read-only** demo — mock drives, real TMDB search across the whole 
 
 ## Deploy (Docker)
 
-Self-host on a NAS, a router (软路由), a spare PC, or a VPS — and reach it from your phone / TV via **Tailscale** or a **Cloudflare Tunnel** (no public IP needed; never expose `:3000` raw). Full walkthrough: **[docs/deploy.md](docs/deploy.md)**.
+Self-host on a NAS, a router (软路由), a spare PC, or a VPS — and reach it from your phone / TV via **Tailscale** (no public IP needed; never expose `:3000` raw). Full walkthrough: **[docs/deploy.md](docs/deploy.md)**.
 
 ### Deploy with an agent
 
@@ -187,7 +187,6 @@ You are deploying Mediary Scout, a self-hosted media-acquisition agent. Follow t
 3. **Local-only, or reach it from outside?**
    - Local network only (default — open `http://<host>:3000` from devices on the same LAN)
    - Tailscale (private mesh — recommended for home; no public IP, auto-encrypted)
-   - Cloudflare Tunnel (public HTTPS like `https://media.yourdomain.com` — needs a domain on Cloudflare + Access in front)
 4. **Configure real acquisition now, or just get it running first?** Real acquisition needs a supported drive (Quark/115/光鸭/123/天翼) + an LLM endpoint (OpenAI-compatible) + (if using 115) 115 directory CIDs. Skipping means it boots and you can look around, configure later in Settings.
 
 ## OPTIONAL — one question, skip all if the user doesn't care
@@ -202,7 +201,6 @@ You are deploying Mediary Scout, a self-hosted media-acquisition agent. Follow t
 - If build acceleration (mainland China): `docker compose build --build-arg NPM_REGISTRY=https://registry.npmmirror.com` + a registry mirror in `/etc/docker/daemon.json`, **before** the first `up`
 - `docker compose up -d` (first build takes a few minutes)
 - If multi-user: add `MEDIA_TRACK_MULTI_USER=1` to `.env`, then `docker compose up -d web`
-- If Cloudflare Tunnel: follow docs/deploy.md §"方式二" — create the tunnel in the Zero Trust dashboard, put the token in `.env` as `TUNNEL_TOKEN=<your-token>`, `docker compose --profile tunnel up -d`, and **add Cloudflare Access** (never expose the instance without auth)
 - Open `http://<host>:3000`, walk the user through Settings (drive / LLM / optional extras)
 - Verify it's up, report the URL, and tell them how to upgrade (`git pull && docker compose up -d --build`)
 ````

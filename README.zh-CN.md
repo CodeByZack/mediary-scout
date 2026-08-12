@@ -111,7 +111,7 @@ docker compose up -d
 
 ## 部署
 
-自部署到 NAS、软路由、闲置 PC 或 VPS,并经 **Tailscale** 或 **Cloudflare Tunnel** 从手机 / 电视访问(无需公网 IP;别把 `:3000` 裸暴露)。完整教程:**[docs/deploy.md](docs/deploy.md)**。
+自部署到 NAS、软路由、闲置 PC 或 VPS,并经 **Tailscale** 从手机 / 电视访问(无需公网 IP;别把 `:3000` 裸暴露)。完整教程:**[docs/deploy.md](docs/deploy.md)**。
 
 ### 让 agent 帮你部署
 
@@ -128,7 +128,6 @@ docker compose up -d
 3. **只在局域网用,还是出门也要用?**
    - 只在局域网(默认——同 WiFi 下设备开 `http://<主机IP>:3000`)
    - Tailscale(私有 mesh——家用推荐,无公网 IP、自动加密)
-   - Cloudflare Tunnel(公网 HTTPS 如 `https://media.yourdomain.com`——需 Cloudflare 托管域名 + Access 前置鉴权)
 4. **现在就配真实获取,还是先起来看看?** 真实获取需要 115/夸克网盘 + LLM 端点(OpenAI 兼容)+ (用 115 时)115 目录 CID。先不配也能起来看 UI,后续在设置页配。
 
 ## 可选——一句话问,都不需要就跳过用默认
@@ -143,7 +142,6 @@ docker compose up -d
 - 国内构建加速(首次 `up` **之前**):`docker compose build --build-arg NPM_REGISTRY=https://registry.npmmirror.com` + `/etc/docker/daemon.json` 配 registry mirror
 - `docker compose up -d`(首次构建几分钟)
 - 多账号:在 `.env` 加 `MEDIA_TRACK_MULTI_USER=1`,再 `docker compose up -d web`
-- Cloudflare Tunnel:按 docs/deploy.md §"方式二"——在 Zero Trust 控制台建隧道、把 token 写进 `.env` 的 `TUNNEL_TOKEN=<你的-token>`、`docker compose --profile tunnel up -d`,并**务必加 Cloudflare Access**(别裸挂公网)
 - 打开 `http://<主机>:3000`,带用户走设置页(网盘 / LLM / 可选项)
 - 确认起来、报 URL、告诉怎么升级(`git pull && docker compose up -d --build`)
 ````

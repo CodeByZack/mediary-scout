@@ -3,7 +3,7 @@
 # TMDB 经 §1 CF Worker 开箱即用;LLM key / 自己的 TMDB key / Prowlarr 在设置页填。
 # ---- Docker Hub 镜像源(墙内必读) ----
 #
-# 本文件里三个镜像来自 Docker Hub:postgres、node(见 Dockerfile)、cloudflared。
+# 本文件里两个镜像来自 Docker Hub:postgres、node(见 Dockerfile)。
 # **在中国大陆,Docker Hub 经常拉不动** —— 表现为
 # `failed to fetch anonymous token: ... EOF` 或 `connection reset by peer`。
 # 这不是你的配置错了,是 registry-1.docker.io / auth.docker.io 不可达。
@@ -92,11 +92,6 @@ services:
       # queue (获取 stuck "排队", category dirs never provisioned). Must be vercel-ai.
       MEDIA_TRACK_AGENT_ADAPTER: vercel-ai
       MEDIA_TRACK_DEMO_SEED: "0"
-      # 隧道 token 也给 web:设置页「远程访问」用它作实例身份，向 Mediary Connect
-      # 报到查状态(仅发 Bearer 头做存活探针,不回传任何端点信息)。不传的话已开通
-      # 的实例会把自己显示成「未开通」。cloudflared 那边同样需要它,两处读同一个
-      # .env 变量。未设时为空 → tab 显示未开通,这正是自建/未开通实例的正确状态。
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
       # 可观测性:完整有序的 agent 逐步轨迹始终落 agent_steps 表(psql 即可复盘)。
       # 额外把每一步打到 stdout(docker compose logs web)是 OPT-IN —— 它会把工具参数
       # (搜索关键词 / 候选 id / 文件 id)写进容器日志与日志聚合器,默认不开。需要排障时
@@ -124,43 +119,6 @@ services:
       start_period: 40s
     logging: *default-logging
     restart: unless-stopped
-
-  # Optional public HTTPS via Cloudflare Tunnel (no public IP, no open ports).
-  # Off by default — only starts under `--profile tunnel`.
-  #   1. Create a tunnel in the Cloudflare Zero Trust dashboard, set its public
-  #      hostname's service URL to  http://web:3000  (the compose service name —
-  #      NOT localhost), and copy the connector token.
-  #   2. Put TUNNEL_TOKEN=<token> in .env  (compose reads .env for interpolation).
-  #   3. docker compose --profile tunnel up -d
-  #   4. ⚠️ Gate the hostname: set an access password in 设置 → 账号 (remote requests
-  #      then require login while the LAN stays open), or put Cloudflare Access in front.
-  #      See docs/deploy.md → 「必须有门禁」. Never expose the hostname unless at
-  #      least one of those two gates is in place.
-  # See docs/deploy.md → 「方式二:Cloudflare Tunnel」 for the full walkthrough.
-  cloudflared:
-    image: ${DOCKER_MIRROR:+${DOCKER_MIRROR}/}cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run
-    environment:
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
-      # Connector transport. Unset/empty → "auto" (cloudflared's own default: prefers
-      # QUIC/UDP, nominally falls back to HTTP/2). We default to the literal "auto" not
-      # "" because cloudflared rejects an empty protocol value ("unknown protocol").
-      # On UDP-blocked/throttled networks auto often doesn't fall back cleanly (tunnel
-      # won't register or keeps dropping) — set TUNNEL_TRANSPORT_PROTOCOL=http2 in .env.
-      TUNNEL_TRANSPORT_PROTOCOL: ${TUNNEL_TRANSPORT_PROTOCOL:-auto}
-    # Lets the connector resolve the Docker host, so a tunnel Public Hostname of
-    # type SSH can point at the host's sshd (host.docker.internal:22) — enabling
-    # SSH-over-tunnel from anywhere without opening a port. Harmless if unused.
-    # ⚠️ A bare SSH Public Hostname is reachable by anyone who knows it — gate it
-    # with Cloudflare Access, or accept key-only auth (no password auth on sshd).
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      - web
-    logging: *default-logging
-    restart: unless-stopped
-    profiles:
-      - tunnel
 
 volumes:
   pgdata:
