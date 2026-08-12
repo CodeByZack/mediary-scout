@@ -131,6 +131,7 @@
 - 根因：git 索引里 `deploy/fpk/cmd/*`（main/install_init/install_callback 等 9 个）与 `wizard/*`（install/uninstall）都是 100644 无执行位；本地工作区文件带 x（打包产物正常），CI checkout 后按 git mode 恢复为 644 → fnpack 打包后 fpk 内脚本无 x → fnOS 安装时无法执行安装回调脚本
 - 修复：`git update-index --chmod=+x` 将 cmd/* 与 wizard/* 共 11 个脚本改为 100755（与 build-fpk.sh 同源问题，一并根治）
 - 验证：git ls-files -s 确认全部 100755；需 CI 重新打包后真机安装验证
+- 补（同 PR 内）：`build-fpk.sh` 新增 2.6 节，打包前强制 `chmod +x cmd/* wizard/*`，git mode 再丢失也能保证产物带执行位（防止同类问题第三次复发）
 
 ---
 
