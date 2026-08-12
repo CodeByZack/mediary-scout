@@ -73,6 +73,29 @@ cp -a "${REPO_ROOT}/apps/web/public/." "${FPK_DIR}/app/server/apps/web/public/"
 
 echo "    app/server 大小: $(du -sh "${FPK_DIR}/app/server" | cut -f1)"
 
+# ---- 2.5 清理 sharp 的 musl 变体（glibc 环境用不到，减小 fpk 体积）----
+# npm 在 linux 下会把 glibc/musl 两种 libc 的 sharp 原生二进制都装进 @img（os/cpu 过滤正常、
+# libc 过滤失效），目标 NAS（飞牛 fnOS）与 CI 均为 glibc，musl 变体完全用不上，删掉。
+# 仅匹配 *linuxmusl*（arm/x86 通用，同时覆盖 sharp-libvips-linuxmusl-* 与 sharp-linuxmusl-*），
+# darwin/win32/wasm32 等其他平台变体不会被 npm 装进 linux，不需要处理。
+IMG_DIR="${FPK_DIR}/app/server/node_modules/@img"
+if [ -d "${IMG_DIR}" ]; then
+    MUSL_COUNT=0
+    while IFS= read -r musl_dir; do
+        [ -z "${musl_dir}" ] && continue
+        echo "    移除 sharp musl 变体: $(basename "${musl_dir}")"
+        rm -rf "${musl_dir}"
+        MUSL_COUNT=$((MUSL_COUNT + 1))
+    done < <(find "${IMG_DIR}" -maxdepth 1 -type d -name '*linuxmusl*' 2>/dev/null || true)
+    if [ "${MUSL_COUNT}" -eq 0 ]; then
+        echo "    @img 下无 sharp musl 变体，无需清理"
+    else
+        echo "    共移除 ${MUSL_COUNT} 个 sharp musl 变体目录"
+    fi
+else
+    echo "    @img 目录不存在，跳过 sharp musl 清理"
+fi
+
 # ---- 3. 写入版本号 + 平台 + fnpack 打包 ----
 echo "==> [3/3] fnpack build ..."
 sed -i.bak "s/^version[[:space:]]*=.*/version                    = ${VERSION}/" "${FPK_DIR}/manifest"
