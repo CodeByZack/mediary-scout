@@ -49,10 +49,11 @@ VERSION="${VERSION:-1.0.0}"
 echo "==> fpk version: ${VERSION}"
 
 # ---- 0.6 fnpack：FNPACK_BIN 环境变量 > PATH ----
-# ⚠️ 必须用 fnpack 1.2.0！static2.fnnas.com 的 fnpack-1.2.1-linux-arm64（2026-08-12 实测）有打包 bug：
-#   它打的 fpk 在飞牛安装器解包设置目录权限时必报 acl_get_file failed / "设置目录权限失败"，
-#   而 1.2.0 打的包正常可装（内容/属主/权限任意均验证过）。1.2.1 与 1.2.0 二进制不同
-#   （sha256 各异）但 --help 版本号都显示 1.2.0，无法程序化区分，请勿自行升级！
+# ⚠️ 必须用 fnpack 1.2.0！fnpack 1.2.1（static2 上 arm64 最新，2026-08-12 实测）打包时
+#   会把正常符号链接改写为指向自身的死链；fnOS 安装器对死链 acl_get_file 跟随目标
+#   死循环（ELOOP），报 10234 "set app dir permissions failed / 设置目录权限失败"，
+#   任何内容用 1.2.1 打都装不上。1.2.0 原样打包、正常可装。两者 --help 版本号都显示
+#   1.2.0 无法程序化区分（sha256 各异），请勿自行升级！
 FNPACK_BIN="${FNPACK_BIN:-fnpack}"
 command -v "${FNPACK_BIN}" >/dev/null 2>&1 || { echo "fnpack 不存在: ${FNPACK_BIN}（本机 /usr/local/bin/fnpack，CI 由 workflow 下载）" >&2; exit 1; }
 echo "==> fnpack: ${FNPACK_BIN}"
