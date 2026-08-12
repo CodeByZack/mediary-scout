@@ -34,6 +34,10 @@ deploy/fpk/
 ./deploy/fpk/build-fpk.sh
 # 指定版本号（默认读 package.json，缺省 1.0.0）：
 # VERSION=1.2.0 ./deploy/fpk/build-fpk.sh
+# 指定架构（默认按 uname 探测；arm|x86，同时写 manifest platform 与产物名）：
+# ARCH=x86 ./deploy/fpk/build-fpk.sh
+# 指定 fnpack 路径（默认 PATH 里的 fnpack）：
+# FNPACK_BIN=/opt/fnpack ./deploy/fpk/build-fpk.sh
 ```
 
 脚本做的事：
@@ -44,7 +48,8 @@ deploy/fpk/
    - `apps/web/.next/static/` → `app/server/apps/web/.next/static/`
    - `apps/web/public/` → `app/server/apps/web/public/`
 3. 从 `apps/desktop/build/icon.png` 生成 4 个图标（Pillow，缺则 ffmpeg 兜底）
-4. `fnpack build` 产出 `deploy/fpk/dist/mediary-scout.fpk` 并打印大小
+4. `fnpack build` 产出 `deploy/fpk/dist/mediary-scout-<ARCH>.fpk` 并打印大小
+   （ARCH 默认按构建机探测：aarch64 → `arm`，x86_64 → `x86`；可用 `ARCH=x86` 覆盖）
 
 > 产物不入 git：`deploy/fpk/app/server/`、`deploy/fpk/dist/` 已在 `.gitignore`。
 
@@ -52,7 +57,9 @@ deploy/fpk/
 
 1. 在飞牛应用中心安装 **Node.js 24** 运行时应用（本 fpk 声明 `install_dep_apps=nodejs_v24`，
    依赖会自动处理；fpk **不**内置 node_modules）。
-2. 应用中心 → 手动安装 → 选择 `deploy/fpk/dist/mediary-scout.fpk`。
+2. 应用中心 → 手动安装 → 选择 `deploy/fpk/dist/mediary-scout-<ARCH>.fpk`
+   （本机 aarch64 构建产物为 `mediary-scout-arm.fpk`；CI 双架构产物为
+   `mediary-scout-arm.fpk` / `mediary-scout-x86.fpk`，按 NAS 架构选对应包）。
 3. 安装完成后打开飞牛桌面上的 **MediaTrack** 图标，或浏览器访问
    `http://<NAS地址>:3333` 完成初始化（设置页扫码连 115、填 LLM key 等）。
 
@@ -95,9 +102,13 @@ deploy/fpk/
 
 ## 架构与 ABI
 
-- `platform = arm`（aarch64）。构建机与目标 NAS 同为 aarch64 + Node 24
-  （ABI 137），standalone 内随包的 `better-sqlite3` 原生模块直接可用，
-  无需在 NAS 上重新编译。
+- `platform` 由构建脚本按 `ARCH` 写入：arm64 构建 → `arm`，x64 构建 → `x86`
+  （manifest 官方合法值只有 `all` / `x86` / `arm`）。
+- 构建机/CI runner 与目标 NAS 同架构 + Node 24（ABI 137）：`npm ci` 时
+  better-sqlite3 按当前 Node ABI 下载预编译二进制（linux-x64 / linux-arm64 均有
+  node-v137 prebuild），standalone 内随包的原生模块直接可用，无需在 NAS 上重新编译。
+- 本地构建默认 aarch64 → `arm`；CI（`.github/workflows/build-fpk.yml`）用官方
+  ARM runner（ubuntu-24.04-arm）+ ubuntu-latest 分别产出两个架构的 fpk。
 
 ## 已知取舍 / 待确认
 
