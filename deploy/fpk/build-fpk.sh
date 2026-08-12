@@ -6,9 +6,12 @@
 #   VERSION=1.2.0 ./deploy/fpk/build-fpk.sh  # 指定 fpk 版本号（默认读 package.json，缺省 1.0.0）
 #   ARCH=x86 ./deploy/fpk/build-fpk.sh    # 指定架构（arm|x86，决定 manifest platform 与产物名）
 #   FNPACK_BIN=/path/to/fnpack ./deploy/fpk/build-fpk.sh  # 指定 fnpack 可执行文件（默认 PATH 里的 fnpack）
+#   FPK_MODE=test ./deploy/fpk/build-fpk.sh     # 测试版：appname=mediary-scout-dev、端口 3334，
+#                                                独立数据目录，装/卸都不影响正式版数据
 #
 # 产物：
-#   deploy/fpk/dist/mediary-scout-<ARCH>.fpk     （arm → mediary-scout-arm.fpk，x86 → mediary-scout-x86.fpk）
+#   deploy/fpk/dist/mediary-scout-<ARCH>.fpk        （release：arm → mediary-scout-arm.fpk，x86 → mediary-scout-x86.fpk）
+#   deploy/fpk/dist/mediary-scout-dev-<ARCH>.fpk    （test：arm → mediary-scout-dev-arm.fpk，x86 → mediary-scout-dev-x86.fpk）
 #
 # 前置条件（本机已具备）：
 #   - node + npm（构建机与 NAS 同架构 + Node 24，ABI 匹配；CI 里 setup-node 用 24）
@@ -49,6 +52,27 @@ echo "==> fpk version: ${VERSION}"
 FNPACK_BIN="${FNPACK_BIN:-fnpack}"
 command -v "${FNPACK_BIN}" >/dev/null 2>&1 || { echo "fnpack 不存在: ${FNPACK_BIN}（本机 /usr/local/bin/fnpack，CI 由 workflow 下载）" >&2; exit 1; }
 echo "==> fnpack: ${FNPACK_BIN}"
+
+# ---- 0.7 打包模式：FPK_MODE（release 正式版 | test 测试版）----
+# test 模式 = 换 appname 装成独立应用（mediary-scout-dev）：独立数据目录
+# /vol1/@appdata/mediary-scout-dev、独立端口 3334，装/卸都不碰正式版数据，
+# 适合反复试装验证（尤其是 CI 产物），正式版一直能用。
+FPK_MODE="${FPK_MODE:-release}"
+case "${FPK_MODE}" in
+    release)
+        APPNAME="mediary-scout"
+        DISPLAY_NAME="MediaTrack"
+        SERVICE_PORT="3333"
+        ;;
+    test)
+        APPNAME="mediary-scout-dev"
+        DISPLAY_NAME="MediaTrack (测试版)"
+        SERVICE_PORT="3334"
+        ;;
+    *)
+        echo "FPK_MODE 必须是 release 或 test，收到: ${FPK_MODE}" >&2; exit 1 ;;
+esac
+echo "==> fpk mode: ${FPK_MODE} (appname=${APPNAME}, service_port=${SERVICE_PORT})"
 
 # ---- 1. 正式构建（tsc workflow + next build standalone，约 1 分钟）----
 echo "==> [1/3] npm run build:web ..."
@@ -100,22 +124,32 @@ fi
 chmod +x "${FPK_DIR}"/cmd/* "${FPK_DIR}"/wizard/*
 echo "    cmd/wizard 脚本执行位已确认"
 
-# ---- 3. 写入版本号 + 平台 + fnpack 打包 ----
+# ---- 3. 写入 appname/显示名/端口/版本号/平台 + fnpack 打包 ----
 echo "==> [3/3] fnpack build ..."
+# 无论 release 还是 test 都全量写一次，避免上次 test 残留污染 release（反之亦然）。
+sed -i.bak "s/^appname[[:space:]]*=.*/appname                    = ${APPNAME}/" "${FPK_DIR}/manifest"
+sed -i.bak "s/^display_name[[:space:]]*=.*/display_name               = ${DISPLAY_NAME}/" "${FPK_DIR}/manifest"
+sed -i.bak "s/^desktop_applaunchname[[:space:]]*=.*/desktop_applaunchname      = ${APPNAME}.Application/" "${FPK_DIR}/manifest"
+sed -i.bak "s/^service_port[[:space:]]*=.*/service_port               = ${SERVICE_PORT}/" "${FPK_DIR}/manifest"
 sed -i.bak "s/^version[[:space:]]*=.*/version                    = ${VERSION}/" "${FPK_DIR}/manifest"
 sed -i.bak "s/^platform[[:space:]]*=.*/platform                   = ${ARCH}/" "${FPK_DIR}/manifest"
 rm -f "${FPK_DIR}/manifest.bak"
 
-FPK_NAME="mediary-scout-${ARCH}.fpk"
+if [ "${FPK_MODE}" = "test" ]; then
+    FPK_NAME="mediary-scout-dev-${ARCH}.fpk"
+else
+    FPK_NAME="mediary-scout-${ARCH}.fpk"
+fi
 
 rm -rf "${DIST_DIR}"
 mkdir -p "${DIST_DIR}"
 rm -f "${FPK_DIR}/${FPK_NAME}"
 
 cd "${FPK_DIR}"
-# fnpack 输出名固定为 manifest 的 appname（mediary-scout.fpk），按架构重命名到 dist/。
+# fnpack 输出名固定为 manifest 的 appname（release: mediary-scout.fpk / test: mediary-scout-dev.fpk），
+# 按模式+架构重命名到 dist/。
 "${FNPACK_BIN}" build -d .
-mv mediary-scout.fpk "${DIST_DIR}/${FPK_NAME}"
+mv "${APPNAME}.fpk" "${DIST_DIR}/${FPK_NAME}"
 
 echo
 echo "======================================================"
