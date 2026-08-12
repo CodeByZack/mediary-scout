@@ -111,6 +111,7 @@
 - 修复 Install fnpack 步骤 exit 127：`echo "/tmp" >> GITHUB_PATH` 只对后续 step 生效，当前 step 内 PATH 未更新导致 `fnpack --help` command not found；改用完整路径 `/tmp/fnpack --help`，末行固定输出路径
 - 注释与 `deploy/fpk/README.md` 措辞同步统一（arm 即 aarch64、x86 即 x86_64）
 - 验证：YAML 解析 OK；`x64` 全文件零残留，`arm64` 仅剩 fnpack 官方 URL 后缀
+- 补（PR #4 内）：`deploy/fpk/build-fpk.sh` 增加可执行位（100755），修复 CI checkout 后 `./build-fpk.sh` Permission denied（git 原记录为 100644）
 
 ---
 
