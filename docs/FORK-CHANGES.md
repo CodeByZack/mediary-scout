@@ -17,6 +17,7 @@
 | 2026-08-11 | feat | 双架构 fpk 打包 workflow（arm64 + x64，PR #3） |
 | 2026-08-12 | chore | 完全移除 Mediary Connect 远程访问功能及全部残留 |
 | 2026-08-12 | fix | 统一 fpk 双架构命名为 arm/x86 + 修复 Install fnpack 步骤 exit 127 |
+| 2026-08-12 | fix | fpk 打包清理 sharp musl 变体，产物 22M → 15M |
 
 ---
 
@@ -111,6 +112,14 @@
 - 修复 Install fnpack 步骤 exit 127：`echo "/tmp" >> GITHUB_PATH` 只对后续 step 生效，当前 step 内 PATH 未更新导致 `fnpack --help` command not found；改用完整路径 `/tmp/fnpack --help`，末行固定输出路径
 - 注释与 `deploy/fpk/README.md` 措辞同步统一（arm 即 aarch64、x86 即 x86_64）
 - 验证：YAML 解析 OK；`x64` 全文件零残留，`arm64` 仅剩 fnpack 官方 URL 后缀
+
+### 11. fpk 打包清理 sharp musl 变体（产物 22M → 15M）
+
+**提交**: `91c3279` — fix(fpk): 打包时清理 sharp musl 变体，减小 fpk 体积
+
+- 根因：npm（11.8.0 实测）对 optionalDependencies 的 **libc 过滤失效**，`npm ci` 会把 sharp 的 glibc + musl 两种 libc 原生二进制都装进 `node_modules/@img/`（os/cpu 过滤正常，darwin/win32/wasm32 不会被装）；本地旧 node_modules（08-09 安装）恰好只有 glibc，故本地打包 15M、CI 打包 22M
+- 修复：`build-fpk.sh` 填充 app/server 后、fnpack 打包前，删除 `@img/` 下所有 `*linuxmusl*` 变体（一个 glob 覆盖 sharp-libvips-linuxmusl-* 与 sharp-linuxmusl-*，arm/x86 通用）；`[ -d ]` 守卫 + `|| true` 兼容 set -euo pipefail，@img 不存在静默跳过；打印移除明细便于 CI 日志确认
+- 验证：本地完整打包通过，产物 `mediary-scout-arm.fpk` 15M（CI 22M）；模拟 musl 目录删除路径实测生效、glibc 保留
 
 ---
 
