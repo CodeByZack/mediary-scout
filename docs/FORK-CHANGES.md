@@ -16,6 +16,7 @@
 | 2026-08-11 | fix | Server Actions CSRF 修复（反代下被 Next 16 拦截，PR #2） |
 | 2026-08-11 | feat | 双架构 fpk 打包 workflow（arm64 + x64，PR #3） |
 | 2026-08-12 | chore | 完全移除 Mediary Connect 远程访问功能及全部残留 |
+| 2026-08-12 | fix | 统一 fpk 双架构命名为 arm/x86 + 修复 Install fnpack 步骤 exit 127 |
 
 ---
 
@@ -101,6 +102,15 @@
 - 删除纯 Connect 文档（cf-tunnel 转售许可邮件、seo-interlink-findings），清理 SEO-STATE / site/index.html / sitemap.xml / style.css 死 CSS（60 行）
 - **保留**：网盘绑定 connect*Action（connectQuark/GuangYa/TianyiSson）、Next `connection()` API、`.qr-connect` 样式
 - 验证：apps/web typecheck EXIT 0；全仓库 grep 零残留
+
+### 10. 统一 fpk 双架构命名为 arm/x86 + 修复 Install fnpack 步骤 exit 127
+
+**提交**: `3e3d647` — fix(fpk): 统一架构命名 arm/x86，修复 Install fnpack 步骤 exit 127
+
+- matrix 架构 key 与 artifact 统一为 `arm` / `x86`（此前 job 名显示 "Build fpk (arm64)/(x64)"、artifact 叫 fpk-arm64/fpk-x64）；runner（ubuntu-24.04-arm / ubuntu-latest）与 fnpack_arch（官方下载 URL 后缀 amd64/arm64）是外部命名，保留并在注释说明
+- 修复 Install fnpack 步骤 exit 127：`echo "/tmp" >> GITHUB_PATH` 只对后续 step 生效，当前 step 内 PATH 未更新导致 `fnpack --help` command not found；改用完整路径 `/tmp/fnpack --help`，末行固定输出路径
+- 注释与 `deploy/fpk/README.md` 措辞同步统一（arm 即 aarch64、x86 即 x86_64）
+- 验证：YAML 解析 OK；`x64` 全文件零残留，`arm64` 仅剩 fnpack 官方 URL 后缀
 
 ---
 
