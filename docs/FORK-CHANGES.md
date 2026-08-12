@@ -18,6 +18,7 @@
 | 2026-08-12 | chore | 完全移除 Mediary Connect 远程访问功能及全部残留 |
 | 2026-08-12 | fix | 统一 fpk 双架构命名为 arm/x86 + 修复 Install fnpack 步骤 exit 127 |
 | 2026-08-12 | fix | fpk 打包清理 sharp musl 变体，产物 22M → 15M |
+| 2026-08-12 | fix | fpk cmd/wizard 脚本加可执行位，修复 fnOS 安装报"无法设置目录权限" |
 
 ---
 
@@ -121,6 +122,15 @@
 - 根因：npm（11.8.0 实测）对 optionalDependencies 的 **libc 过滤失效**，`npm ci` 会把 sharp 的 glibc + musl 两种 libc 原生二进制都装进 `node_modules/@img/`（os/cpu 过滤正常，darwin/win32/wasm32 不会被装）；本地旧 node_modules（08-09 安装）恰好只有 glibc，故本地打包 15M、CI 打包 22M
 - 修复：`build-fpk.sh` 填充 app/server 后、fnpack 打包前，删除 `@img/` 下所有 `*linuxmusl*` 变体（一个 glob 覆盖 sharp-libvips-linuxmusl-* 与 sharp-linuxmusl-*，arm/x86 通用）；`[ -d ]` 守卫 + `|| true` 兼容 set -euo pipefail，@img 不存在静默跳过；打印移除明细便于 CI 日志确认
 - 验证：本地完整打包通过，产物 `mediary-scout-arm.fpk` 15M（CI 22M）；模拟 musl 目录删除路径实测生效、glibc 保留
+
+### 12. fpk cmd/wizard 脚本加可执行位（修复 fnOS 安装报"无法设置目录权限"）
+
+**提交**: `83e3a46` — fix(fpk): cmd/wizard 脚本加可执行位 (100755)
+
+- 现象：CI 打的 fpk 在飞牛应用中心安装报"无法安装 无法设置目录权限"
+- 根因：git 索引里 `deploy/fpk/cmd/*`（main/install_init/install_callback 等 9 个）与 `wizard/*`（install/uninstall）都是 100644 无执行位；本地工作区文件带 x（打包产物正常），CI checkout 后按 git mode 恢复为 644 → fnpack 打包后 fpk 内脚本无 x → fnOS 安装时无法执行安装回调脚本
+- 修复：`git update-index --chmod=+x` 将 cmd/* 与 wizard/* 共 11 个脚本改为 100755（与 build-fpk.sh 同源问题，一并根治）
+- 验证：git ls-files -s 确认全部 100755；需 CI 重新打包后真机安装验证
 
 ---
 
