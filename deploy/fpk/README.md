@@ -101,13 +101,13 @@ deploy/fpk/
 
 ## 架构与 ABI
 
-- `platform` 由构建脚本按 `ARCH` 写入：arm64 构建 → `arm`，x64 构建 → `x86`
+- `platform` 由构建脚本按 `ARCH` 写入：arm（aarch64）构建 → `arm`，x86（x86_64）构建 → `x86`
   （manifest 官方合法值只有 `all` / `x86` / `arm`）。
 - 构建机/CI runner 与目标 NAS 同架构 + Node 24（ABI 137）：`npm ci` 时
   better-sqlite3 按当前 Node ABI 下载预编译二进制（linux-x64 / linux-arm64 均有
   node-v137 prebuild），standalone 内随包的原生模块直接可用，无需在 NAS 上重新编译。
 - 本地构建默认 aarch64 → `arm`；CI（`.github/workflows/build-fpk.yml`）用官方
-  ARM runner（ubuntu-24.04-arm）+ ubuntu-latest 分别产出两个架构的 fpk。
+  arm（aarch64）runner（ubuntu-24.04-arm）+ ubuntu-latest 分别产出 arm / x86 两个架构的 fpk。
 
 ## 已知取舍 / 待确认
 
