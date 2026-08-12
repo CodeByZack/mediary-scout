@@ -24,6 +24,14 @@ on:
         description: "Version tag to publish (e.g. v1.2.0, 与 fpk 版本号一致)"
         required: false
         default: ""
+      mode:
+        description: "打包模式：release=正式版（默认）；test=测试版（appname=mediary-scout-dev、端口3334、独立数据目录，装/卸不影响正式版）"
+        required: false
+        default: release
+        type: choice
+        options:
+          - release
+          - test
 
 permissions:
   contents: read
@@ -106,26 +114,29 @@ jobs:
           echo "version=${V}" >> "${GITHUB_OUTPUT}"
 
       # 复用现有打包脚本：tsc workflow + next build standalone + 填充 app/server + fnpack build。
-      # VERSION 为空时脚本回退读 package.json；ARCH 决定 manifest platform 与产物名。
-      - name: Build fpk (VERSION + ARCH)
+      # VERSION 为空时脚本回退读 package.json；ARCH 决定 manifest platform 与产物名；
+      # FPK_MODE=test 时打出独立测试版（mediary-scout-dev，端口3334），不影响正式版数据。
+      - name: Build fpk (VERSION + ARCH + MODE)
         env:
           VERSION: ${{ steps.version.outputs.version }}
           ARCH: ${{ matrix.platform }}
+          FPK_MODE: ${{ inputs.mode }}
         run: ./deploy/fpk/build-fpk.sh
 
       - name: Upload fpk artifact (${{ matrix.arch }})
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: deploy/fpk/dist/mediary-scout-${{ matrix.platform }}.fpk
+          name: ${{ inputs.mode == 'test' && format('fpk-{0}-dev', matrix.arch) || matrix.artifact }}
+          path: ${{ inputs.mode == 'test' && format('deploy/fpk/dist/mediary-scout-dev-{0}.fpk', matrix.platform) || format('deploy/fpk/dist/mediary-scout-{0}.fpk', matrix.platform) }}
           if-no-files-found: error
           retention-days: 7
 
   # 发布闸门：只有两个架构的 build 都成功才发 Release（避免只挂上一个架构）。
   # 仅 tag push 或 workflow_dispatch 带 tag 输入时执行；纯手动验证（不带 tag）只传 artifact。
+  # test 模式不发布 Release（测试包只作为 artifact 下载，不进正式 Release）。
   release:
     needs: [build]
-    if: needs.build.result == 'success' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag != ''))
+    if: needs.build.result == 'success' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) && inputs.mode != 'test'
     runs-on: ubuntu-latest
     permissions:
       contents: write

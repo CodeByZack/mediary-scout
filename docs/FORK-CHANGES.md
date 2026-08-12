@@ -19,6 +19,7 @@
 | 2026-08-12 | fix | 统一 fpk 双架构命名为 arm/x86 + 修复 Install fnpack 步骤 exit 127 |
 | 2026-08-12 | fix | fpk 打包清理 sharp musl 变体，产物 22M → 15M |
 | 2026-08-12 | fix | fpk cmd/wizard 脚本加可执行位，修复 fnOS 安装报"无法设置目录权限" |
+| 2026-08-12 | feat | fpk 打包支持测试版（FPK_MODE=test / workflow mode 参数）：独立 appname/端口/数据目录，反复试装不影响正式版 |
 
 ---
 
@@ -132,6 +133,20 @@
 - 修复：`git update-index --chmod=+x` 将 cmd/* 与 wizard/* 共 11 个脚本改为 100755（与 build-fpk.sh 同源问题，一并根治）
 - 验证：git ls-files -s 确认全部 100755；需 CI 重新打包后真机安装验证
 - 补（同 PR 内）：`build-fpk.sh` 新增 2.6 节，打包前强制 `chmod +x cmd/* wizard/*`，git mode 再丢失也能保证产物带执行位（防止同类问题第三次复发）
+
+### 13. fpk 打包支持测试版（FPK_MODE=test / workflow mode 参数）
+
+**提交**: （本次）`feat(fpk): 打包支持测试版 FPK_MODE=test`（build-fpk.sh + build-fpk.yml）
+
+- 动机：正式版已装进飞牛，每次测试新包都要卸载重装、正式数据（@appdata/mediary-scout）被清掉
+- `build-fpk.sh` 新增 `FPK_MODE` 环境变量（release 默认 | test）：
+  - test 模式 = `appname=mediary-scout-dev`、`display_name=MediaTrack (测试版)`、`service_port=3334`、`desktop_applaunchname=mediary-scout-dev.Application` → 飞牛按 appname 分配完全独立的安装/数据/配置目录，装/卸都不碰正式版
+  - 产物名 `mediary-scout-dev-<ARCH>.fpk`；每次打包全量写回 manifest 全部字段，避免 test/release 互相残留污染
+  - `cmd/main` 零改动（TRIM_APPDEST/TRIM_PKGVAR 由飞牛按 appname 自动注入，日志/PID/数据库路径全自动分开）
+- `build-fpk.yml` workflow_dispatch 新增 `mode` 下拉（release | test）：
+  - test 时 artifact 名为 `fpk-arm-dev` / `fpk-x86-dev`，上传路径对应 dev 产物
+  - release job 在 test 模式跳过（测试包不进正式 Release）
+- 验证：bash -n 语法 OK；YAML 解析 OK；manifest sed 分支逻辑确认
 
 ---
 
