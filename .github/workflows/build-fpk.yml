@@ -37,9 +37,9 @@ permissions:
   contents: read
 
 env:
-  # 注意：必须用 1.2.0！fnpack 1.2.1（static2 上 arm64 最新）有打包 bug——
-  # 实测 1.2.1 打的 fpk 在飞牛安装器解包设置目录权限时必报 acl_get_file failed，
-  # 1.2.0 打的正常可装（2026-08-12 实测闭环）。
+  # 注意：必须用 1.2.0！fnpack 1.2.1 打包时会把正常符号链接改写为指向自身的死链，
+  # fnOS 安装器对死链 acl_get_file 跟随死循环（ELOOP），报 10234 设置目录权限失败，
+  # 任何内容用 1.2.1 打都装不上；1.2.0 原样打包正常可装（2026-08-12 实测闭环）。
   FNPACK_VERSION: "1.2.0"
   # 与 ci.yml 相同的"空库构建"条件：值被设置为空字符串，不会被 next.config 的 ??= 覆盖。
   MEDIA_TRACK_POSTGRES_URL: ""
@@ -124,11 +124,6 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           ARCH: ${{ matrix.platform }}
           FPK_MODE: ${{ inputs.mode }}
-          # GitHub runner 文件属主 uid 1001 在目标飞牛系统不存在，会导致安装时报
-          # "set app dir permissions failed: acl_get_file failed"（错误码 10234）。
-          # FPK_CHOWN_ROOT=1 让 build-fpk.sh 在 fnpack build 前把打进 app.tgz 的
-          # 内容统一 chown 为 root(0:0)（本地打包属主存在，无需此选项）。
-          FPK_CHOWN_ROOT: "1"
         run: ./deploy/fpk/build-fpk.sh
 
       - name: Upload fpk artifact (${{ matrix.arch }})
