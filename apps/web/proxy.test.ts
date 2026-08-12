@@ -34,9 +34,16 @@ const makeRequest = (opts: {
   cf?: boolean;
   staleAuthCookie?: boolean;
   session?: boolean;
+  nextAction?: boolean;
+  origin?: string;
+  forwardedHost?: string;
 }): NextRequest => {
   const headers = new Headers();
   if (opts.cf) headers.set("cf-ray", "8f3abc-LAX");
+  // Server Action 请求特征：浏览器对 action POST 一定带 Next-Action header。
+  if (opts.nextAction) headers.set("next-action", "action-id-123");
+  if (opts.origin) headers.set("origin", opts.origin);
+  if (opts.forwardedHost) headers.set("x-forwarded-host", opts.forwardedHost);
   const cookies = new Map<string, { name: string; value: string }>();
   // `mt_auth_required` is no longer written by anything and no longer read by
   // proxy — the gate is (multi-user || remote) + session, full stop. It is kept
@@ -118,5 +125,70 @@ describe("proxy gate — multi-user mode", () => {
     } finally {
       delete process.env.MEDIA_TRACK_MULTI_USER;
     }
+  });
+});
+
+/**
+ * Next 16 Server Actions CSRF 修复：反代把 x-forwarded-host 写成内网地址，与浏览器
+ * Origin（动态端口公网反代域名）不匹配 → action-handler.js abort (E80)，前端「点了
+ * 没反应」。proxy 把 server action 请求的 x-forwarded-host 改写为 Origin 的 host。
+ *
+ * 断言方式：NextResponse.next({ request: { headers } }) 会把新的请求头序列化成
+ * x-middleware-request-* 响应头，并在 x-middleware-override-headers 里列出被覆盖的
+ * 键——这正是 Next 服务器实际用来重建下游请求的机制。
+ */
+describe("proxy — Server Actions CSRF fix（x-forwarded-host 改写）", () => {
+  const ORIGIN = "https://office.app.5ddd.com:60565";
+  const INTERNAL_HOST = "192.168.6.194:3333";
+  const ORIGIN_HOST = "office.app.5ddd.com:60565";
+
+  it("server action + origin/x-forwarded-host 不匹配 → x-forwarded-host 改写为 origin host", () => {
+    const req = makeRequest({ session: true, nextAction: true, origin: ORIGIN, forwardedHost: INTERNAL_HOST });
+    const res = proxy(req);
+    expect(redirectsToLogin(req)).toBe(false); // auth gate 照常放行
+    expect(res.headers.get("x-middleware-request-x-forwarded-host")).toBe(ORIGIN_HOST);
+    expect(res.headers.get("x-middleware-override-headers")?.split(",")).toContain("x-forwarded-host");
+  });
+
+  it("server action + 局域网（无 CF 头）→ 同样改写（修复与来源无关）", () => {
+    const req = makeRequest({ nextAction: true, origin: ORIGIN, forwardedHost: INTERNAL_HOST });
+    const res = proxy(req);
+    expect(res.headers.get("x-middleware-request-x-forwarded-host")).toBe(ORIGIN_HOST);
+  });
+
+  it("server action + 远程 + 无 session → 仍然重定向 /login（auth gate 不被绕过）", () => {
+    const req = makeRequest({ cf: true, nextAction: true, origin: ORIGIN, forwardedHost: INTERNAL_HOST });
+    expect(redirectsToLogin(req)).toBe(true);
+  });
+
+  it("非 server action（无 Next-Action）→ 不改写，即使 origin/x-forwarded-host 不匹配", () => {
+    const req = makeRequest({ session: true, origin: ORIGIN, forwardedHost: INTERNAL_HOST });
+    const res = proxy(req);
+    expect(res.headers.get("x-middleware-override-headers")).toBeNull();
+    expect(res.headers.get("x-middleware-request-x-forwarded-host")).toBeNull();
+  });
+
+  it("server action + 无 Origin → 不改写", () => {
+    const req = makeRequest({ session: true, nextAction: true, forwardedHost: INTERNAL_HOST });
+    const res = proxy(req);
+    expect(res.headers.get("x-middleware-override-headers")).toBeNull();
+  });
+
+  it("server action + Origin 'null' → 不改写（sandboxed iframe，Next 有自己的处理）", () => {
+    const req = makeRequest({ session: true, nextAction: true, origin: "null", forwardedHost: INTERNAL_HOST });
+    const res = proxy(req);
+    expect(res.headers.get("x-middleware-override-headers")).toBeNull();
+  });
+
+  it("server action + origin 与 x-forwarded-host 已一致 → 不改写", () => {
+    const req = makeRequest({ session: true, nextAction: true, origin: ORIGIN, forwardedHost: ORIGIN_HOST });
+    const res = proxy(req);
+    expect(res.headers.get("x-middleware-override-headers")).toBeNull();
+  });
+
+  it("server action + 畸形 Origin → 不改写、不抛错", () => {
+    const req = makeRequest({ session: true, nextAction: true, origin: "not a url", forwardedHost: INTERNAL_HOST });
+    expect(() => proxy(req)).not.toThrow();
+    expect(proxy(req).headers.get("x-middleware-override-headers")).toBeNull();
   });
 });
