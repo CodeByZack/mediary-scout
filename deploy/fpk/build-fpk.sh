@@ -125,28 +125,31 @@ else
     echo "    @img 目录不存在，跳过 sharp musl 清理"
 fi
 
-# ---- 2.55 修复 Next standalone 自引用符号链接（CI 必踩坑）----
-# ubuntu runner 上 Next.js standalone 输出会生成指向自身的符号链接
-# （.next/node_modules/<pkg>-<hash> -> <pkg>-<hash>，本地构建不复现）。
-# fnOS 安装器对这类链接 acl_get_file 时跟随目标死循环（ELOOP），
-# 报 10234 "set app dir permissions failed / 设置目录权限失败"。
-# 修复：真实包 server/node_modules/<pkg> 存在则改写为正确相对路径，否则删除。
-FIXED_LINKS=0
+# ---- 2.55 消除源内容符号链接（官方 fnpack 必踩坑）----
+# 官方 fnpack（static2.fnnas.com 的 1.2.0 / 1.2.1 均如此，2026-08-12 实测）打包时会把
+# 源内容里的任何符号链接改写为指向自身的死链；fnOS 安装器对死链 acl_get_file 跟随目标
+# 死循环（ELOOP），报 10234 "set app dir permissions failed / 设置目录权限失败"。
+# （本机 /usr/local/bin/fnpack 是更老的版本、原样保留链接，故本地包能装而 CI 包必失败。）
+# 修复：打包前把 app/ 下所有符号链接替换为指向目标的真实拷贝，dangling 链接直接删除。
+# 运行时依赖的真实包在 server/node_modules 下（非链接），不受影响。
+REPLACED_LINKS=0
 while IFS= read -r -d '' link; do
-    target="$(readlink "$link")"
-    name="$(basename "$link")"
-    [ "$target" = "$name" ] || continue
-    pkg="${name%-*}"
-    if [ -d "${FPK_DIR}/app/server/node_modules/${pkg}" ]; then
-        ln -sfn "../../../../node_modules/${pkg}" "$link"
+    abs="$(realpath -m "$link" 2>/dev/null || true)"
+    rel="${link#"${FPK_DIR}"/app/}"
+    if [ -n "$abs" ] && [ -e "$abs" ]; then
+        rm -f "$link"
+        cp -a "$abs" "$link"
+        echo "    符号链接→真实拷贝: ${rel}"
     else
         rm -f "$link"
+        echo "    删除 dangling 链接: ${rel}"
     fi
-    FIXED_LINKS=$((FIXED_LINKS + 1))
-    echo "    修复自引用链接: ${link#"${FPK_DIR}"/app/server/}"
-done < <(find "${FPK_DIR}/app/server" -path "*/.next/node_modules/*" -type l -print0 2>/dev/null || true)
-if [ "${FIXED_LINKS}" -eq 0 ]; then
-    echo "    无自引用符号链接，跳过修复"
+    REPLACED_LINKS=$((REPLACED_LINKS + 1))
+done < <(find "${FPK_DIR}/app" -type l -print0 2>/dev/null || true)
+if [ "${REPLACED_LINKS}" -eq 0 ]; then
+    echo "    app/ 下无符号链接，跳过处理"
+else
+    echo "    共处理 ${REPLACED_LINKS} 个符号链接"
 fi
 
 # ---- 2.6 确保 cmd/wizard 脚本可执行（git mode 可能丢失，打包前强制补上）----
