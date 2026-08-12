@@ -200,25 +200,6 @@ mkdir -p "${DIST_DIR}"
 rm -f "${FPK_DIR}/${FPK_NAME}"
 
 cd "${FPK_DIR}"
-
-# ---- 3.5 统一源内容属主为 root（仅 CI 需要）----
-# GitHub Actions runner 的文件属主是 runner(uid 1001)，目标飞牛系统里不存在该 uid，
-# 安装器 set app dir permissions 时对这类文件调用 acl_get_file 会失败（错误码 10234，
-# "acl_get_file failed"）。本地容器属主（如 980）在 NAS 上存在，故本地无需处理。
-# FPK_CHOWN_ROOT=1 时把会打进 app.tgz 的内容统一 chown 为 0:0；
-# 只 chown 源内容、不动 dist/ 与 fpk 目录本身，保证后续 mv 仍可写。
-if [ -n "${FPK_CHOWN_ROOT:-}" ]; then
-    if [ "$(id -u)" = "0" ]; then
-        chown -R 0:0 "${FPK_DIR}"/app "${FPK_DIR}"/cmd "${FPK_DIR}"/config "${FPK_DIR}"/wizard "${FPK_DIR}"/manifest "${FPK_DIR}"/ICON.PNG "${FPK_DIR}"/ICON_256.PNG
-        echo "    fpk 源内容属主已统一为 root (uid 0)"
-    elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-        sudo chown -R 0:0 "${FPK_DIR}"/app "${FPK_DIR}"/cmd "${FPK_DIR}"/config "${FPK_DIR}"/wizard "${FPK_DIR}"/manifest "${FPK_DIR}"/ICON.PNG "${FPK_DIR}"/ICON_256.PNG
-        echo "    fpk 源内容属主已统一为 root (uid 0, 经 sudo)"
-    else
-        echo "    [warn] FPK_CHOWN_ROOT=1 但无 root/sudo 权限，跳过属主统一（本地打包属主存在时无需处理）" >&2
-    fi
-fi
-
 # fnpack 输出名固定为 manifest 的 appname（release: mediary-scout.fpk / test: mediary-scout-dev.fpk），
 # 按模式+架构重命名到 dist/。
 "${FNPACK_BIN}" build -d .

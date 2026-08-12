@@ -124,11 +124,6 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           ARCH: ${{ matrix.platform }}
           FPK_MODE: ${{ inputs.mode }}
-          # GitHub runner 文件属主 uid 1001 在目标飞牛系统不存在，会导致安装时报
-          # "set app dir permissions failed: acl_get_file failed"（错误码 10234）。
-          # FPK_CHOWN_ROOT=1 让 build-fpk.sh 在 fnpack build 前把打进 app.tgz 的
-          # 内容统一 chown 为 root(0:0)（本地打包属主存在，无需此选项）。
-          FPK_CHOWN_ROOT: "1"
         run: ./deploy/fpk/build-fpk.sh
 
       - name: Upload fpk artifact (${{ matrix.arch }})
