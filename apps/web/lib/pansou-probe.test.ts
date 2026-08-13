@@ -54,9 +54,19 @@ describe("probePanSou", () => {
     expect(result).toMatchObject({ ok: false, reason: "not_pansou" });
   });
 
-  it("reports not_pansou when JSON parses but lacks data.results", async () => {
+  it("accepts a zero-result PanSou response that omits results (upstream omitempty)", async () => {
+    // 零结果时上游 PanSou 省略 results 字段（只有 total:0）——探活词 __probe__ 必然
+    // 命中这个形状，必须算合法 PanSou，否则探针永远误判「不是 PanSou」。
     const result = await probePanSou("http://192.168.1.10:8899", {
       fetchImpl: pansouResponse({ data: { total: 0 } }),
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("reports not_pansou when JSON parses but is not PanSou-shaped", async () => {
+    // 既没有 results 数组、也没有 total:0 —— 这不是 PanSou 的合法响应形状。
+    const result = await probePanSou("http://192.168.1.10:8899", {
+      fetchImpl: pansouResponse({ data: { foo: "bar" } }),
     });
     expect(result).toMatchObject({ ok: false, reason: "not_pansou" });
   });

@@ -98,7 +98,8 @@ export class PanSouResourceProvider implements ResourceProvider {
     if (!isPanSouSuccessResponse(response)) {
       throw new PanSouProtocolError(`not a PanSou payload from ${this.baseURL}`);
     }
-    const facts = collectLinkFacts(response.data.results);
+    // results 可能在零结果时被上游省略（omitempty），undefined 视为空数组。
+    const facts = collectLinkFacts(response.data.results ?? []);
     // Per-brand filter: a quark drive only sees quark links; a 115 drive only
     // sees 115/magnet. Keeps a candidate set that its executor can actually transfer.
     return this.allowedTypes ? facts.filter((fact) => this.allowedTypes!.has(fact.type)) : facts;
@@ -195,13 +196,16 @@ function isPanSouErrorResponse(value: unknown): boolean {
 function isPanSouSuccessResponse(value: unknown): value is {
   code: 0;
   data: {
-    results: unknown[];
+    results?: unknown[];
   };
 } {
   if (!isRecord(value) || value["code"] !== 0 || !isRecord(value["data"])) {
     return false;
   }
-  return Array.isArray(value["data"]["results"]);
+  const data = value["data"];
+  // 零结果时上游 PanSou 因 `results` 带 omitempty 会省略该字段（只有 total:0），
+  // 仍是合法成功响应——不能当成协议错误（否则「真没有这个资源」会被误报成源故障）。
+  return Array.isArray(data["results"]) || data["total"] === 0;
 }
 
 function collectLinkFacts(results: unknown[]): PanSouLinkFact[] {

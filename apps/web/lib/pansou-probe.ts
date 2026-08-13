@@ -69,7 +69,10 @@ function isPanSouShaped(payload: unknown): boolean {
   if (typeof payload !== "object" || payload === null) return false;
   const data = (payload as { data?: unknown }).data;
   if (typeof data !== "object" || data === null) return false;
-  return Array.isArray((data as { results?: unknown }).results);
+  const record = data as { results?: unknown; total?: unknown };
+  // 零结果时上游 PanSou 因 `results` 带 omitempty 会省略该字段（只有 total:0）。
+  // 探活词 __probe__ 必然零结果——若不容忍这个形状，探针永远误判「不是 PanSou」。
+  return Array.isArray(record.results) || record.total === 0;
 }
 
 /** 保存前的便宜格式校验。抽出来是为了两个保存入口(设置页 action / agent API)共用
