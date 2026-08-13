@@ -32,6 +32,14 @@ on:
         options:
           - release
           - test
+      runtime:
+        description: "运行模式：live=真 LLM+真网盘（默认，需在设置页配 key）；fake=stub 脚本+fake 网盘，零配置零费用跑通改名/入库链路（同 preview 3100 全 fake）"
+        required: false
+        default: live
+        type: choice
+        options:
+          - live
+          - fake
 
 permissions:
   contents: read
@@ -118,19 +126,21 @@ jobs:
 
       # 复用现有打包脚本：tsc workflow + next build standalone + 填充 app/server + fnpack build。
       # VERSION 为空时脚本回退读 package.json；ARCH 决定 manifest platform 与产物名；
-      # FPK_MODE=test 时打出独立测试版（mediary-scout-dev，端口3334），不影响正式版数据。
-      - name: Build fpk (VERSION + ARCH + MODE)
+      # FPK_MODE=test 时打出独立测试版（mediary-scout-dev，端口3334），不影响正式版数据；
+      # FPK_RUNTIME=fake 时 agent/网盘走 stub+fake（不调 LLM、不碰真网盘），产物带 -fake 后缀。
+      - name: Build fpk (VERSION + ARCH + MODE + RUNTIME)
         env:
           VERSION: ${{ steps.version.outputs.version }}
           ARCH: ${{ matrix.platform }}
           FPK_MODE: ${{ inputs.mode }}
+          FPK_RUNTIME: ${{ inputs.runtime }}
         run: ./deploy/fpk/build-fpk.sh
 
       - name: Upload fpk artifact (${{ matrix.arch }})
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.mode == 'test' && format('fpk-{0}-dev', matrix.arch) || matrix.artifact }}
-          path: ${{ inputs.mode == 'test' && format('deploy/fpk/dist/mediary-scout-dev-{0}.fpk', matrix.platform) || format('deploy/fpk/dist/mediary-scout-{0}.fpk', matrix.platform) }}
+          name: ${{ format('{0}{1}', (inputs.mode == 'test' && format('fpk-{0}-dev', matrix.arch) || matrix.artifact), (inputs.runtime == 'fake' && '-fake' || '')) }}
+          path: ${{ format('{0}{1}.fpk', (inputs.mode == 'test' && format('deploy/fpk/dist/mediary-scout-dev-{0}', matrix.platform) || format('deploy/fpk/dist/mediary-scout-{0}', matrix.platform)), (inputs.runtime == 'fake' && '-fake' || '')) }}
           if-no-files-found: error
           retention-days: 7
 
