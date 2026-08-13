@@ -11,12 +11,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  *  - 属于别的账号的有效 session 不得落进单用户路径
  */
 
-const prevPg = process.env.MEDIA_TRACK_POSTGRES_URL;
 const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
 
 const boot = async () => {
   process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-  delete process.env.MEDIA_TRACK_POSTGRES_URL;
   delete process.env.MEDIA_TRACK_MULTI_USER; // 单用户
   vi.resetModules();
   return import("./workflow-runtime");
@@ -35,7 +33,6 @@ const mockRemoteRequest = (cookieValue?: string) => {
 
 afterEach(() => {
   delete process.env.MEDIA_TRACK_SQLITE_PATH;
-  if (prevPg !== undefined) process.env.MEDIA_TRACK_POSTGRES_URL = prevPg;
   if (prevMultiUser !== undefined) {
     process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
   } else {

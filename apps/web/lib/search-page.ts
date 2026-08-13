@@ -6,7 +6,6 @@ import {
   type SearchPageView,
 } from "@media-track/workflow";
 import { demoMediaSearchProvider } from "./demo-candidates";
-import { PostgresMediaSearchCache } from "./tmdb-cache";
 import {
   ensureDemoSeeded,
   getAccountScopedSettings,
@@ -14,13 +13,11 @@ import {
   getCurrentAccountId,
   getTmdbAccesses,
   getWorkflowRepository,
-  postgresConnectionString,
 } from "./workflow-runtime";
 
 let demoSearchCache: InMemoryMediaSearchCache | null = null;
-let durableSearchCache: PostgresMediaSearchCache | null = null;
-// Desktop (SQLite) build: no Postgres, so the durable cache degrades to in-memory
-// (a lost cache on restart is fine — a 2nd SQLite schema isn't worth it).
+// SQLite-only build: no Postgres, so the search cache is in-memory (a lost cache
+// on restart is fine — a 2nd SQLite schema isn't worth it).
 let sqliteSearchCache: InMemoryMediaSearchCache | null = null;
 
 export async function getSearchView(query: string, storageId?: string): Promise<SearchPageView> {
@@ -39,17 +36,11 @@ export async function getSearchView(query: string, storageId?: string): Promise<
 }
 
 function getSearchCache() {
-  // Live TMDB searches are cached durably in Postgres (6h TTL) so casual browsing
-  // never becomes an API storm; the desktop (SQLite) build degrades this to in-memory
-  // (below), and the demo provider stays in-memory too.
+  // Live TMDB searches are cached in-memory (6h TTL) so casual browsing never
+  // becomes an API storm; the demo provider stays in-memory too. (The durable
+  // Postgres cache was removed when the project went SQLite-only.)
   if (process.env.MEDIA_TRACK_SEARCH_PROVIDER === "tmdb") {
-    // Desktop (SQLite) build has no Postgres — calling postgresConnectionString()
-    // would throw, so degrade the durable cache to in-memory instead.
-    if (process.env.MEDIA_TRACK_SQLITE_PATH?.trim()) {
-      return (sqliteSearchCache ??= new InMemoryMediaSearchCache());
-    }
-    durableSearchCache ??= new PostgresMediaSearchCache({ connectionString: postgresConnectionString() });
-    return durableSearchCache;
+    return (sqliteSearchCache ??= new InMemoryMediaSearchCache());
   }
   demoSearchCache ??= new InMemoryMediaSearchCache();
   return demoSearchCache;

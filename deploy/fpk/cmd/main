@@ -31,7 +31,7 @@ fi
 
 # ---- 运行时环境变量 ----
 # 对齐 docker-compose.yml 正式服务（SQLite 化：数据放 TRIM_PKGVAR，升级不丢）。
-# 注意：MEDIA_TRACK_POSTGRES_URL 不设置；设置了 MEDIA_TRACK_SQLITE_PATH 即走 SQLite
+# 注意：项目已 SQLite-only，只设置 MEDIA_TRACK_SQLITE_PATH（不再有 Postgres）
 # 仓库（见 apps/web/lib/workflow-runtime.ts getWorkflowRepository）。
 export NODE_ENV=production
 export HOSTNAME=0.0.0.0

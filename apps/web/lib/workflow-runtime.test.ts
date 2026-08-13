@@ -285,16 +285,13 @@ describe("isCookieSecure (the LAN/HTTP login-bounce fix, #60)", () => {
 
 describe("getWorkflowRepository (desktop SQLite selection)", () => {
   it("selects the SQLite repository when MEDIA_TRACK_SQLITE_PATH is set", async () => {
-    const prevPg = process.env.MEDIA_TRACK_POSTGRES_URL;
     process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-    delete process.env.MEDIA_TRACK_POSTGRES_URL;
     vi.resetModules();
     try {
       const { getWorkflowRepository } = await import("./workflow-runtime");
       expect(getWorkflowRepository().constructor.name).toBe("SqliteWorkflowRepository");
     } finally {
       delete process.env.MEDIA_TRACK_SQLITE_PATH;
-      if (prevPg !== undefined) process.env.MEDIA_TRACK_POSTGRES_URL = prevPg;
       vi.resetModules();
     }
   });
@@ -307,14 +304,12 @@ describe("runScheduledType3（per-slot 认领 + 合并补跑）", () => {
   // Harness 沿用旧 desktop describe：内存 SQLite 真 get/setSetting、fake Date 钉
   // 北京钟（UTC+8）、stub runScheduledType3Monitoring 免真盘真模型。
   const monitor = vi.fn(async () => []);
-  const prevPg = process.env.MEDIA_TRACK_POSTGRES_URL;
   let rt: typeof import("./workflow-runtime");
 
   const boot = async (settings: Record<string, string>, beijingISO: string) => {
     monitor.mockClear();
     monitor.mockImplementation(async () => []);
     process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-    delete process.env.MEDIA_TRACK_POSTGRES_URL;
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(`${beijingISO}:00.000+08:00`));
     vi.resetModules();
@@ -334,7 +329,6 @@ describe("runScheduledType3（per-slot 认领 + 合并补跑）", () => {
     vi.useRealTimers();
     vi.doUnmock("@media-track/workflow");
     delete process.env.MEDIA_TRACK_SQLITE_PATH;
-    if (prevPg !== undefined) process.env.MEDIA_TRACK_POSTGRES_URL = prevPg;
     vi.resetModules();
   });
 
@@ -518,7 +512,6 @@ describe("workerHasConfiguredDrive (C1: any account's drive counts)", () => {
   const prev = {
     adapter: process.env.MEDIA_TRACK_STORAGE_ADAPTER,
     cookie: process.env.PAN115_COOKIE,
-    pg: process.env.MEDIA_TRACK_POSTGRES_URL,
     sqlite: process.env.MEDIA_TRACK_SQLITE_PATH,
   };
 
@@ -526,7 +519,6 @@ describe("workerHasConfiguredDrive (C1: any account's drive counts)", () => {
     for (const [k, v] of Object.entries({
       MEDIA_TRACK_STORAGE_ADAPTER: prev.adapter,
       PAN115_COOKIE: prev.cookie,
-      MEDIA_TRACK_POSTGRES_URL: prev.pg,
       MEDIA_TRACK_SQLITE_PATH: prev.sqlite,
     })) {
       if (v === undefined) delete process.env[k];
@@ -537,7 +529,6 @@ describe("workerHasConfiguredDrive (C1: any account's drive counts)", () => {
 
   async function boot() {
     process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-    delete process.env.MEDIA_TRACK_POSTGRES_URL;
     process.env.MEDIA_TRACK_STORAGE_ADAPTER = "115";
     delete process.env.PAN115_COOKIE;
     vi.resetModules();

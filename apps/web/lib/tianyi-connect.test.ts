@@ -44,7 +44,6 @@ class FakeTianyiQrLoginClient {
   }
 }
 
-const prevPg = process.env.MEDIA_TRACK_POSTGRES_URL;
 const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
 
 /** Boot workflow-runtime against a fresh :memory: SQLite repo with the network
@@ -53,7 +52,6 @@ const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
  *  network, to test the "provision fails → still store the connection" contract. */
 const boot = async (opts: { failProvision?: boolean } = {}) => {
   process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-  delete process.env.MEDIA_TRACK_POSTGRES_URL;
   delete process.env.MEDIA_TRACK_MULTI_USER; // single-user → getCurrentAccountId() = acct_default
   vi.resetModules();
   vi.doMock("@media-track/workflow", async () => {
@@ -76,7 +74,6 @@ const boot = async (opts: { failProvision?: boolean } = {}) => {
 afterEach(() => {
   vi.doUnmock("@media-track/workflow");
   delete process.env.MEDIA_TRACK_SQLITE_PATH;
-  if (prevPg !== undefined) process.env.MEDIA_TRACK_POSTGRES_URL = prevPg;
   if (prevMultiUser !== undefined) process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
   vi.resetModules();
 });

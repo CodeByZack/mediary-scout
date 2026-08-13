@@ -9,7 +9,7 @@ name: Build FPK (arm + x86)
 #   - setup-node 用 Node 24（ABI 137），因为 fpk manifest 声明 install_dep_apps=nodejs_v24，
 #     目标 NAS 运行时是 Node 24；better-sqlite3 会按当前 Node ABI 下载预编译二进制
 #     （v12.11.1 有 node-v137 的 x86_64 / aarch64 prebuild），CI 无需交叉编译。
-#   - npm run build:web 复用 ci.yml 的空库构建方式（MEDIA_TRACK_POSTGRES_URL: ""）。
+#   - npm run build:web 复用 ci.yml 的空库构建方式（MEDIA_TRACK_SQLITE_PATH: ""）。
 #   - fnpack 官方二进制：https://static2.fnnas.com/fnpack/fnpack-<ver>-linux-<amd64|arm64>
 #     （amd64|arm64 是官方下载 URL 的后缀，官方只提供这两种命名；二进制 statically linked，
 #      两个 runner 直接可跑；sha256 已按官方发布值固定校验）。
@@ -42,7 +42,7 @@ env:
   # 失败。build-fpk.sh 2.55 节已在打包前消除所有符号链接，故版本固定 1.2.0 仅为稳定。
   FNPACK_VERSION: "1.2.0"
   # 与 ci.yml 相同的"空库构建"条件：值被设置为空字符串，不会被 next.config 的 ??= 覆盖。
-  MEDIA_TRACK_POSTGRES_URL: ""
+  MEDIA_TRACK_SQLITE_PATH: ""
 
 jobs:
   build:

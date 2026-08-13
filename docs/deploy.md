@@ -5,7 +5,7 @@ Mediary Scout 有两种部署方式:
 | | macOS 桌面版 | Docker Compose (服务器) |
 |---|---|---|
 | 适合 | Mac 用户,不想折腾 Docker | NAS / 软路由 / VPS / 闲置 PC |
-| 数据层 | SQLite(本地文件) | Postgres |
+| 数据层 | SQLite(本地文件) | SQLite(volume `mediary-data`) |
 | 部署 | 下载 DMG,拖进 Applications | `docker compose up -d` |
 | 下载 | [GitHub Releases](https://github.com/fancydirty/mediary-scout/releases) | 本指南下方 |
 
@@ -15,9 +15,9 @@ Mediary Scout 有两种部署方式:
 
 ---
 
-> **English summary.** Self-host with one command — `docker compose up -d` brings up web (Next.js + in-process worker) + Postgres + a bundled PanSou. Open `http://<host>:3000`, go to Settings, scan-login your drive (115 / Quark / 123 / Tianyi by QR; GuangYaPan by pasted token), add an OpenAI-compatible LLM endpoint, and you're running. To reach it from your phone / TV / on the go, use **Tailscale** (private mesh — safest). **Never expose `:3000` raw to the internet.** Full walkthrough below (Chinese).
+> **English summary.** Self-host with one command — `docker compose up -d` brings up web (Next.js + in-process worker, SQLite storage) + a bundled PanSou. Open `http://<host>:3000`, go to Settings, scan-login your drive (115 / Quark / 123 / Tianyi by QR; GuangYaPan by pasted token), add an OpenAI-compatible LLM endpoint, and you're running. To reach it from your phone / TV / on the go, use **Tailscale** (private mesh — safest). **Never expose `:3000` raw to the internet.** Full walkthrough below (Chinese).
 
-一行命令起整套:**web(Next + 进程内 worker)+ Postgres + 自带 PanSou**。本指南覆盖:选宿主 → compose 起服务 → 从自己的设备访问 → 安全/升级。
+一行命令起整套:**web(Next + 进程内 worker,SQLite 存储)+ 自带 PanSou**。本指南覆盖:选宿主 → compose 起服务 → 从自己的设备访问 → 安全/升级。
 
 ## 目录
 - [选择你的宿主](#选择你的宿主)
@@ -36,8 +36,8 @@ Mediary Scout 有两种部署方式:
 
 任何能跑 Docker 的常开机器都行。挑一个:
 
-- **NAS(群晖 / 威联通 / unRAID)** —— 最推荐(常开、省电)。群晖用 Container Manager、威联通用 Container Station、unRAID 用 Community Apps 的 Compose Manager 插件,把本仓库 `docker-compose.yml` 贴进去起即可。`pgdata` 卷落在阵列/SSD 上。
-- **软路由(iStoreOS 等)** —— 作者实测在带镜像加速的 iStoreOS 上一把过。用 Docker 插件或 ssh 跑 compose;软路由存储小,`pgdata` 指到外挂盘。
+- **NAS(群晖 / 威联通 / unRAID)** —— 最推荐(常开、省电)。群晖用 Container Manager、威联通用 Container Station、unRAID 用 Community Apps 的 Compose Manager 插件,把本仓库 `docker-compose.yml` 贴进去起即可。数据(volume `mediary-data`)落在阵列/SSD 上。
+- **软路由(iStoreOS 等)** —— 作者实测在带镜像加速的 iStoreOS 上一把过。用 Docker 插件或 ssh 跑 compose;软路由存储小,可把 `mediary-data` 指到外挂盘。
 - **闲置 PC / Linux 主机** —— 装 Docker + Compose 插件,`git clone` 后 `docker compose up -d`。睡眠会停巡检,建议设为常开。
 - **VPS** —— 跑得动;115/夸克转存走网盘服务端,VPS 带宽不影响转存速度,只要能连上网盘 API 即可。⚠️ VPS 在公网,务必看[安全](#安全)。
 
@@ -52,7 +52,7 @@ docker compose up -d        # 首次会构建 web 镜像,几分钟
 
 > ### ⚠️ 墙内先看这个:Docker Hub 大概率拉不动
 >
-> 本项目有两个镜像来自 Docker Hub(`postgres`、构建 web 用的 `node`),
+> 本项目镜像来自 Docker Hub(构建 web 用的 `node`),
 > 而 **Docker Hub 在中国大陆常年不稳定**。典型报错:
 >
 > ```
@@ -99,7 +99,7 @@ docker compose up -d        # 首次会构建 web 镜像,几分钟
 | 服务 | 镜像 | 说明 |
 |---|---|---|
 | `web` | 本仓库 `Dockerfile` | Next.js + 进程内 worker(`instrumentation.ts` 自启),`:3000` |
-| `postgres` | `postgres:16-alpine` | 持久卷 `pgdata`;表首次查询自建,无需迁移 |
+| `web`(数据) | SQLite(volume `mediary-data`) | 库文件 `mediary.db` 首次查询自建,无需迁移;备份=拷贝该文件 |
 | `pansou` | `ghcr.io/fish2018/pansou-web` | 网盘搜索源,compose 内经服务名 `http://pansou` 调用 |
 
 ### 覆盖配置
@@ -253,7 +253,7 @@ DeadlineExceeded / dial tcp ...:443: i/o timeout
 docker compose build --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 ```
 
-> 镜像地址会失效/限速,`docker.1ms.run` 只是示例;搜「Docker 镜像加速 可用」找当前能用的即可。配好后,所有 **Docker Hub** 镜像(`postgres`、构建 web 用的 `node`)都会走镜像 —— 本仓库 Dockerfile 已**特意不写 `# syntax=` 指令**,避免它绕过镜像、第一步就卡死(见 #46)。
+> 镜像地址会失效/限速,`docker.1ms.run` 只是示例;搜「Docker 镜像加速 可用」找当前能用的即可。配好后,所有 **Docker Hub** 镜像(构建 web 用的 `node`)都会走镜像 —— 本仓库 Dockerfile 已**特意不写 `# syntax=` 指令**,避免它绕过镜像、第一步就卡死(见 #46)。
 
 **⚠️ 注意 `pansou` 例外**:它来自 **ghcr.io**(`ghcr.io/fish2018/pansou-web`),而 Docker 的 `registry-mirrors` **只对 Docker Hub 生效、管不到 ghcr**。若 ghcr 也连不上,二选一:
 - 在 `.env` 设 `PANSOU_IMAGE=` 指向一个 ghcr 镜像/代理(如 `ghcr.nju.edu.cn/fish2018/pansou-web:latest`,镜像可用性自行确认),再 `docker compose up -d`;
@@ -282,34 +282,36 @@ docker compose build --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 > ```
 
 
-## 备份与恢复（pgdata）
+## 备份与恢复（mediary-data）
 
-自托管时 Postgres 数据在 compose 卷 `pgdata` 里，是媒体库/追踪状态的唯一真相。建议定期备份：
+自托管时数据在 compose 卷 `mediary-data` 里(SQLite 文件 `/data/mediary.db`)，是媒体库/追踪状态的唯一真相。建议定期备份：
 
 ```bash
 # 在仓库根目录
-./scripts/pg-backup.sh ./backups
-# → backups/mediatrack-YYYYMMDD-HHMMSS.sql.gz
+./scripts/sqlite-backup.sh ./backups
+# → backups/mediary-YYYYMMDD-HHMMSS.db
 ```
 
 恢复（会覆盖当前库内容，先停写入/worker）：
 
 ```bash
-gunzip -c backups/mediatrack-YYYYMMDD-HHMMSS.sql.gz \
-  | docker compose exec -T postgres psql -U mediatrack -d mediatrack
+docker compose stop web
+docker compose run --rm -v mediary-data:/data -v "$PWD/backups:/backups" \
+  --entrypoint sh node:22-slim -c 'cat /backups/mediary-你的备份.db > /data/mediary.db'
+docker compose start web
 ```
 
-也可直接备份 Docker 卷目录（停库后拷贝），但逻辑备份（pg_dump）更便携。
+也可直接备份 Docker 卷目录（停库后拷贝），但按上面这样拷单文件最省事。
 
 ### 定时备份（host crontab 示例）
 
 在部署机用户 crontab 里加一行即可（路径改成你的仓库目录）：
 
 ```cron
-# 每天 03:30 备份 pgdata；保留最近 14 天
+# 每天 03:30 备份 mediary-data；保留最近 14 天
 # 若要固定北京时间，在 crontab 顶部加: TZ=Asia/Shanghai
-30 3 * * * cd /path/to/mediary-scout && ./scripts/pg-backup.sh ./backups >>./backups/cron.log 2>&1
-0 4 * * * find /path/to/mediary-scout/backups -name 'mediatrack-*.sql.gz' -mtime +14 -delete
+30 3 * * * cd /path/to/mediary-scout && ./scripts/sqlite-backup.sh ./backups >>./backups/cron.log 2>&1
+0 4 * * * find /path/to/mediary-scout/backups -name 'mediary-*.db' -mtime +14 -delete
 ```
 
 把 `backups/` 目录同步到机外（对象存储 / NAS / 另一台机器）再算真正有备份。

@@ -1,9 +1,10 @@
-# media-track 自部署:一把拉起 web(Next + 进程内 worker) / Postgres / PanSou。
+# media-track 自部署:一把拉起 web(Next + 进程内 worker,SQLite 存储) / PanSou。
 #   docker compose up -d   →   打开 http://<host>:3000   →   设置页扫码连 115 即用
 # TMDB 经 §1 CF Worker 开箱即用;LLM key / 自己的 TMDB key / Prowlarr 在设置页填。
+# 数据库:SQLite(volume mediary-data 持久化,备份=拷 db 文件),不再需要 Postgres。
 # ---- Docker Hub 镜像源(墙内必读) ----
 #
-# 本文件里两个镜像来自 Docker Hub:postgres、node(见 Dockerfile)。
+# 本文件里的镜像来自 Docker Hub:node(见 Dockerfile)。
 # **在中国大陆,Docker Hub 经常拉不动** —— 表现为
 # `failed to fetch anonymous token: ... EOF` 或 `connection reset by peer`。
 # 这不是你的配置错了,是 registry-1.docker.io / auth.docker.io 不可达。
@@ -30,23 +31,6 @@ x-default-logging: &default-logging
     max-file: "3"
 
 services:
-  postgres:
-    # ${DOCKER_MIRROR:+...} 的写法:变量非空时才加前缀和斜杠,空则退化成官方镜像名。
-    image: ${DOCKER_MIRROR:+${DOCKER_MIRROR}/library/}postgres:16-alpine
-    environment:
-      POSTGRES_DB: mediatrack
-      POSTGRES_USER: mediatrack
-      POSTGRES_PASSWORD: mediatrack
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mediatrack -d mediatrack"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-    logging: *default-logging
-    restart: unless-stopped
-
   pansou:
     # From ghcr.io — a Docker Hub registry mirror does NOT cover this. If ghcr is
     # blocked (mainland China), set PANSOU_IMAGE in .env to a ghcr mirror/proxy.
@@ -69,19 +53,17 @@ services:
         # BUILD_COMMIT so a deploy can verify the running container serves HEAD. An unset
         # value defaults to "unknown". See Dockerfile / docs/deploy.md 升级.
         GIT_SHA: ${GIT_SHA:-unknown}
-        # 与上面三个 image 共用同一个镜像源值,自动传进 Dockerfile ——
+        # 与上面 image 共用同一个镜像源值,自动传进 Dockerfile ——
         # 否则用户还得记得手敲 `--build-arg DOCKER_MIRROR=...`,而漏了它的表现是
-        # 「compose 拉 postgres 成功、build web 却卡在 node:22-slim」,很难联想到
+        # 「compose 拉镜像成功、build web 却卡在 node:22-slim」,很难联想到
         # 是同一个原因。
         DOCKER_MIRROR: ${DOCKER_MIRROR:-}
     depends_on:
-      postgres:
-        condition: service_healthy
       pansou:
         condition: service_started
     environment:
-      # App self-creates its schema on first query (CREATE TABLE IF NOT EXISTS).
-      MEDIA_TRACK_POSTGRES_URL: postgres://mediatrack:mediatrack@postgres:5432/mediatrack
+      # SQLite 数据库文件(volume 持久化,应用首次查询自动建 schema)。
+      MEDIA_TRACK_SQLITE_PATH: /data/mediary.db
       # Bundled PanSou via the compose service name (override per-instance in 设置).
       PANSOU_BASE_URL: http://pansou
       MEDIA_TRACK_SEARCH_PROVIDER: tmdb
@@ -92,10 +74,12 @@ services:
       # queue (获取 stuck "排队", category dirs never provisioned). Must be vercel-ai.
       MEDIA_TRACK_AGENT_ADAPTER: vercel-ai
       MEDIA_TRACK_DEMO_SEED: "0"
-      # 可观测性:完整有序的 agent 逐步轨迹始终落 agent_steps 表(psql 即可复盘)。
+      # 可观测性:完整有序的 agent 逐步轨迹始终落 agent_steps 表(查库即可复盘)。
       # 额外把每一步打到 stdout(docker compose logs web)是 OPT-IN —— 它会把工具参数
       # (搜索关键词 / 候选 id / 文件 id)写进容器日志与日志聚合器,默认不开。需要排障时
       # 在 .env 里设 MEDIA_TRACK_AGENT_LOG=1 自行启用(env_file 已加载 .env)。
+    volumes:
+      - mediary-data:/data
     # Optional overrides (TMDB/115/LLM/Prowlarr/CID). Missing file is fine —
     # everything has a default or is configured in the 设置 page.
     env_file:
@@ -105,7 +89,7 @@ services:
     ports:
       - "${WEB_PORT:-3000}:3000"
     # Probes /api/health, which reads the DB through the app's real query path —
-    # so `docker ps` shows "unhealthy" if the app can't reach postgres (e.g. the
+    # so `docker ps` shows "unhealthy" if the app can't reach the DB (e.g. the
     # 2026-07-21 wedge), not just when the process dies. Runs inside the container
     # against localhost (bypasses any Cloudflare Access). node:22-slim has global
     # fetch and no curl/wget, so probe with node. r.ok is true only for 2xx.
@@ -121,4 +105,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  pgdata:
+  mediary-data:
+

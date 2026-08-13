@@ -18,14 +18,11 @@
       "default": "./dist/search-view.js"
     }
   },
-  "dependencies": {
-    "pg": "^8.21.0"
-  },
+  "dependencies": {},
   "optionalDependencies": {
     "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/pg": "^8.20.0"
+    "@types/better-sqlite3": "^7.6.13"
   }
 }

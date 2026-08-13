@@ -40,7 +40,6 @@ import {
   resolveDriveSourceLabels,
   runScheduledType3Monitoring,
   sendPushNotifications,
-  createPostgresWorkflowRepositorySync,
   createSqliteWorkflowRepository,
   migrateLegacyCookieToDefaultAccount,
   resolveStorageBinding,
@@ -113,26 +112,19 @@ let fakeStorageExecutor: StorageExecutor | null = null;
 // slot would thrash between accounts in multi-user mode.
 const agentModelCache = new Map<string, ReturnType<typeof createAgentModelFromEnv>>();
 
-/** The Postgres connection string for durable dev/prod state. SQLite has been
- *  retired — dev runs on OrbStack Postgres. */
-export function postgresConnectionString(): string {
-  const url = process.env.MEDIA_TRACK_POSTGRES_URL?.trim();
-  if (!url) {
-    throw new Error("MEDIA_TRACK_POSTGRES_URL is required (the SQLite dev DB has been retired)");
+/** The SQLite database file for durable state. Required in every build — the
+ *  project is SQLite-only since Postgres was removed. */
+export function sqliteDatabasePath(): string {
+  const path = process.env.MEDIA_TRACK_SQLITE_PATH?.trim();
+  if (!path) {
+    throw new Error("MEDIA_TRACK_SQLITE_PATH is required (the project is SQLite-only)");
   }
-  return url;
+  return path;
 }
 
 export function getWorkflowRepository(): WorkflowRepository {
   if (!repository) {
-    // Desktop build: a MEDIA_TRACK_SQLITE_PATH selects the bundled SQLite repo so
-    // the app runs with no Postgres. Checked BEFORE postgresConnectionString(),
-    // which throws when MEDIA_TRACK_POSTGRES_URL is unset. Container/prod is
-    // unchanged: without the SQLite path, it still resolves the Postgres repo.
-    const sqlitePath = process.env.MEDIA_TRACK_SQLITE_PATH?.trim();
-    repository = sqlitePath
-      ? createSqliteWorkflowRepository({ path: sqlitePath })
-      : createPostgresWorkflowRepositorySync({ connectionString: postgresConnectionString() });
+    repository = createSqliteWorkflowRepository({ path: sqliteDatabasePath() });
   }
   return repository;
 }

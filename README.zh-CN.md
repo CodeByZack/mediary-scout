@@ -11,7 +11,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-see%20LICENSE-blue" alt="license"></a>
   <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Next.js-black?logo=next.js&logoColor=white" alt="Next.js">
-  <img src="https://img.shields.io/badge/Postgres-4169E1?logo=postgresql&logoColor=white" alt="Postgres">
+  <img src="https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white" alt="SQLite">
   <img src="https://img.shields.io/badge/self--hosted-only-success" alt="self-hosted only">
   <a href="https://github.com/fancydirty/mediary-scout/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome"></a>
   <a href="https://demo.mediaryscout.app"><img src="https://img.shields.io/badge/demo-live-1ED760?logo=vercel&logoColor=white" alt="live demo"></a>
@@ -77,7 +77,7 @@ web 端入队,常驻 worker 驱动一个沙盒 agent:agent 拥有窄而受审计
 
 ```mermaid
 flowchart LR
-    UI["Web UI<br/>(Next.js)"] -->|入队| Q["Postgres 队列<br/>+ run 状态"]
+    UI["Web UI<br/>(Next.js)"] -->|入队| Q["SQLite 队列<br/>+ run 状态"]
     Q --> W["进程内 worker"]
     W --> AG["V2 沙盒 agent"]
     AG -->|搜索| SRC["PanSou / Prowlarr"]
@@ -88,12 +88,12 @@ flowchart LR
     CRON["定时巡检"] -->|只补缺| Q
 ```
 
-- 状态全程落 **Postgres**,所以 run 可在 worker 重启后续跑(agent 从真实网盘 + DB 状态重建,不依赖缓存的对话历史)。
+- 状态全程落 **SQLite**(桌面与 Docker 同一数据层),所以 run 可在 worker 重启后续跑(agent 从真实网盘 + DB 状态重建,不依赖缓存的对话历史)。
 - 元数据来自 **TMDB**(内置代理兜底,开箱即用);资源搜索来自 **PanSou**,可选 **Prowlarr**(磁力 / 种子索引器)。
 
 ## 快速开始
 
-最快是 Docker Compose(web + Postgres + 自带 PanSou):
+最快是 Docker Compose(web + SQLite 存储 + 自带 PanSou):
 
 ```bash
 cp .env.example .env   # 可选——大多数配置可在 UI 里填
