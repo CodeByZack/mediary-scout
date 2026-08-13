@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const prevPg = process.env.MEDIA_TRACK_POSTGRES_URL;
 const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
 
 const boot = async () => {
   process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-  delete process.env.MEDIA_TRACK_POSTGRES_URL;
   delete process.env.MEDIA_TRACK_MULTI_USER; // 单用户
   vi.resetModules();
   return import("./workflow-runtime");
@@ -13,7 +11,6 @@ const boot = async () => {
 
 afterEach(() => {
   delete process.env.MEDIA_TRACK_SQLITE_PATH;
-  if (prevPg !== undefined) process.env.MEDIA_TRACK_POSTGRES_URL = prevPg;
   // 原值为 undefined 时必须删除而非跳过，否则会把值泄漏给后续测试文件
   if (prevMultiUser !== undefined) {
     process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;

@@ -10,7 +10,7 @@ import { WorkspaceSwitcher } from "./workspace-switcher";
  *
  * `AppSidebar` renders this in some pages' STATIC shell, so a Suspense boundary
  * alone is NOT enough under cacheComponents — Next would prerender this at build
- * and the DB read crashes when there's no MEDIA_TRACK_POSTGRES_URL (e.g. `docker
+ * and the DB read crashes when there's no MEDIA_TRACK_SQLITE_PATH (e.g. `docker
  * build`). `await connection()` marks it dynamic so the read defers to request
  * time and the fallback (null) prerenders. Mirrors every other DB-reading server
  * component (ForeignWorkReview / ActivitySurface / show / settings / notifications).

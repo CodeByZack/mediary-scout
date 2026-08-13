@@ -11,7 +11,7 @@
       "name": "media-track-web",
       "runtimeExecutable": "env",
       "runtimeArgs": [
-        "MEDIA_TRACK_POSTGRES_URL=postgresql://mediatrack:mediatrack@localhost:5432/media_track",
+        "MEDIA_TRACK_SQLITE_PATH=.local/mediary-dev.db",
         "MEDIA_TRACK_DEMO_SEED=0",
         "MEDIA_TRACK_PERF_LOG=1",
         "npm",
@@ -25,7 +25,7 @@
       "name": "web-demo",
       "runtimeExecutable": "env",
       "runtimeArgs": [
-        "MEDIA_TRACK_POSTGRES_URL=postgresql://mediatrack:mediatrack@localhost:5432/media_track_demo",
+        "MEDIA_TRACK_SQLITE_PATH=.local/mediary-demo.db",
         "MEDIA_TRACK_DEMO_MODE=1",
         "NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE=1",
         "MEDIA_TRACK_SEARCH_PROVIDER=tmdb",
@@ -40,7 +40,7 @@
       "name": "web-gfw-sim",
       "runtimeExecutable": "env",
       "runtimeArgs": [
-        "MEDIA_TRACK_POSTGRES_URL=postgresql://mediatrack:mediatrack@localhost:5432/media_track",
+        "MEDIA_TRACK_SQLITE_PATH=.local/mediary-dev.db",
         "MEDIA_TRACK_DEMO_SEED=0",
         "MEDIA_TRACK_SEARCH_PROVIDER=tmdb",
         "TMDB_READ_TOKEN=",
@@ -56,7 +56,7 @@
       "name": "web-multiuser",
       "runtimeExecutable": "env",
       "runtimeArgs": [
-        "MEDIA_TRACK_POSTGRES_URL=postgresql://mediatrack:mediatrack@localhost:5432/media_track",
+        "MEDIA_TRACK_SQLITE_PATH=.local/mediary-dev.db",
         "MEDIA_TRACK_DEMO_SEED=0",
         "MEDIA_TRACK_INPROCESS_WORKER=0",
         "MEDIA_TRACK_MULTI_USER=1",

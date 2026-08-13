@@ -18,7 +18,7 @@ import {
   type LibraryWallStateValue,
   type TitleAggregateState,
 } from "./title-aggregate";
-import { InMemoryJsonCache, PostgresMediaSearchCache, type DurableJsonCache } from "./tmdb-cache";
+import { InMemoryJsonCache, type DurableJsonCache } from "./tmdb-cache";
 import {
   ensureDemoSeeded,
   getAccountScopedSettings,
@@ -27,7 +27,6 @@ import {
   getTmdbAccesses,
   getWorkflowRepository,
   movieTargetFromTmdbId,
-  postgresConnectionString,
   queueCandidateTracking,
   type CandidateTrackingRequestResult,
 } from "./workflow-runtime";
@@ -88,19 +87,14 @@ const SERIES_TARGET_TTL_MS = 6 * 60 * 60 * 1000;
 // L1: per-process in-memory cache (fast, but resets on every restart — which is
 // why a cold detail-page load paid a live TMDB round-trip every dev restart).
 const seriesTargetCache = new Map<number, { value: PreparedSeriesTarget; expiresAt: number }>();
-// L2: durable Postgres cache, so the season list + artwork survive restarts and
-// the page renders from the DB instead of re-hitting TMDB on every cold load.
+// L2: in-memory JSON cache (SQLite-only build has no Postgres to back a durable
+// L2; a lost cache on restart is fine — L1 already resets per process).
 let durableTargetCache: DurableJsonCache | null = null;
 function getDurableTargetCache(): DurableJsonCache {
   if (durableTargetCache) {
     return durableTargetCache;
   }
-  // Desktop (SQLite) build has no Postgres — calling postgresConnectionString()
-  // would throw, so the durable L2 degrades to an in-memory JSON cache (a lost
-  // cache on restart is fine; L1 already resets per process).
-  durableTargetCache = process.env.MEDIA_TRACK_SQLITE_PATH?.trim()
-    ? new InMemoryJsonCache()
-    : new PostgresMediaSearchCache({ connectionString: postgresConnectionString() });
+  durableTargetCache = new InMemoryJsonCache();
   return durableTargetCache;
 }
 

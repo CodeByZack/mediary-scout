@@ -8,27 +8,10 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: mediatrack
-          POSTGRES_PASSWORD: mediatrack
-          POSTGRES_DB: media_track
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U mediatrack"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     env:
-      MEDIA_TRACK_POSTGRES_URL: postgresql://mediatrack:mediatrack@localhost:5432/media_track
-      # Admin URL for repository-contract-postgres (CREATE/DROP disposable DB).
-      MEDIA_TRACK_TEST_POSTGRES_ADMIN_URL: postgresql://mediatrack:mediatrack@localhost:5432/postgres
-      # Fail (don't describe.skip) if the Postgres contract cannot provision a DB.
-      MEDIA_TRACK_CI_REQUIRE_POSTGRES: "1"
+      # SQLite-only project: point tests at a temp db file. The repository
+      # contract/schema tests provision their own disposable SQLite files.
+      MEDIA_TRACK_SQLITE_PATH: /tmp/ci-mediary.db
 
     steps:
       - uses: actions/checkout@v7
@@ -51,12 +34,5 @@ jobs:
       # set-but-empty value is NOT overridden → the real no-DB build condition.)
       - run: npm run build:web
         env:
-          MEDIA_TRACK_POSTGRES_URL: ""
-      - run: npx vitest run --exclude '**/*.pg.test.ts'
-      # The PG integration files share MEDIA_TRACK_POSTGRES_URL and each performs
-      # schema/init + cleanup. Run those files serially to prevent test-only DDL/DML
-      # deadlocks while still proving every PG suite actually executes in CI.
-      - run: npx vitest run --no-file-parallelism packages/workflow/tests/*.pg.test.ts
-      # MEDIA_TRACK_CI_REQUIRE_POSTGRES=1 makes the contract hard-fail if it cannot
-      # reach/provision Postgres (vitest alone exits 0 on pure describe.skip).
-      - run: npx vitest run packages/workflow/tests/repository-contract-postgres.test.ts packages/workflow/src/postgres-schema-init.test.ts
+          MEDIA_TRACK_SQLITE_PATH: ""
+      - run: npx vitest run

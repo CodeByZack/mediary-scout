@@ -11,10 +11,10 @@ function loadDotEnv(p) { let raw; try { raw = readFileSync(p, "utf8"); } catch {
   for (const line of raw.split("\n")) { const t = line.trim(); if (!t || t.startsWith("#")) continue; const eq = t.indexOf("="); if (eq === -1) continue; const k = t.slice(0, eq).trim(); let v = t.slice(eq + 1).trim(); if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1); if (process.env[k] === undefined) process.env[k] = v; } }
 loadDotEnv(path.join(repoRoot, ".env"));
 
-const { createPostgresWorkflowRepositorySync, buildMovieReport, formatReportPushText, buildNotifyMessage, sendPushNotifications } =
+const { createSqliteWorkflowRepository, buildMovieReport, formatReportPushText, buildNotifyMessage, sendPushNotifications } =
   await import(path.join(repoRoot, "packages/workflow/dist/index.js"));
-const POSTGRES = process.env.MEDIA_TRACK_POSTGRES_URL || "postgresql://mediatrack:mediatrack@localhost:5432/media_track";
-const repo = createPostgresWorkflowRepositorySync({ connectionString: POSTGRES });
+const SQLITE_PATH = process.env.MEDIA_TRACK_SQLITE_PATH || "/data/mediary.db";
+const repo = createSqliteWorkflowRepository({ path: SQLITE_PATH });
 
 // 热辣滚烫 — real tracked movie, real TMDB poster.
 const report = buildMovieReport("热辣滚烫", "2160p", {

@@ -22,7 +22,6 @@ class FakeQuarkCookieClient {
   }
 }
 
-const prevPg = process.env.MEDIA_TRACK_POSTGRES_URL;
 const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
 
 const LIVE_COOKIE = "__uid=quark_uid_live; __kps=abc";
@@ -30,7 +29,6 @@ const DEAD_COOKIE = "__uid=quark_uid_dead; __kps=DEAD";
 
 const boot = async (opts: { failProvision?: boolean } = {}) => {
   process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-  delete process.env.MEDIA_TRACK_POSTGRES_URL;
   delete process.env.MEDIA_TRACK_MULTI_USER;
   quarkClientConstructions = 0;
   vi.resetModules();
@@ -54,7 +52,6 @@ const boot = async (opts: { failProvision?: boolean } = {}) => {
 afterEach(() => {
   vi.doUnmock("@media-track/workflow");
   delete process.env.MEDIA_TRACK_SQLITE_PATH;
-  if (prevPg !== undefined) process.env.MEDIA_TRACK_POSTGRES_URL = prevPg;
   if (prevMultiUser !== undefined) process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
   vi.resetModules();
 });

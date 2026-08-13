@@ -63,13 +63,13 @@ Then open `http://<host>:3000` and configure in **Settings**. Full walkthrough: 
 |---|---|---|
 | **Best for** | Personal use, Mac/Windows | NAS, server, 24/7 monitoring |
 | **Setup** | Download + open | `docker compose up -d` |
-| **Database** | SQLite (default) | Postgres (default; SQLite via `MEDIA_TRACK_SQLITE_PATH`) |
+| **Database** | SQLite (bundled) | SQLite (volume `mediary-data`) |
 | **Agent API** | ✅ | ✅ |
 | **Always-on patrol** | ❌ (runs when app is open) | ✅ |
 | **Multi-user** | ❌ | ✅ |
 | **Remote access** | Local only | Tailscale |
 
-Both paths share **one codebase** — all product logic is identical. The data layer (SQLite vs Postgres) is selected by the `MEDIA_TRACK_SQLITE_PATH` env var, not the process shell — desktop sets it automatically, Docker defaults to Postgres.
+Both paths share **one codebase** — all product logic is identical. The data layer is SQLite in both; the Docker path stores the DB file in the `mediary-data` volume (`MEDIA_TRACK_SQLITE_PATH=/data/mediary.db`).
 
 ## Features
 
@@ -148,7 +148,7 @@ A web app enqueues work; a long-running worker drives a sandboxed agent that has
 
 ```mermaid
 flowchart LR
-    UI["Web UI<br/>(Next.js)"] -->|enqueue| Q["Postgres / SQLite<br/>+ run state"]
+    UI["Web UI<br/>(Next.js)"] -->|enqueue| Q["SQLite<br/>+ run state"]
     Q --> W["In-process worker"]
     W --> AG["V2 sandbox agent"]
     AG -->|search| SRC["PanSou / Prowlarr"]
@@ -159,7 +159,7 @@ flowchart LR
     CRON["Scheduled sweep"] -->|gaps only| Q
 ```
 
-- State lives in **Postgres** (container) or **SQLite** (desktop) — runs are resumable across restarts (the agent rebuilds from real drive + DB state, not cached chat history).
+- State lives in **SQLite** (both desktop and Docker) — runs are resumable across restarts (the agent rebuilds from real drive + DB state, not cached chat history).
 - Metadata comes from **TMDB** (with a built-in proxy fallback so it works out of the box); resource search from **PanSou** and optionally **Prowlarr** (torrent/magnet indexers).
 
 ## Demo
