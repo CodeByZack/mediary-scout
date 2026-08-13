@@ -125,13 +125,14 @@ else
     echo "    @img 目录不存在，跳过 sharp musl 清理"
 fi
 
-# ---- 2.55 消除源内容符号链接（官方 fnpack 必踩坑）----
+# ---- 2.55 消除 Next standalone 符号链接（官方 fnpack 必踩坑）----
 # 官方 fnpack（static2.fnnas.com 的 1.2.0 / 1.2.1 均如此，2026-08-12 实测）打包时会把
 # 源内容里的任何符号链接改写为指向自身的死链；fnOS 安装器对死链 acl_get_file 跟随目标
 # 死循环（ELOOP），报 10234 "set app dir permissions failed / 设置目录权限失败"。
-# （本机 /usr/local/bin/fnpack 是更老的版本、原样保留链接，故本地包能装而 CI 包必失败。）
-# 修复：打包前把 app/ 下所有符号链接替换为指向目标的真实拷贝，dangling 链接直接删除。
-# 运行时依赖的真实包在 server/node_modules 下（非链接），不受影响。
+# 本项目符号链接只出现在 Next standalone 的 .next/node_modules/（外部包 hash 映射，
+# 如 better-sqlite3-<hash>、pg-<hash>，hash 随构建变化，故按目录扫描而非写死名字）。
+# 处理：链接目标存在 → 替换为真实拷贝（运行时 require 靠拷贝文件解析，不能只删）；
+# dangling → 删除。
 REPLACED_LINKS=0
 while IFS= read -r -d '' link; do
     abs="$(realpath -m "$link" 2>/dev/null || true)"
@@ -145,11 +146,17 @@ while IFS= read -r -d '' link; do
         echo "    删除 dangling 链接: ${rel}"
     fi
     REPLACED_LINKS=$((REPLACED_LINKS + 1))
-done < <(find "${FPK_DIR}/app" -type l -print0 2>/dev/null || true)
+done < <(find "${FPK_DIR}/app/server" -path "*/.next/node_modules/*" -type l -print0 2>/dev/null || true)
 if [ "${REPLACED_LINKS}" -eq 0 ]; then
-    echo "    app/ 下无符号链接，跳过处理"
+    echo "    .next/node_modules 下无符号链接，跳过处理"
 else
     echo "    共处理 ${REPLACED_LINKS} 个符号链接"
+fi
+# 防御：.next/node_modules 之外若出现符号链接，fnpack 同样会改写成死链，需人工关注
+EXTRA_LINKS="$(find "${FPK_DIR}/app" -type l ! -path "*/.next/node_modules/*" 2>/dev/null | head -5 || true)"
+if [ -n "${EXTRA_LINKS}" ]; then
+    echo "    ⚠️ 警告：以下位置存在符号链接（fnpack 会改写为死链）："
+    echo "${EXTRA_LINKS}" | sed "s#${FPK_DIR}/app/##" | sed 's/^/        /'
 fi
 
 # ---- 2.6 确保 cmd/wizard 脚本可执行（git mode 可能丢失，打包前强制补上）----
@@ -180,6 +187,18 @@ console.log("    app/ui/config 入口已改为 " + process.env.APPNAME + ".Appli
 ' "${UI_CONFIG}"
 else
     echo "    app/ui/config 不存在，跳过"
+fi
+
+# ---- 2.8 wizard/install 安装说明随模式改写 ----
+# 之前误用 type=text 会让安装向导渲染出"说明文字 + 空输入框"（无意义、误导）；
+# 已改为 type=tips（纯说明，同 cloudflare tunnel 写法）。文案里的端口号也随
+# 模式改写（release 3333 / test 3334），正则 :333[34] 保证从任一残留状态都能归一。
+WIZARD_INSTALL="${FPK_DIR}/wizard/install"
+if [ -f "${WIZARD_INSTALL}" ]; then
+    sed -i "s/:333[34]/:${SERVICE_PORT}/g" "${WIZARD_INSTALL}"
+    echo "    wizard/install 说明端口已改为 ${SERVICE_PORT}"
+else
+    echo "    wizard/install 不存在，跳过"
 fi
 
 # ---- 3. 写入 appname/显示名/端口/版本号/平台 + fnpack 打包 ----
