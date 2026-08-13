@@ -8,10 +8,15 @@
 #   FNPACK_BIN=/path/to/fnpack ./deploy/fpk/build-fpk.sh  # 指定 fnpack 可执行文件（默认 PATH 里的 fnpack）
 #   FPK_MODE=test ./deploy/fpk/build-fpk.sh     # 测试版：appname=mediary-scout-dev、端口 3334，
 #                                                独立数据目录，装/卸都不影响正式版数据
+#   FPK_RUNTIME=fake ./deploy/fpk/build-fpk.sh  # 免费运行模式：agent 用 stub 确定性脚本、网盘用
+#                                                fake（FakeStorageExecutor 假文件），不调 LLM、不碰
+#                                                真网盘，零配置零费用即可跑通改名/入库链路；
+#                                                默认 live（真 LLM + 真网盘，需在设置页配 key）
 #
 # 产物：
 #   deploy/fpk/dist/mediary-scout-<ARCH>.fpk        （release：arm → mediary-scout-arm.fpk，x86 → mediary-scout-x86.fpk）
 #   deploy/fpk/dist/mediary-scout-dev-<ARCH>.fpk    （test：arm → mediary-scout-dev-arm.fpk，x86 → mediary-scout-dev-x86.fpk）
+#   deploy/fpk/dist/mediary-scout-dev-fake-<ARCH>.fpk （test+fake：arm → mediary-scout-dev-fake-arm.fpk，x86 → mediary-scout-dev-fake-x86.fpk）
 #
 # 前置条件（本机已具备）：
 #   - node + npm（构建机与 NAS 同架构 + Node 24，ABI 匹配；CI 里 setup-node 用 24）
@@ -78,6 +83,19 @@ case "${FPK_MODE}" in
         echo "FPK_MODE 必须是 release 或 test，收到: ${FPK_MODE}" >&2; exit 1 ;;
 esac
 echo "==> fpk mode: ${FPK_MODE} (appname=${APPNAME}, service_port=${SERVICE_PORT})"
+
+# ---- 0.8 运行模式：FPK_RUNTIME（live 真 LLM+真网盘 | fake stub+假网盘，免费跑通流程）----
+# fake 模式与 preview（3100 全 fake）一致：不设 MEDIA_TRACK_AGENT_ADAPTER →
+# workflow 默认 fake/stub 确定性脚本（不调 LLM）；不设 MEDIA_TRACK_STORAGE_ADAPTER →
+# 默认 FakeStorageExecutor（假文件，不碰真网盘）；补 MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark
+# 避免夸克候选被类型过滤滤光（同 preview 配置）。其余（真 PanSou 搜索、真 TMDB 元数据、
+# 改名/入库/标记）走同一套真实代码，零费用。live 模式全量写回正式 env（防残留污染）。
+FPK_RUNTIME="${FPK_RUNTIME:-live}"
+case "${FPK_RUNTIME}" in
+    live|fake) ;;
+    *) echo "FPK_RUNTIME 必须是 live 或 fake，收到: ${FPK_RUNTIME}" >&2; exit 1 ;;
+esac
+echo "==> fpk runtime: ${FPK_RUNTIME}"
 
 # ---- 1. 正式构建（tsc workflow + next build standalone，约 1 分钟）----
 echo "==> [1/3] npm run build:web ..."
@@ -201,6 +219,31 @@ else
     echo "    wizard/install 不存在，跳过"
 fi
 
+# ---- 2.9 cmd/main 运行时环境随 FPK_RUNTIME 改写 ----
+# fake：注释掉真 LLM/真网盘两行（不设即走 stub + FakeStorageExecutor），补 quark 默认盘；
+# live：全量写回正式 env（含删掉可能残留的 quark 行），与 2.7/2.8 同样"每次全量写回"防残留。
+CMD_MAIN="${FPK_DIR}/cmd/main"
+if [ -f "${CMD_MAIN}" ]; then
+    if [ "${FPK_RUNTIME}" = "fake" ]; then
+        # 1) 注释掉 vercel-ai / 115 两行（幂等：已注释的跳过，防止重复加 #）
+        sed -i "s/^export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/# export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/" "${CMD_MAIN}"
+        sed -i "s/^export MEDIA_TRACK_STORAGE_ADAPTER=115/# export MEDIA_TRACK_STORAGE_ADAPTER=115/" "${CMD_MAIN}"
+        # 2) 确保 quark 默认盘存在（幂等：已有则跳过）
+        if ! grep -q "^export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark" "${CMD_MAIN}"; then
+            sed -i "s/^# export MEDIA_TRACK_STORAGE_ADAPTER=115.*/&\\nexport MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark        # fake 模式默认盘，避免夸克候选被滤光（同 preview）/" "${CMD_MAIN}"
+        fi
+        echo "    cmd/main 已改为 fake 运行模式（stub agent + fake 网盘 + quark 默认盘）"
+    else
+        # live：恢复正式 env（幂等）
+        sed -i "s/^# export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/" "${CMD_MAIN}"
+        sed -i "s/^# export MEDIA_TRACK_STORAGE_ADAPTER=115/export MEDIA_TRACK_STORAGE_ADAPTER=115/" "${CMD_MAIN}"
+        sed -i "/^export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark/d" "${CMD_MAIN}"
+        echo "    cmd/main 已改为 live 运行模式（vercel-ai agent + 115 网盘）"
+    fi
+else
+    echo "    cmd/main 不存在，跳过 runtime 改写"
+fi
+
 # ---- 3. 写入 appname/显示名/端口/版本号/平台 + fnpack 打包 ----
 echo "==> [3/3] fnpack build ..."
 # 无论 release 还是 test 都全量写一次，避免上次 test 残留污染 release（反之亦然）。
@@ -213,9 +256,14 @@ sed -i.bak "s/^platform[[:space:]]*=.*/platform                   = ${ARCH}/" "$
 rm -f "${FPK_DIR}/manifest.bak"
 
 if [ "${FPK_MODE}" = "test" ]; then
-    FPK_NAME="mediary-scout-dev-${ARCH}.fpk"
+    FPK_BASE="mediary-scout-dev"
 else
-    FPK_NAME="mediary-scout-${ARCH}.fpk"
+    FPK_BASE="mediary-scout"
+fi
+if [ "${FPK_RUNTIME}" = "fake" ]; then
+    FPK_NAME="${FPK_BASE}-fake-${ARCH}.fpk"
+else
+    FPK_NAME="${FPK_BASE}-${ARCH}.fpk"
 fi
 
 rm -rf "${DIST_DIR}"
