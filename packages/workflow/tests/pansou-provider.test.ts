@@ -217,6 +217,22 @@ describe("PanSouResourceProvider", () => {
     ]);
   });
 
+  it("treats a zero-result response that omits results as a healthy empty search, not protocol error", async () => {
+    // 上游零结果时省略 results 字段（omitempty，只有 total:0）——这仍是合法成功
+    // 响应。若误判为协议错误，真正的「没有这个资源」会被报成搜索源故障。
+    const provider = new PanSouResourceProvider({
+      baseURL: "https://pansou.example",
+      now: () => "2026-06-11T00:00:00.000Z",
+      maxSearchAttempts: 1,
+      fetchJson: async () => ({ code: 0, data: { total: 0 } }),
+    });
+
+    const snapshot = await provider.search({ keyword: "一部不存在的剧" });
+
+    expect(snapshot.candidates).toEqual([]);
+    expect(snapshot.sourceHealth).toMatchObject({ status: "healthy" });
+  });
+
   it("returns an empty snapshot when PanSou reports a non-zero code", async () => {
     const provider = new PanSouResourceProvider({
       baseURL: "https://pansou.example",
