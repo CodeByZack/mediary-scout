@@ -189,6 +189,18 @@ else
     echo "    app/ui/config 不存在，跳过"
 fi
 
+# ---- 2.8 wizard/install 安装说明随模式改写 ----
+# 之前误用 type=text 会让安装向导渲染出"说明文字 + 空输入框"（无意义、误导）；
+# 已改为 type=tips（纯说明，同 cloudflare tunnel 写法）。文案里的端口号也随
+# 模式改写（release 3333 / test 3334），正则 :333[34] 保证从任一残留状态都能归一。
+WIZARD_INSTALL="${FPK_DIR}/wizard/install"
+if [ -f "${WIZARD_INSTALL}" ]; then
+    sed -i "s/:333[34]/:${SERVICE_PORT}/g" "${WIZARD_INSTALL}"
+    echo "    wizard/install 说明端口已改为 ${SERVICE_PORT}"
+else
+    echo "    wizard/install 不存在，跳过"
+fi
+
 # ---- 3. 写入 appname/显示名/端口/版本号/平台 + fnpack 打包 ----
 echo "==> [3/3] fnpack build ..."
 # 无论 release 还是 test 都全量写一次，避免上次 test 残留污染 release（反之亦然）。
