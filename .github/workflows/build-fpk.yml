@@ -140,7 +140,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ format('{0}{1}', (inputs.mode == 'test' && format('fpk-{0}-dev', matrix.arch) || matrix.artifact), (inputs.runtime == 'fake' && '-fake' || '')) }}
-          path: ${{ format('{0}{1}.fpk', (inputs.mode == 'test' && format('deploy/fpk/dist/mediary-scout-dev-{0}', matrix.platform) || format('deploy/fpk/dist/mediary-scout-{0}', matrix.platform)), (inputs.runtime == 'fake' && '-fake' || '')) }}
+          path: ${{ format('{0}{1}-{2}.fpk', (inputs.mode == 'test' && 'deploy/fpk/dist/mediary-scout-dev' || 'deploy/fpk/dist/mediary-scout'), (inputs.runtime == 'fake' && '-fake' || ''), matrix.platform) }}
           if-no-files-found: error
           retention-days: 7
 
