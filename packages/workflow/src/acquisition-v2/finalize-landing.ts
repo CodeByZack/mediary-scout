@@ -51,6 +51,7 @@ export function buildSeasonMoves(
   seasons: number[],
 ): Array<{ season: number; fileIds: string[] }> {
   const seasonSet = new Set(seasons);
+  const junkNames = new Set(digest.junkSignals);
   const bySeason = new Map<number, string[]>();
   const push = (season: number, fileId: string) => {
     const list = bySeason.get(season) ?? [];
@@ -59,6 +60,7 @@ export function buildSeasonMoves(
   };
 
   for (const video of digest.videos) {
+    if (junkNames.has(fileBaseName(video.path))) continue;
     const code = episodeCodeFromFileName(fileBaseName(video.path));
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
@@ -66,6 +68,7 @@ export function buildSeasonMoves(
     push(season, video.id);
   }
   for (const subtitle of digest.subtitles) {
+    if (junkNames.has(fileBaseName(subtitle.path))) continue;
     const code = episodeCodeFromFileName(fileBaseName(subtitle.path));
     if (code) {
       const season = seasonFromEpisodeCode(code);
@@ -86,11 +89,14 @@ export async function finalizeLanding(
   const seasonSet = new Set(seasons);
 
   // 1. Rename every in-scope video to `Title.SxxExx.ext`. canonicalEpisodeFileName
-  //    carries the extension over so the file stays playable.
+  //    carries the extension over so the file stays playable. Junk files (sample/
+  //    广告/花絮) are skipped — they stay in staging for the wipe, never renamed.
   const renames: Array<{ fileId: string; newName: string }> = [];
   const renamed: string[] = [];
+  const junkNames = new Set(digest.junkSignals);
   for (const video of digest.videos) {
     const base = fileBaseName(video.path);
+    if (junkNames.has(base)) continue;
     const code = episodeCodeFromFileName(base);
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);

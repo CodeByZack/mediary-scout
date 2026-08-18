@@ -913,6 +913,26 @@ export class TaskSandbox {
     return { document, candidateCount: total };
   }
 
+  /** Fast-path access: the primed raw snapshot's id (for snapshot-bound
+   *  transfers) and its candidates (id + title), or null when nothing primed.
+   *  Lets the fast-path orchestrator grade candidates in code without re-parsing
+   *  the viewResourceSnapshot document. */
+  rawSnapshotView(): {
+    snapshotId: string;
+    candidates: Array<{ id: string; title: string }>;
+  } | null {
+    if (!this.rawSnapshot) {
+      return null;
+    }
+    return {
+      snapshotId: this.rawSnapshot.id,
+      candidates: this.rawSnapshot.candidates.map((candidate) => ({
+        id: candidate.id,
+        title: candidate.title,
+      })),
+    };
+  }
+
   /** Pre-warm the assrt subtitle snapshot (system-initiated, like primeRawSnapshot).
    *  Stores candidates so viewSubtitleSnapshot can render them repeatedly for free.
    *  Soft-fails (empty snapshot) on any provider miss — never throws, so a flaky
