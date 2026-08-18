@@ -1,4 +1,5 @@
 import type { LanguageModel } from "ai";
+import { episodeCodeFromFileName } from "../episode-code.js";
 import { arbitrateDiagnosis, arbitrateSelection } from "./arbitrator.js";
 import { gradeCandidates, summarizeGrading } from "./candidate-grader.js";
 import { finalizeLanding } from "./finalize-landing.js";
@@ -11,8 +12,9 @@ import type { TvAnimeTarget } from "./task-agents.js";
  * the LLM demoted from "full-driver 60-step tool loop" to two pure single-call
  * judgments (the arbitrator). Flow:
  *
- *   candidate grading (code) → unique A-grade ? transfer : arbitrateSelection
- *     → transfer (code) → staging digest (code) → passes ? finalize : arbitrateDiagnosis
+ *   inspect landing point (§6b#8) → candidate grading (code) →
+ *     unique A-grade ? transfer : arbitrateSelection →
+ *     transfer (code) → staging digest (code) → passes ? finalize : arbitrateDiagnosis
  *
  * A clean run (unique A-grade that lands and digests cleanly) makes ZERO LLM
  * calls. Only genuine ambiguity — no unique A-grade, or a dirty/off-target
@@ -48,20 +50,79 @@ function nextCandidate(
   return next?.id ?? null;
 }
 
+/** Conclude an uncovered run: record the no-coverage audit (same as the agent's
+ *  reportNoCoverage), then finish. A fully-unhealthy evidence base throws
+ *  SANDBOX_SOURCE_UNHEALTHY upward — the caller must surface the source fault,
+ *  not record "no resource". */
+async function concludeUncovered(
+  sandbox: TaskSandbox,
+  opts: { text: string; steps: number; escalated: boolean; reason: string },
+): Promise<FastPathResult> {
+  await sandbox.reportNoCoverage(opts.reason);
+  return {
+    text: opts.text,
+    steps: opts.steps,
+    coverage: await sandbox.finish(),
+    escalated: opts.escalated,
+  };
+}
+
+function fileBaseName(path: string): string {
+  return path.split("/").pop() ?? path;
+}
+
 export async function runFastPathAcquisition(options: FastPathOptions): Promise<FastPathResult> {
   const { sandbox, model, target, isChineseNative } = options;
   const seasons = target.seasons;
-  const needCodes = target.missingEpisodes;
 
-  // 1. Grade the primed raw-snapshot candidates (code, zero LLM).
-  const raw = sandbox.rawSnapshotView();
-  if (!raw || raw.candidates.length === 0) {
+  // 0. Inspect the landing point FIRST (§6b#8): the DB can lag the disk (a prior
+  //    run placed files, or a crash left them mid-flight), so episodes already
+  //    sitting in their season dirs are marked obtained and dropped from the need
+  //    — never re-searched or re-transferred.
+  let needCodes = [...target.missingEpisodes];
+  const alreadyPresent = new Set<string>();
+  const onDisk = await sandbox.inspectTargetDir();
+  for (const file of onDisk) {
+    const code = episodeCodeFromFileName(fileBaseName(file.path));
+    if (code && needCodes.includes(code)) {
+      alreadyPresent.add(code);
+    }
+  }
+  if (alreadyPresent.size > 0) {
+    await sandbox.markObtained({ codes: [...alreadyPresent] });
+    needCodes = needCodes.filter((code) => !alreadyPresent.has(code));
+  }
+  if (needCodes.length === 0) {
+    // The library already holds the whole need — no search, no transfer, no LLM.
     return {
-      text: "无候选(raw snapshot 为空)",
+      text: `fast path 已在库:${[...alreadyPresent].join(",")}`,
       steps: 0,
       coverage: await sandbox.finish(),
       escalated: false,
     };
+  }
+
+  // 1. Grade the primed raw-snapshot candidates (code, zero LLM).
+  const raw = sandbox.rawSnapshotView();
+  if (!raw) {
+    // The raw pre-warm never landed (search source down) — there is NO evidence
+    // base, so reportNoCoverage would throw SANDBOX_NO_PROVIDER_EVIDENCE (its
+    // §9 guard: no search ran). Surface the source fault as uncovered, not as
+    // "no resource".
+    return {
+      text: "无预搜快照(搜索源未响应)",
+      steps: 0,
+      coverage: await sandbox.finish(),
+      escalated: false,
+    };
+  }
+  if (raw.candidates.length === 0) {
+    return concludeUncovered(sandbox, {
+      text: "无候选(raw snapshot 为空)",
+      steps: 0,
+      escalated: false,
+      reason: "raw snapshot 为空",
+    });
   }
 
   const grading = gradeCandidates(raw.candidates, {
@@ -87,12 +148,12 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     });
     current = arbitration.candidateId;
     if (current === null) {
-      return {
+      return concludeUncovered(sandbox, {
         text: `仲裁放弃:${arbitration.reasoning || "无可用候选"}`,
         steps: 0,
-        coverage: await sandbox.finish(),
         escalated,
-      };
+        reason: arbitration.reasoning || "无可用候选",
+      });
     }
   }
 
@@ -127,7 +188,24 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
 
     // Clean landing → finalize (rename/归位/mark/wipe) in code, zero LLM.
     if (digest.passes) {
-      await finalizeLanding({ sandbox, digest, canonicalTitle: target.title, seasons });
+      try {
+        await finalizeLanding({ sandbox, digest, canonicalTitle: target.title, seasons });
+      } catch (error) {
+        // A rename/move guard refused, or storage failed mid-landing — nothing was
+        // reliably placed. Wipe staging and surface honest no-coverage (never a
+        // fake obtained mark), mirroring the agent's honest termination.
+        try {
+          await sandbox.discardStaging();
+        } catch {
+          // staging already empty / no separate staging — nothing to wipe.
+        }
+        return concludeUncovered(sandbox, {
+          text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
+          steps: attempted.size,
+          escalated,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
       return {
         text: `fast path 归位标记:${digest.coveredCodes.join(",") || "-"}`,
         steps: attempted.size,
@@ -144,7 +222,21 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       title: target.title,
     });
     if (diagnosis.action === "accept") {
-      await finalizeLanding({ sandbox, digest, canonicalTitle: target.title, seasons });
+      try {
+        await finalizeLanding({ sandbox, digest, canonicalTitle: target.title, seasons });
+      } catch (error) {
+        try {
+          await sandbox.discardStaging();
+        } catch {
+          // already empty.
+        }
+        return concludeUncovered(sandbox, {
+          text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
+          steps: attempted.size,
+          escalated,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
       return {
         text: `仲裁 accept:${diagnosis.reasoning}`,
         steps: attempted.size,
@@ -154,12 +246,12 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     }
     if (diagnosis.action === "abandon") {
       await sandbox.discardStaging();
-      return {
+      return concludeUncovered(sandbox, {
         text: `仲裁 abandon:${diagnosis.reasoning}`,
         steps: attempted.size,
-        coverage: await sandbox.finish(),
         escalated,
-      };
+        reason: diagnosis.reasoning,
+      });
     }
     // retry_other → clear the bad pack's files (keep the staging dir alive) and
     // try the next candidate.

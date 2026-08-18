@@ -38,6 +38,16 @@ const target: TvAnimeTarget = {
   missingEpisodes: ["S01E01"],
 };
 
+/** Storage whose moveFiles fails — proves finalize's honest-termination contract. */
+class MoveFailingSimulator extends Storage115Simulator {
+  override async moveFiles(input: {
+    fileIds: string[];
+    targetDirectoryId: string;
+  }): Promise<{ moved: string[] }> {
+    throw new Error("SANDBOX_MOVE_FAILED: injected for the honest-termination test");
+  }
+}
+
 interface SetupOptions {
   candidates: Array<{ id: string; title: string }>;
   packs: Record<string, { files: Array<{ path: string; sizeBytes: number }> }>;
@@ -207,5 +217,68 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
 
     expect(result.coverage.coverageMet).toBe(false);
     expect(result.coverage.missing).toEqual(["S01E01"]);
+  });
+
+  it("marks already-on-disk episodes and never searches or transfers (§6b#8)", async () => {
+    const provider = new FakeResourceProviderV2({ results: {} });
+    const storage = new Storage115Simulator({
+      packs: { seed: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1_000_000_000 }] } },
+    });
+    const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
+    const s1 = await storage.createDirectory({ name: "Season 1", parentId: "root" });
+    const sandbox = new TaskSandbox({
+      provider,
+      storage,
+      stagingDirectoryId,
+      targetSeasonDirectoryIds: { 1: s1 },
+      need: ["S01E01"],
+      canonicalTitle: "狂飙",
+      titleTerms: ["狂飙"],
+    });
+    await sandbox.primeRawSnapshot("狂飙");
+    // The episode is already on disk in the season dir (the DB-lags-the-disk case).
+    await storage.transferCandidate({ candidateId: "seed", intoDirectoryId: s1 });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target,
+      isChineseNative: false,
+    });
+
+    expect(result.escalated).toBe(false);
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual(["S01E01"]);
+  });
+
+  it("reports honest no-coverage (never a fake obtained) when moveToSeason fails", async () => {
+    const provider = new FakeResourceProviderV2({
+      results: { 狂飙: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }] },
+    });
+    const storage = new MoveFailingSimulator({
+      packs: { c1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1_000_000_000 }] } },
+    });
+    const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
+    const s1 = await storage.createDirectory({ name: "Season 1", parentId: "root" });
+    const sandbox = new TaskSandbox({
+      provider,
+      storage,
+      stagingDirectoryId,
+      targetSeasonDirectoryIds: { 1: s1 },
+      need: ["S01E01"],
+      canonicalTitle: "狂飙",
+      titleTerms: ["狂飙"],
+    });
+    await sandbox.primeRawSnapshot("狂飙");
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target,
+      isChineseNative: false,
+    });
+
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.coverage.obtained).toEqual([]); // never a fake obtained mark
   });
 });

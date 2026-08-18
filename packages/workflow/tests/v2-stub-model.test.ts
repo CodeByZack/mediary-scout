@@ -179,10 +179,13 @@ describe("createStubAcquisitionModel — the deterministic-script agent", () => 
   });
 
   it("resets its plan when the same instance runs a second, different task (regression: agentModelCache reuses the stub across runs)", async () => {
+    // The stub model now drives ONLY the movie path (TV runs the zero-LLM fast
+    // path), so this regression — the worker's agentModelCache hands one stub
+    // instance to every fake-mode run — is re-scoped to two movie runs.
     const provider = new FakeResourceProvider({
       keywordResults: {
-        "Stub Show": [{ title: "Stub Show S01 全24集", providerPayload: { url: "https://pan.quark.cn/s/abc" } }],
-        "Another Show": [{ title: "Another Show S01 全12集", providerPayload: { url: "https://pan.quark.cn/s/def" } }],
+        "Some Film": [{ title: "Some Film 2025 1080p", providerPayload: { url: "https://pan.quark.cn/s/abc" } }],
+        "Another Film": [{ title: "Another Film 2026 4K", providerPayload: { url: "https://pan.quark.cn/s/def" } }],
       },
     });
     // Each run gets its OWN storage (the fake's fileIds are per-instance); the
@@ -190,36 +193,51 @@ describe("createStubAcquisitionModel — the deterministic-script agent", () => 
     // agentModelCache hands to every fake-mode run — is shared.
     const model = createStubAcquisitionModel();
 
-    const run1 = await tvRun({ provider, storage: fullDumpStorage(), model });
-    expect(run1.status).toBe("succeeded");
-    expect(run1.transferAttempts.length).toBe(1);
+    const movieStorage = (name: string, id: string) =>
+      new FakeStorageExecutor({
+        defaultTransferOutcome: {
+          status: "succeeded",
+          providerMessage: "fake transfer completed",
+          files: [
+            {
+              id,
+              storageDirectoryId: "assigned_by_fake_storage",
+              name,
+              sizeBytes: 2_000_000_000,
+              episodeCode: "S01E01",
+              providerFileId: `provider_${id}`,
+            },
+          ],
+        },
+      });
 
-    // Second run on the SAME model instance, different title + different need.
+    const run1 = await movieRun({
+      provider,
+      storage: movieStorage("Some.Film.2025.1080p.mkv", "fake_movie_1"),
+      model,
+    });
+    expect(run1.status).toBe("succeeded");
+
+    // Second run on the SAME model instance, different title.
     const secondTitle = {
-      id: "tmdb_tv_2",
-      tmdbId: 2,
-      type: "tv",
-      title: "Another Show",
+      id: "tmdb_movie_2",
+      tmdbId: 22,
+      type: "movie",
+      title: "Another Film",
       year: 2026,
       aliases: [],
     } as unknown as MediaTitle;
-    const run2 = await tvRun({
+    const run2 = await movieRun({
       provider,
-      storage: fullDumpStorage(),
+      storage: movieStorage("Another.Film.2026.4K.mkv", "fake_movie_2"),
       model,
       title: secondTitle,
-      workflowRunId: "run-stub-2",
-      seasons: [{ seasonNumber: 1, totalEpisodes: 12, latestAiredEpisode: 12, qualityPreference: "4K" }],
     });
     // Without the reset this would silently idle: 0 tool calls, 0 marks,
     // honest-looking no_coverage. It must run the full script for ITS task.
     expect(run2.status).toBe("succeeded");
+    expect(run2.episodes[0]!.obtained).toBe(true);
     expect(run2.transferAttempts.length).toBe(1);
-    const landed2 = run2.seasons[0]!.episodes.filter((ep) => ep.obtained);
-    expect(landed2.length).toBe(12);
-    expect(landed2.map((ep) => ep.episodeCode)).toEqual(
-      Array.from({ length: 12 }, (_, index) => `S01E${String(index + 1).padStart(2, "0")}`),
-    );
   });
 
   it("honestly reports no_coverage (never a fake obtained) when moveToSeason fails", async () => {

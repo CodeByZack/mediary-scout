@@ -19,6 +19,7 @@ import {
   type MovieTarget,
   type TvAnimeTarget,
 } from "./task-agents.js";
+import { runFastPathAcquisition } from "./fast-path.js";
 
 /**
  * Phase 6 — the composition root. Given the real provider + executor, a model,
@@ -206,7 +207,12 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
 
   const result =
     request.target.kind === "tv"
-      ? await runTvAnimeTaskAgent({ ...common, target: stripKind(request.target) })
+      ? await runFastPathAcquisition({
+          sandbox,
+          model: request.model,
+          target: stripKind(request.target),
+          isChineseNative: (request.originCountries ?? []).includes("CN"),
+        })
       : await runMovieTaskAgent({ ...common, target: stripKind(request.target) });
 
   // The agent transferred candidates by id; the storage adapter recorded the

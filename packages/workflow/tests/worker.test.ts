@@ -170,7 +170,16 @@ describe("runQueuedType2Workflow (V2 engine)", () => {
 
     const result = await runQueuedType2Workflow({
       repository,
-      resourceProvider: emptyProvider(),
+      // Two A-grade candidates → the fast path escalates to the selection
+      // arbitrator, which calls the (dead) model → the failure surfaces.
+      resourceProvider: new FakeResourceProvider({
+        keywordResults: {
+          Show: [
+            { title: "Show S01 全24集", providerPayload: { url: "https://pan.quark.cn/s/a" } },
+            { title: "Show 全集", providerPayload: { url: "https://pan.quark.cn/s/b" } },
+          ],
+        },
+      }),
       storage: new FakeStorageExecutor(),
       model: throwingModel(),
       storageParentDirectoryId: "library_root",
