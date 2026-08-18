@@ -36,6 +36,7 @@ const target: TvAnimeTarget = {
   aliases: [],
   seasons: [1],
   missingEpisodes: ["S01E01"],
+  qualityPreference: "1080p",
 };
 
 /** Storage whose moveFiles fails — proves finalize's honest-termination contract. */
