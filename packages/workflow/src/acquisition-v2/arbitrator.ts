@@ -35,6 +35,7 @@ const SELECTION_SYSTEM = [
   "- 中文字幕优先（中文 release 名默认带中字；纯英文 scene release 大概率生肉）。",
   "- 排除同名异作（电影版/剧场版/真人版/OVA/SP）。",
   "- 若没有可用的候选，返回 candidateId 为 null。",
+  "- 候选行里方括号 [id] 是候选的唯一真实 id：candidateId 必须从某个候选行的 [id] 里原样复制，禁止填标题、禁止自己编造。",
   "只输出 JSON，不要任何其他文字：",
   '{"candidateId": "候选的id" | null, "reasoning": "一句话理由"}',
 ].join("\n");
@@ -151,6 +152,7 @@ const MOVIE_SELECTION_SYSTEM = [
   "- 排除同名异作 / remake（发行年份对不上）与其他作品（OVA/特别篇/番外）。",
   "- 发行名没带年份的候选可用但不可靠，优先带年份的。",
   "- 若没有可用的候选，返回 candidateId 为 null。",
+  "- 候选行里方括号 [id] 是候选的唯一真实 id：candidateId 必须从某个候选行的 [id] 里原样复制，禁止填标题、禁止自己编造。",
   "只输出 JSON，不要任何其他文字：",
   '{"candidateId": "候选的id" | null, "reasoning": "一句话理由"}',
 ].join("\n");

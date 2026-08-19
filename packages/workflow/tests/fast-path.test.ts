@@ -126,6 +126,31 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     ]);
   });
 
+  it("gracefully reports no_coverage when the arbitrator returns a TITLE as candidateId (the 狂飙 bug)", async () => {
+    // Two same-title A-grades → no unique top → arbitrator sees only the graded
+    // summary and (the bug) fills the TITLE back as candidateId. The guard must
+    // catch it and conclude uncovered — transferCandidate must never throw
+    // SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT and kill the whole run.
+    const { sandbox } = await createSetup({
+      candidates: [
+        { id: "c1", title: "狂飙.S01E01.1080p.中字" },
+        { id: "c2", title: "狂飙.S01E02.1080p.中字" },
+      ],
+      packs: {},
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: textModel('{"candidateId":"狂飙","reasoning":"选狂飙"}'),
+      target,
+      isChineseNative: false,
+    });
+
+    expect(result.escalated).toBe(true);
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.coverage.missing).toEqual(["S01E01"]);
+  });
+
   it("declines (no coverage) when the arbitrator finds nothing usable", async () => {
     const { sandbox } = await createSetup({
       candidates: [

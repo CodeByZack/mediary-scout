@@ -171,4 +171,17 @@ describe("summarizeGrading", () => {
     expect(summary).toContain("[B]");
     expect(summary).not.toContain("[D]");
   });
+
+  it("carries each candidate's real id in its own bracket (the arbitrator copies [id] verbatim)", () => {
+    const result = gradeCandidates(
+      [
+        { id: "cand_1", title: "狂飙.S01E01.1080p.中字" },
+        { id: "cand_2", title: "狂飙 第二季 全集" },
+      ],
+      tvCtx,
+    );
+    const summary = summarizeGrading(result);
+    expect(summary).toContain("[A] [cand_1] 狂飙.S01E01.1080p.中字");
+    expect(summary).toContain("[C] [cand_2] 狂飙 第二季 全集");
+  });
 });

@@ -160,6 +160,18 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
         reason: arbitration.reasoning || "无可用候选",
       });
     }
+    // Defense-in-depth: the model only sees the graded summary and may return a
+    // TITLE or a made-up id instead of a real candidate id. A bogus id must never
+    // reach transferCandidate's SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT throw and blow
+    // up the whole run — treat it like a declined arbitration (safe uncover).
+    if (!raw.candidates.some((candidate) => candidate.id === current)) {
+      return concludeUncovered(sandbox, {
+        text: `仲裁返回非法候选:${current}`,
+        steps: 0,
+        escalated,
+        reason: `仲裁返回非法候选 id（不在快照中）:${current}`,
+      });
+    }
   }
 
   // 3. Transfer → digest → finalize / diagnose, with limited retries for dead
@@ -385,6 +397,18 @@ export async function runMovieFastPathAcquisition(
         steps: 0,
         escalated,
         reason: arbitration.reasoning || "无可用候选",
+      });
+    }
+    // Defense-in-depth: the model only sees the graded summary and may return a
+    // TITLE or a made-up id instead of a real candidate id. A bogus id must never
+    // reach transferCandidate's SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT throw and blow
+    // up the whole run — treat it like a declined arbitration (safe uncover).
+    if (!raw.candidates.some((candidate) => candidate.id === current)) {
+      return concludeUncovered(sandbox, {
+        text: `仲裁返回非法候选:${current}`,
+        steps: 0,
+        escalated,
+        reason: `仲裁返回非法候选 id（不在快照中）:${current}`,
       });
     }
   }

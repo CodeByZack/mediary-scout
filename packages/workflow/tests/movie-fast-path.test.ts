@@ -118,6 +118,29 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     ]);
   });
 
+  it("gracefully reports no_coverage when the movie arbitrator returns a TITLE as candidateId", async () => {
+    // No unique A-grade → arbitrator sees only the graded summary and (the bug)
+    // fills the TITLE back as candidateId. The guard must catch it and conclude
+    // uncovered — transferCandidate must never throw SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT.
+    const { sandbox } = await createMovieSetup({
+      candidates: [
+        { id: "c1", title: "流浪地球 4K" }, // B — no year in release name
+        { id: "c2", title: "流浪地球 1080p" }, // B — no year in release name
+      ],
+      packs: {},
+    });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: textModel('{"candidateId":"流浪地球","reasoning":"选流浪地球"}'),
+      target: movieTarget,
+    });
+
+    expect(result.escalated).toBe(true);
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.coverage.missing).toEqual(["MOVIE"]);
+  });
+
   it("declines (no coverage) when the selection arbitrator finds nothing usable", async () => {
     const { sandbox } = await createMovieSetup({
       candidates: [{ id: "c1", title: "流浪地球 4K" }],

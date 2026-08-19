@@ -319,7 +319,12 @@ export function gradeCandidates(
 }
 
 /** A compact, LLM-ready summary of the ranked candidates (the arbitrator's input
- *  when the rules cannot decide). Omits the dead-weight D-grade tail. */
+ *  when the rules cannot decide). Omits the dead-weight D-grade tail.
+ *
+ *  Each line carries the candidate's real id in its OWN bracket — `[A] [<id>]
+ *  <title> — <reasons>` — so the arbitrator can copy `[id]` verbatim into
+ *  candidateId. Without it the model only sees titles and fills the title back
+ *  as the id (the SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT 狂飙 incident). */
 export function summarizeGrading(result: GradingResult, maxLines = 30): string {
   const lines: string[] = [];
   for (const g of result.ranked) {
@@ -327,7 +332,7 @@ export function summarizeGrading(result: GradingResult, maxLines = 30): string {
       // Stop at the first D once we've listed anything — D grades are pure noise.
       break;
     }
-    lines.push(`[${g.grade}] ${g.title}  (${g.reasons.join("; ") || "—"})`);
+    lines.push(`[${g.grade}] [${g.id}] ${g.title} — ${g.reasons.join("; ") || "—"}`);
     if (lines.length >= maxLines) break;
   }
   return lines.join("\n") || "(无候选)";
