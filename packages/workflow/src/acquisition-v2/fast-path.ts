@@ -3,14 +3,17 @@ import { episodeCodeFromFileName } from "../episode-code.js";
 import { normalizeSearchKeyword } from "../planning-search-gate.js";
 import {
   arbitrateDiagnosis,
+  arbitrateEpisodeMapping,
   arbitrateMovieDiagnosis,
   arbitrateMovieSelection,
   arbitrateSelection,
 } from "./arbitrator.js";
 import { gradeCandidates, summarizeGrading } from "./candidate-grader.js";
 import { finalizeLanding, finalizeMovieLanding } from "./finalize-landing.js";
+import { getStorageBrand } from "../storage-brands.js";
 import { TaskSandbox } from "./sandbox.js";
 import { digestMovieStaging, digestStaging } from "./staging-digest.js";
+import type { StagingDigest } from "./staging-digest.js";
 import type { MovieTarget, TvAnimeTarget } from "./task-agents.js";
 import type { AgentPhase, AgentToolEvent } from "./activity.js";
 
@@ -61,6 +64,20 @@ function stepLog(
   else console.log(line);
 }
 
+/** First line of every fast-path run: which 网盘 this task writes to. Unknown /
+ *  absent provider falls back to the raw string so tests and bare sandboxes
+ *  still print something useful. */
+function logStorageProvider(sandbox: TaskSandbox, title: string, storageProvider?: string): void {
+  const provider = storageProvider ?? "unknown";
+  let label = provider;
+  try {
+    label = getStorageBrand(provider).label;
+  } catch {
+    // unknown brand string — keep the raw provider id.
+  }
+  stepLog(sandbox, title, "网盘", `${label} (${provider})`);
+}
+
 /** Fire-and-forget step trace: EVERY fast-path step also emits an AgentToolEvent
  *  through onProgress — the runner wires that to the SAME progress + agent-trace
  *  sinks the agent path uses, so the activity page shows fast-path steps (and a
@@ -90,6 +107,9 @@ export interface FastPathOptions {
   target: TvAnimeTarget;
   /** CN-origin works are natively Chinese-spoken → no 中字 gate in grading. */
   isChineseNative: boolean;
+  /** The run's drive brand ("pan115" | "quark" | …) — printed at the top of the
+   *  run so the log shows which 网盘 this task is writing to. */
+  storageProvider?: string;
   /** Live step trace for the activity page (Task D): the runner wires its
    *  progress + agent-trace sinks here; the fast path emits one AgentToolEvent
    *  per step, fire-and-forget. Undefined (tests / bare sandbox) = no trace. */
@@ -112,6 +132,119 @@ function nextCandidate(
 ): string | null {
   const next = grading.ranked.find((c) => c.grade !== "D" && !attempted.has(c.id));
   return next?.id ?? null;
+}
+
+/**
+ * 集数映射尝试(§2.2): 代码解析不出集数的落盘(纯数字 `01.mp4` / E01 / fansub),
+ * 单季任务第一次收包时让 AI 给逐集映射,校验通过则重建 digest 并尽量归位。
+ *
+ * 返回值:
+ *   - "passed": 映射重建 digest 通过 → 调用方应像干净落地一样 finalize;
+ *   - "unmapped-but-clean": 映射唯一且合法,但重建后不覆盖 need → 不是脏包,
+ *     换下一个候选;
+ *   - "no" / "failed": 无 unparsed、非单季、映射失败或校验不通过 → 走诊断仲裁。
+ *
+ * 校验规则(代码,不信任 AI 输出):
+ *   1. 文件名必须在本次落盘的 unparsed 清单里(防幻觉文件名);
+ *   2. code 必须 SxxExx 形状且季与任务匹配(单季任务强制赛季一致);
+ *   3. 一个集数最多被映射一次(冲突 → 整体放弃该映射,回落仲裁);
+ *   4. 映射后的文件必须落在任务的 need/已收集范围内(防 AI 编造不存在的集数)。
+ */
+async function tryEpisodeMapping(options: {
+  sandbox: TaskSandbox;
+  model: LanguageModel;
+  digest: StagingDigest;
+  seasons: number[];
+  targetTitle: string;
+  needCodes: string[];
+  ram: (overrides: Record<string, string>) => StagingDigest;
+  onDigest: (d: StagingDigest) => void;
+  /** 映射校验通过后的 clean 表(仅映射合法时回调)——调用方把它喂回
+   *  finalizeLanding.overrides,否则 rename/归位按裸文件名解析会跳过这些
+   *  fansub/纯数字文件,映射成果落不了地。 */
+  onMapping?: (clean: Record<string, string>) => void;
+  /** 必填但可为 undefined — 便于 exactOptionalPropertyTypes 下直接传 FastPathOptions.onProgress */
+  onProgress: ((event: AgentToolEvent) => void) | undefined;
+}): Promise<"passed" | "unmapped-but-clean" | "no" | "failed"> {
+  const { digest } = options;
+  // 仅 TV 单季且有 unparsed 视频才值得让 AI 映射;movie / 多季 / 无 unparsed → no.
+  if (
+    options.seasons.length !== 1 ||
+    digest.unparsedVideos.length === 0 ||
+    digest.unparsedVideos.every((name) => /(sample|样本|广告|花絮|预告|trailer)/i.test(name))
+  ) {
+    return "no";
+  }
+
+  const model = options.model;
+  const unparsed = digest.unparsedVideos.filter((n) => !/(sample|样本|广告|花絮|预告|trailer)/i.test(n));
+  if (unparsed.length === 0) return "no";
+
+  const knownRange = computeKnownEpisodeRange(options.needCodes);
+  const arbitration = await arbitrateEpisodeMapping({
+    model,
+    unparsedFiles: unparsed,
+    title: options.targetTitle,
+    seasons: options.seasons,
+    knownEpisodeRange: knownRange,
+  });
+
+  // 校验映射(代码,不信任 AI)。
+  const allowed = new Set(unparsed);
+  const seenCodes = new Set<string>();
+  const clean: Record<string, string> = {};
+  let valid = true;
+  for (const [fileName, code] of Object.entries(arbitration.mapping)) {
+    if (!allowed.has(fileName)) {
+      valid = false;
+      break;
+    }
+    if (seenCodes.has(code)) {
+      valid = false;
+      break;
+    }
+    seenCodes.add(code);
+    clean[fileName] = code;
+  }
+  if (!valid) {
+    const failDetail = `集数映射校验失败(文件名幻觉/集数冲突),回落诊断仲裁`;
+    stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail);
+    return "failed";
+  }
+
+  // 重建 digest:overrides 把映射喂回代码解析。
+  const re = options.ram(clean);
+  options.onDigest(re);
+  if (re.passes) {
+    const mapDetail = `集数映射 ${Object.entries(clean).length} 个文件 → ${Object.values(clean).join(",")},重建 digest 通过`;
+    stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "log");
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail);
+    options.onMapping?.(clean);
+    return "passed";
+  }
+  if (re.episodeCodes.length > 0 && !re.isDirtyPack) {
+    // 映射上了但没覆盖 need(例如映射出的是别的集数)—— 回收干净但无用。
+    const mapDetail = `集数映射生效但未覆盖目标(${re.episodeCodes.join(",")}),丢弃换候选`;
+    stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "warn");
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail);
+    return "unmapped-but-clean";
+  }
+  // 重建后仍脏(映射不完整/失败) → 回落诊断仲裁。
+  const failDetail = `集数映射后仍不通过(${re.summary.split("\n").join(" / ")}),回落诊断仲裁`;
+  stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
+  emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail);
+  return "failed";
+}
+
+/** 从 needCodes(S01E01 形状)推导已知集数范围。 */
+function computeKnownEpisodeRange(needCodes: string[]): { min: number; max: number } | null {
+  const numbers = needCodes
+    .map((code) => /^S\d{2}E(\d{2,4})$/.exec(code)?.[1])
+    .map((n) => (n ? Number(n) : NaN))
+    .filter((n) => !Number.isNaN(n));
+  if (numbers.length === 0) return null;
+  return { min: Math.min(...numbers), max: Math.max(...numbers) };
 }
 
 /** Conclude an uncovered run: record the no-coverage audit (same as the agent's
@@ -242,6 +375,7 @@ async function aliasesFallbackReSearch(input: {
 export async function runFastPathAcquisition(options: FastPathOptions): Promise<FastPathResult> {
   const { sandbox, model, target, isChineseNative, onProgress } = options;
   const seasons = target.seasons;
+  logStorageProvider(sandbox, target.title, options.storageProvider);
 
   // 0. Inspect the landing point FIRST (§6b#8): the DB can lag the disk (a prior
   //    run placed files, or a crash left them mid-flight), so episodes already
@@ -527,16 +661,105 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       };
     }
 
-    // Dirty / off-target landing → diagnostic arbitration (escalation #2).
+    // Dirty / off-target landing. TV-only, single-season: if the landing has
+    // videos the CODE cannot parse into episode codes (纯数字 `01.mp4` / E01 /
+    // 日漫 fansub), the fast path first asks the AI for a 逐集映射 (§2.2) —
+    // the design intent the old agent loop had ("you can read that
+    // [NC-Raws] Lyricis Recoil - 01.mkv is S01E01"). A verified mapping lets the
+    // pack land like a clean digest (zero further LLM decisions); a failed or
+    // partial mapping falls through to the diagnostic arbitrator.
+    // Movie landings never map episodes — they go straight to the movie diagnosis.
     escalated = true;
+    let landingDigest = digest;
+    let mappingTable: Record<string, string> | undefined;
+    const mappingEscalated = await tryEpisodeMapping({
+      sandbox,
+      model,
+      digest,
+      seasons,
+      targetTitle: target.title,
+      needCodes,
+      ram: (overrides) => digestStaging({ files: transfer.staging, seasons, needCodes, overrides }),
+      onDigest: (d) => {
+        landingDigest = d;
+      },
+      onMapping: (clean) => {
+        mappingTable = clean;
+      },
+      onProgress,
+    });
+    if (mappingEscalated === "passed") {
+      // Wiped via overrides — same close-out as a clean landing (rename/归位/mark).
+      try {
+        const finalized = await finalizeLanding({
+          sandbox,
+          digest: landingDigest,
+          canonicalTitle: target.title,
+          seasons,
+          ...(mappingTable ? { overrides: mappingTable } : {}),
+        });
+        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${Object.values(finalized.movedSeasons).reduce((sum, n) => sum + n, 0)} 文件 / 清理 ${finalized.discarded.length} 文件`;
+        stepLog(sandbox, target.title, "归位", organizeDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
+      } catch (error) {
+        try {
+          await sandbox.discardStaging();
+        } catch {
+          // already empty.
+        }
+        const organizeFailDetail = error instanceof Error ? error.message : String(error);
+        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+        return concludeUncovered(sandbox, {
+          text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
+          steps: attempted.size,
+          escalated,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+      const doneDetail = `入库(集数映射:${landingDigest.coveredCodes.join(",") || "-"})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
+      return {
+        text: `集数映射归位:${landingDigest.coveredCodes.join(",") || "-"}`,
+        steps: attempted.size,
+        coverage: await sandbox.finish(),
+        escalated,
+      };
+    }
+    if (mappingEscalated === "unmapped-but-clean") {
+      // 映射成功但没覆盖 need → 不是脏包了,但也没拿到需要的集 → 换候选。
+      const leftover = await sandbox.inspectStaging();
+      if (leftover.length > 0) {
+        await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
+      }
+      const next = nextCandidate(grading, tried);
+      const retryDetail = `映射未覆盖目标:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
+      stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
+      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail);
+      current = next;
+      continue;
+    }
+
     const diagnosis = await arbitrateDiagnosis({
       model,
-      summary: digest.summary,
+      summary: landingDigest.summary,
       title: target.title,
+      // 功能4: 把剩余候选按分级喂给诊断仲裁,retry_other 时一次挑出下一个,
+      // 避免每个脏包都重新仲裁(45 候选只试 3 次的教训)。
+      remainingCandidates: grading.ranked.map((c) => ({
+        id: c.id,
+        title: c.title,
+        grade: c.grade,
+      })),
+      triedIds: [...tried],
     });
     if (diagnosis.action === "accept") {
       try {
-        await finalizeLanding({ sandbox, digest, canonicalTitle: target.title, seasons });
+        await finalizeLanding({ sandbox, digest: landingDigest, canonicalTitle: target.title, seasons });
       } catch (error) {
         try {
           await sandbox.discardStaging();
@@ -582,13 +805,20 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       });
     }
     // retry_other → clear the bad pack's files (keep the staging dir alive) and
-    // try the next candidate.
+    // try the next candidate. 功能4: AI 已随仲裁返回 nextCandidateId 就直接用它
+    // (需校验:候选存在、未尝试过),否则才回退机械按序 nextCandidate。
     const leftover = await sandbox.inspectStaging();
     if (leftover.length > 0) {
       await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
     }
-    const next = nextCandidate(grading, tried);
-    const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
+    const aiNext =
+      diagnosis.nextCandidateId &&
+      grading.ranked.some((c) => c.id === diagnosis.nextCandidateId) &&
+      !tried.has(diagnosis.nextCandidateId)
+        ? diagnosis.nextCandidateId
+        : null;
+    const next = aiNext ?? nextCandidate(grading, tried);
+    const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}${aiNext ? "(仲裁指定)" : ""}`;
     stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
     emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail);
     current = next;
@@ -629,6 +859,9 @@ export interface MovieFastPathOptions {
   sandbox: TaskSandbox;
   model: LanguageModel;
   target: MovieTarget;
+  /** The run's drive brand ("pan115" | "quark" | …) — printed at the top of the
+   *  run so the log shows which 网盘 this task is writing to. */
+  storageProvider?: string;
   /** Live step trace for the activity page (Task D) — same contract as FastPathOptions. */
   onProgress?: (event: AgentToolEvent) => void;
 }
@@ -654,6 +887,7 @@ export async function runMovieFastPathAcquisition(
   options: MovieFastPathOptions,
 ): Promise<MovieFastPathResult> {
   const { sandbox, model, target, onProgress } = options;
+  logStorageProvider(sandbox, target.title, options.storageProvider);
 
   // 0. Landing-point check FIRST (movie has no episode codes): if the movie dir
   //    already holds a VIDEO (a prior run placed the film, or a crash left it

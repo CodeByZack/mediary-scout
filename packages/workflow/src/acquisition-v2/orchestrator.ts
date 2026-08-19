@@ -9,6 +9,7 @@ import { RealResourceProviderV2 } from "./real-provider-adapter.js";
 import { RealStorageV2 } from "./real-storage-adapter.js";
 import { budgetSoftThreshold } from "./agent-loop-guards.js";
 import { TaskSandbox } from "./sandbox.js";
+import { getStorageBrand } from "../storage-brands.js";
 import { AssrtSubtitleProvider, type AssrtProviderPort } from "../subtitle-provider.js";
 import type { SearchProfile } from "./search-profile.js";
 import {
@@ -90,6 +91,17 @@ export interface RunAcquisitionV2Result extends AcquisitionAgentResult {
 }
 
 export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promise<RunAcquisitionV2Result> {
+  // Every task's first log line names the drive it writes to — covers fast-path,
+  // agent loop, and interrogation with ONE marker at the composition root.
+  let providerLabel = request.storageProvider ?? "unknown";
+  try {
+    providerLabel = getStorageBrand(providerLabel).label;
+  } catch {
+    // unknown brand string — keep the raw id.
+  }
+  console.log(
+    `[mediary-run][${request.workflowRunId}] ${request.target.title} | 网盘: ${providerLabel} (${request.storageProvider ?? "unknown"})`,
+  );
   const registry = new CandidateRegistry();
   const provider = new RealResourceProviderV2({
     provider: request.provider,
@@ -219,6 +231,7 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
           model: request.model,
           target: stripKind(request.target),
           isChineseNative,
+          ...(request.storageProvider === undefined ? {} : { storageProvider: request.storageProvider }),
           // Task D: fast-path steps are traced through the SAME onProgress the
           // agent path uses — the runner wires it to the progress + agent-trace
           // sinks, so the activity page shows fast-path steps in agent_steps.
@@ -233,6 +246,7 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
             sandbox,
             model: request.model,
             target: stripKind(request.target),
+            ...(request.storageProvider === undefined ? {} : { storageProvider: request.storageProvider }),
             ...(request.onProgress ? { onProgress: request.onProgress } : {}),
           });
 

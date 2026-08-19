@@ -1,5 +1,20 @@
 import { generateText, type LanguageModel } from "ai";
 
+/** Always-on stdout trace marking every LLM round-trip the arbitrator makes —
+ *  the user asked for every AI call site to be clearly flagged in the run log
+ *  (`[AI] …`). The model id is printed so a run's log shows which model made
+ *  each judgment; prompt sizes stay out of the log (only the summary length,
+ *  to keep a sense of how much context the call consumed). */
+function logAiCall(
+  model: LanguageModel,
+  kind: string,
+  title: string | undefined,
+  summaryLength: number,
+): void {
+  const modelId = (model as { modelId?: string }).modelId ?? "unknown";
+  console.log(`[AI] 调用 ${kind} model=${modelId} 目标=${title ?? "-"} 摘要=${summaryLength} 字符`);
+}
+
 /**
  * The AI's TWO escalation points in the fast path — both are pure single-call
  * judgments (zero tools), the opposite of the old 60-step tool loop. The fast
@@ -26,6 +41,99 @@ export interface DiagnosisArbitration {
    *  abandon = 放弃并上报 no coverage. */
   action: "accept" | "retry_other" | "abandon";
   reasoning: string;
+  /** 功能4(批量候选 §4): action=retry_other 时,AI 直接给出「下一个该试的候选 id」
+   *  (必须是候选行里的 [id] 原样复制)。代码优先用它,其次才回退机械按序 nextCandidate。
+   *  把「这个包不对 → 换谁」合并进一次仲裁,避免每个脏包都再烧一轮 LLM。 */
+  nextCandidateId?: string | null;
+}
+
+/**
+ * 集数映射仲裁(§2.2, 2026-08-19 调研): 代码解析不出集数的落盘文件(纯数字
+ * `01.mp4` / `E01` / 日漫 fansub `[Sub] Title - 01 [1080p].mkv`),由 AI 一次性
+ * 做「文件名 → SxxExx」的逐集对应。这是老 agent 时代 `task-agents.ts` 里
+ * "you can read that [NC-Raws] Lycoris Recoil - 01.mkv is S01E01" 的设计意图
+ * —— fast path 重构时被代码独家解析吃掉,如今补回来。
+ *
+ * 这个仲裁只负责「给出映射」,不负责决定收不收:映射后代码重建 digest,
+ * 覆盖/残缺/冲突全部由 digest 的客观判定决定,AI 猜错映射最多导致
+ * 重建后仍不 passes(回落到诊断仲裁),不会脑补"人工归位"。
+ */
+export interface EpisodeMappingArbitration {
+  /** fileName(basename, 与落盘完全一致) → episodeCode(SxxExx)。 */
+  mapping: Record<string, string>;
+  /** 无法确定集数的文件(如确实无法判断的杂物)。 */
+  unmapped: string[];
+  reasoning: string;
+}
+
+const EPISODE_MAPPING_SYSTEM = [
+  "你是剧集文件集数识别员。代码转存了一个资源包,但文件名无法用规则解析出集数(纯数字/无S/E标识),请把这些文件逐个对应到正确的集数。",
+  "任务给出目标剧名、目标季、已知集数范围。文件名与集数的对应规则:",
+  "- 纯数字 `07.mp4` → 第7集(若任务为第1季则 S01E07);数字范围必须在已知集数内。",
+  "- `E12` / `EP12` / `Ep.12` → S01E12(单季任务)。",
+  "- fansub `[Sub] Title - 03 [1080p].mkv` → 集数在文件名数字里,通常是 03。",
+  "- `12话` / `12集` → 对应集数 12。",
+  "- 无尽集数争议:范围外的数字(超集数上限)、年份、分辨率、Part 序号、CRC 别当集数。",
+  "输出规则:",
+  "- 只映射**确定**的;不确定的放进 unmapped,禁止瞎编。",
+  "- episodeCode 必须形如 S01E01(两位季号+两位或多位集号);第1季就是 S01。",
+  "- 每个文件最多一个映射;严禁两个文件映射到同一个集数。",
+  "只输出 JSON,不要任何其他文字:",
+  '{"mapping": {"文件名": "SxxExx"}, "unmapped": ["无法确定的文件名"], "reasoning": "一句话理由"}',
+].join("\n");
+
+/** Arbitrate how to map unparsed landed files to episode codes (escalation #2a). */
+export async function arbitrateEpisodeMapping(options: {
+  model: LanguageModel;
+  /** 落盘文件名列表(代码解析不出的那些)。 */
+  unparsedFiles: string[];
+  title: string;
+  seasons: number[];
+  /** 已知集数范围(如 1..39),供模型排除越界数字。 */
+  knownEpisodeRange: { min: number; max: number } | null;
+}): Promise<EpisodeMappingArbitration> {
+  const prompt = [
+    `目标剧集:${options.title}(${options.seasons.length > 0 ? `季:${options.seasons.join("/")}` : "未知季"})`,
+    `已知集数范围:${options.knownEpisodeRange ? `${options.knownEpisodeRange.min} ~ ${options.knownEpisodeRange.max}` : "未知"}`,
+    "",
+    "需要识别集数的文件:",
+    ...options.unparsedFiles.map((name, i) => `${i + 1}. ${name}`),
+  ].join("\n");
+
+  logAiCall(options.model, "集数映射仲裁", options.title, options.unparsedFiles.join(",").length);
+  const result = await generateText({
+    model: options.model,
+    system: EPISODE_MAPPING_SYSTEM,
+    prompt,
+  });
+
+  try {
+    const parsed = extractJson(result.text) as Partial<EpisodeMappingArbitration>;
+    if (typeof parsed?.mapping !== "object" || parsed.mapping === null) {
+      throw new Error("ARBITRATOR_BAD_MAPPING: mapping missing");
+    }
+    // 只保留合法 code 形状的条目;文件名必须是输入清单里的(防幻觉文件名)。
+    const allowed = new Set(options.unparsedFiles);
+    const cleanMapping: Record<string, string> = {};
+    const unmappedList: string[] = [];
+    for (const [fileName, code] of Object.entries(parsed.mapping)) {
+      if (!allowed.has(fileName)) continue; // 幻觉文件名忽略
+      if (typeof code !== "string" || !/^S\d{2}E\d{2,4}$/.test(code)) continue;
+      cleanMapping[fileName] = code;
+    }
+    const unmapped = Array.isArray(parsed.unmapped)
+      ? parsed.unmapped.filter((name) => typeof name === "string" && allowed.has(name))
+      : [];
+    return {
+      mapping: cleanMapping,
+      unmapped,
+      reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
+    };
+  } catch {
+    // Safe fallback: no mapping at all — the caller's digest will stay unparsed
+    // and escalate to the diagnostic arbitrator.
+    return { mapping: {}, unmapped: [], reasoning: "仲裁返回无法解析，安全放弃映射" };
+  }
 }
 
 const SELECTION_SYSTEM = [
@@ -44,10 +152,15 @@ const DIAGNOSIS_SYSTEM = [
   "你是剧集落盘诊断员。代码转存了一个候选并解析了落盘内容，但判定为「不符合」或「脏包」，需要你决定怎么处理。",
   "决定（action）三选一：",
   '- "accept"：虽有瑕疵但核心集数在、可用（如全集包里夹了个 sample，但需要的集都完整）——接受并归位标记。',
-  '- "retry_other"：这个包不对（季错/同名异作/纯生肉/大量杂项），换下一个候选。',
+  '- "retry_other"：这个包不对（季错/同名异作/纯生肉/大量杂项），换下一个候选：同时在 nextCandidateId 里给出「下一个最该试的候选 id」。',
   '- "abandon"：没有可用的了，放弃并上报 no coverage。',
+  "若选了 retry_other，会附带「剩余候选」列表（按代码分级 A>B>C>D 排好序）。",
+  "规则：",
+  "- nextCandidateId 必须从某个候选行的 [id] 里原样复制，禁止填标题、禁止编造；没有合适的就填 null。",
+  "- 优先挑 A 级、次 B 级；排除已经列在「已尝试」里的。",
+  "- 候选列表可能很长，只看前几个即可；不要为了选候选而重读全部。",
   "只输出 JSON，不要任何其他文字：",
-  '{"action": "accept" | "retry_other" | "abandon", "reasoning": "一句话理由"}',
+  '{"action": "accept" | "retry_other" | "abandon", "reasoning": "一句话理由", "nextCandidateId": "候选的id" | null}',
 ].join("\n");
 
 /** Extract the first JSON object/array from a model reply, tolerating markdown
@@ -81,6 +194,7 @@ export async function arbitrateSelection(options: {
     options.summary,
   ].join("\n");
 
+  logAiCall(options.model, "选片仲裁(剧集)", options.title, options.summary.length);
   const result = await generateText({
     model: options.model,
     system: SELECTION_SYSTEM,
@@ -108,14 +222,30 @@ export async function arbitrateDiagnosis(options: {
   /** digest.summary output — the landing's parsed picture. */
   summary: string;
   title: string;
+  /** 功能4: 剩余候选(按分级 A>B>C>D 排好序,带 id)。action=retry_other
+   *  时供 AI 直接挑下一个,避免每轮脏包都重新仲裁。可选。 */
+  remainingCandidates?: Array<{ id: string; title: string; grade: string }>;
+  /** 已尝试过的候选(避免 AI 重复挑同一个)。可选。 */
+  triedIds?: string[];
 }): Promise<DiagnosisArbitration> {
+  const remainingLines = (options.remainingCandidates ?? [])
+    .filter((c) => !(options.triedIds ?? []).includes(c.id))
+    .slice(0, 15)
+    .map((c) => `[${c.grade}] [${c.id}] ${c.title}`)
+    .join("\n");
   const prompt = [
     `目标剧集：${options.title}`,
     "",
     "落盘摘要：",
     options.summary,
-  ].join("\n");
+    options.remainingCandidates && options.remainingCandidates.length > 0
+      ? `\n剩余候选（按分级排序，A>B>C>D，前 15 个）：\n${remainingLines}`
+      : "",
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
 
+  logAiCall(options.model, "落盘诊断仲裁(剧集)", options.title, options.summary.length);
   const result = await generateText({
     model: options.model,
     system: DIAGNOSIS_SYSTEM,
@@ -130,9 +260,13 @@ export async function arbitrateDiagnosis(options: {
     return {
       action: parsed.action,
       reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
+      nextCandidateId:
+        typeof parsed.nextCandidateId === "string" && parsed.nextCandidateId.length > 0
+          ? parsed.nextCandidateId
+          : null,
     };
   } catch {
-    return { action: "abandon", reasoning: "仲裁返回无法解析，安全放弃" };
+    return { action: "abandon", reasoning: "仲裁返回无法解析，安全放弃", nextCandidateId: null };
   }
 }
 
@@ -182,6 +316,7 @@ export async function arbitrateMovieSelection(options: {
     options.summary,
   ].join("\n");
 
+  logAiCall(options.model, "选片仲裁(电影)", options.title, options.summary.length);
   const result = await generateText({
     model: options.model,
     system: MOVIE_SELECTION_SYSTEM,
@@ -217,6 +352,7 @@ export async function arbitrateMovieDiagnosis(options: {
     options.summary,
   ].join("\n");
 
+  logAiCall(options.model, "落盘诊断仲裁(电影)", options.title, options.summary.length);
   const result = await generateText({
     model: options.model,
     system: MOVIE_DIAGNOSIS_SYSTEM,

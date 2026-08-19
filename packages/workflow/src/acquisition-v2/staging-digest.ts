@@ -50,6 +50,11 @@ export interface StagingDigestInput {
   seasons: number[];
   /** The task's missing episode codes (e.g. ["S01E13"]), or ["MOVIE"]. */
   needCodes: string[];
+  /** AI 集数映射覆盖(§2.2): fileName → episodeCode。代码解析不出的文件由
+   *  集数映射仲裁给出对应关系后,这里手工喂回 digest,让纯数字/E01/日漫
+   *  fansub 文件名也能正常参与覆盖判定与归位。文件名必须与落盘 basename
+   *  完全一致;校验在调用方(仲裁返回后)完成,这里只做查表。 */
+  overrides?: Record<string, string>;
 }
 
 function fileBaseName(file: SimTreeFile): string {
@@ -70,10 +75,13 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
   const episodeCodes: string[] = [];
   const unparsedVideos: string[] = [];
   const junkSignals: string[] = [];
+  // AI 集数映射覆盖(§2.2):代码解析不出的文件由仲裁给映射,digest 里优先查表。
+  // 文件名的匹配对不上 overrides 里给的 key 时按 unparsed 处理(宁可少认不乱认)。
+  const overrides = input.overrides ?? {};
 
   for (const video of videos) {
     const base = fileBaseName(video);
-    const code = episodeCodeFromFileName(base);
+    const code = overrides[base] ?? episodeCodeFromFileName(base, input.seasons);
     if (code) {
       if (!episodeCodes.includes(code)) {
         episodeCodes.push(code);

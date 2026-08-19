@@ -755,31 +755,40 @@ export class TaskSandbox {
    *  `Title (Year).ext` with the .sc/.tc 简繁 infix preserved
    *  (`Title (Year).sc.ass`) — the same infix rule renameSubtitle teaches.
    *  Shapes are generated, not agent-submitted, so no guard failures are
-   *  possible here. */
+   *  possible here. Each rename is traced to stdout as 原名 → 新名 so the
+   *  run log shows the movie's 转存落盘 file and its final 网盘 name. */
   private async renameMovieMediaToCanonical(storage: StorageV2, directoryId: string): Promise<void> {
     const year = this.canonicalYear ?? "";
     const title = this.canonicalTitle!;
+    const runId = this.logRunId;
     for (const file of await storage.listTree({ directoryId })) {
       // All media files sit at the movie dir root after the lift — path is the
       // bare filename there; a basename split keeps this robust regardless.
       const sourceName = file.path.split("/").pop() ?? file.path;
+      const emitRename = (newName: string) => {
+        console.log(`[mediary-run][${runId}] ${title} | 改名: ${sourceName} → ${newName}`);
+      };
       if (file.isVideo) {
+        const newName = canonicalMovieFileName({ title, year, sourceName });
         await storage.renameFile({
           directoryId,
           fileId: file.id,
-          newName: canonicalMovieFileName({ title, year, sourceName }),
+          newName,
         });
+        emitRename(newName);
       } else if (file.isSubtitle) {
         const infix = /\.(sc|tc)(\.[A-Za-z0-9]+)$/i.exec(sourceName);
         // infix[1] is "sc"/"tc" WITHOUT the leading dot (the regex consumed it as
         // the separator) — rebuild with the dot so `Show.zh.sc.ass` →
         // `Title (Year).sc.ass`, not `Title (Year)sc.ass`.
         const suffix = infix ? `.${infix[1]}${infix[2]}` : (/\.[A-Za-z0-9]+$/.exec(sourceName)?.[0] ?? "");
+        const newName = `${title} (${year})${suffix}`;
         await storage.renameFile({
           directoryId,
           fileId: file.id,
-          newName: `${title} (${year})${suffix}`,
+          newName,
         });
+        emitRename(newName);
       }
     }
   }

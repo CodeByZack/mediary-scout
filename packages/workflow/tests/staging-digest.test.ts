@@ -116,3 +116,42 @@ describe("digestMovieStaging — the movie fast path's one-film judgment", () =>
     expect(d.videos).toHaveLength(0);
   });
 });
+describe("digestStaging — overrides (功能2 AI 集数映射)", () => {
+  it("parses a pure-numeric landing through overrides (code cannot)", () => {
+    const d = digestStaging({
+      files: [video("01.mp4"), video("02.mp4")],
+      seasons: [1],
+      needCodes: ["S01E01", "S01E02"],
+      overrides: { "01.mp4": "S01E01", "02.mp4": "S01E02" },
+    });
+    expect(d.passes).toBe(true);
+    expect(d.episodeCodes).toEqual(["S01E01", "S01E02"]);
+    expect(d.coveredCodes).toEqual(["S01E01", "S01E02"]);
+    expect(d.unparsedVideos).toEqual([]);
+  });
+
+  it("keeps unknown files unparsed when overrides do not cover them", () => {
+    const d = digestStaging({
+      files: [video("01.mp4"), video("x.mkv")],
+      seasons: [1],
+      needCodes: ["S01E01"],
+      overrides: { "01.mp4": "S01E01" },
+    });
+    expect(d.episodeCodes).toEqual(["S01E01"]);
+    expect(d.unparsedVideos).toEqual(["x.mkv"]);
+    expect(d.isDirtyPack).toBe(true);
+  });
+
+  it("ignores overrides for files that do not exist in the landing (anti-hallucination)", () => {
+    const d = digestStaging({
+      files: [video("01.mp4")],
+      seasons: [1],
+      needCodes: ["S01E01", "S01E02"],
+      overrides: { "01.mp4": "S01E01", "幻觉文件.mp4": "S01E02" },
+    });
+    // 幻觉文件名不进 episodeCodes(文件不存在,digest 只认真实文件)
+    expect(d.episodeCodes).toEqual(["S01E01"]);
+    expect(d.coveredCodes).toEqual(["S01E01"]);
+    expect(d.missingCodes).toEqual(["S01E02"]);
+  });
+});

@@ -85,3 +85,63 @@ describe("cleanTitleForCanonicalName", () => {
     expect(cleanTitleForCanonicalName("The.Dark.Knight")).toBe("The.Dark.Knight");
   });
 });
+describe("episodeCodeFromFileName — 2026-08-19 补齐的命名规则 (§3)", () => {
+  it("parses bare E01 / EP01 / Ep.01 (single-season context)", () => {
+    expect(episodeCodeFromFileName("Show.E01.mkv", [1])).toBe("S01E01");
+    expect(episodeCodeFromFileName("Show.EP12.mkv", [1])).toBe("S01E12");
+    expect(episodeCodeFromFileName("Show.Ep.03.mkv", [1])).toBe("S01E03");
+  });
+
+  it("parses 1×01 / 1x01 (Plex-style season×episode)", () => {
+    expect(episodeCodeFromFileName("Show.1×01.mkv", [1])).toBe("S01E01");
+    expect(episodeCodeFromFileName("Show 1x07.mkv", [1])).toBe("S01E07");
+    // 多季上下文:无季信息的无季规则不启用,季不明 → 交仲裁
+    expect(episodeCodeFromFileName("Show.2×03.mkv", [1, 2])).toBeNull();
+  });
+
+  it("parses 第N话 (anime wording)", () => {
+    expect(episodeCodeFromFileName("海贼王 第5话.mkv", [1])).toBe("S01E05");
+    expect(episodeCodeFromFileName("名侦探柯南 第1050话.mkv", [1])).toBe("S01E1050");
+  });
+
+  it("parses a pure-numeric filename (anime fansub 01.mp4) in single-season S01 only", () => {
+    expect(episodeCodeFromFileName("01.mp4", [1])).toBe("S01E01");
+    expect(episodeCodeFromFileName("39.mp4", [1])).toBe("S01E39");
+  });
+
+  it("does NOT parse pure numbers in a multi-season context (season unknown → arbitrator)", () => {
+    expect(episodeCodeFromFileName("01.mp4", [1, 2])).toBeNull();
+    expect(episodeCodeFromFileName("07.mp4", [])).toBeNull(); // 空季=电影,不算
+  });
+
+  it("does NOT parse a title with a stray number ('Show 01')", () => {
+    expect(episodeCodeFromFileName("Show 01.mkv", [1])).toBeNull();
+    expect(episodeCodeFromFileName("Show 1080p.mkv", [1])).toBeNull();
+  });
+
+  it("does NOT parse years / resolutions / CRC-looking numbers as episodes", () => {
+    expect(episodeCodeFromFileName("2024.mp4", [1])).toBeNull(); // 年份
+    expect(episodeCodeFromFileName("1080.mp4", [1])).toBeNull(); // 分辨率
+    expect(episodeCodeFromFileName("2160.mkv", [1])).toBeNull();
+    expect(episodeCodeFromFileName("4F14C2AE.mkv", [1])).toBeNull(); // CRC
+  });
+
+  it("parses loose variants: 'S01 E01' and 's01.e01'", () => {
+    expect(episodeCodeFromFileName("Show S01 E01.mkv", [1])).toBe("S01E01");
+    expect(episodeCodeFromFileName("Show.s01.e01.mkv", [1])).toBe("S01E01");
+  });
+
+  it("parses multi-episode packs by their start code ('S01E01-E03')", () => {
+    expect(episodeCodeFromFileName("Show.S01E01-E03.mkv", [1])).toBe("S01E01");
+  });
+
+  it("treats seasons=[] (movie) as no code ever", () => {
+    expect(episodeCodeFromFileName("奥本海默 (2023).mkv", [])).toBeNull();
+    expect(episodeCodeFromFileName("01.mp4", [])).toBeNull();
+  });
+
+  it("still parses SxxExx in ANY season context (self-identifying)", () => {
+    expect(episodeCodeFromFileName("Show.S03E05.mkv", [1, 2])).toBe("S03E05");
+    expect(episodeCodeFromFileName("Show.S01E01.mkv", [1, 2])).toBe("S01E01");
+  });
+});

@@ -390,6 +390,14 @@ export async function runAcquisitionAgent(
       : {}),
   });
   const maxSteps = request.maxSteps ?? DEFAULT_MAX_STEPS;
+  // The agent loop IS the AI call — mark it clearly in the run log: which model,
+  // which task, and how many steps the loop is allowed. The end marker prints the
+  // same run id so every AI round-trip has a symmetric entry/exit pair. The
+  // storage brand is carried over so the user can see which 网盘 the task runs on.
+  const modelId = (request.model as { modelId?: string }).modelId ?? "unknown";
+  const aiPrefix = `[mediary-run][${request.sandbox.logRunId}] ${request.title ?? "agent"}`;
+  const provider = request.storageProvider ?? "unknown";
+  console.log(`[AI] ${aiPrefix} | 开始 agent 循环 model=${modelId} 网盘=${provider} 上限=${maxSteps} 步`);
   const result = await generateText({
     model: request.model,
     system: request.system,
@@ -422,6 +430,7 @@ export async function runAcquisitionAgent(
       return system ? { system } : undefined;
     },
   });
+  console.log(`[AI] ${aiPrefix} | 结束 agent 循环 steps=${result.steps?.length ?? 0} finish=${result.finishReason}`);
   const steps = result.steps?.length ?? 0;
   if (process.env.MEDIA_TRACK_AGENT_LOG === "1") {
     const total = result.totalUsage?.totalTokens;

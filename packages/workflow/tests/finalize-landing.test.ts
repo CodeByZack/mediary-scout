@@ -57,6 +57,22 @@ describe("buildSeasonMoves", () => {
     expect(bySeason[1]).toEqual(["v1", "s1"]);
     expect(bySeason[2]).toEqual(["v2"]);
   });
+
+  it("uses overrides (AI 集数映射) for files the code cannot parse", () => {
+    const files = [
+      { id: "v1", path: "[NC-Raws] 狂飙 - 01.mkv", sizeBytes: 1, isVideo: true, isSubtitle: false },
+      { id: "v2", path: "Sub.S01E01.zh.ass", sizeBytes: 1, isVideo: false, isSubtitle: true },
+    ];
+    const digest = digestStaging({ files, seasons: [1], needCodes: ["S01E01"] });
+    // 无 overrides: v1 解析不出 code → 不归位;字幕自己能解析 → 单独归位。
+    const movesWithout = buildSeasonMoves(digest, [1]);
+    const bySeasonWithout = Object.fromEntries(movesWithout.map((m) => [m.season!, m.fileIds]));
+    expect(bySeasonWithout[1]).toEqual(["v2"]);
+    // 有 overrides: v1 映射为 S01E01 → 归位到 season 1,字幕一起。
+    const moves = buildSeasonMoves(digest, [1], { "[NC-Raws] 狂飙 - 01.mkv": "S01E01" });
+    const bySeason = Object.fromEntries(moves.map((m) => [m.season!, m.fileIds]));
+    expect(bySeason[1]).toEqual(["v1", "v2"]);
+  });
 });
 
 describe("finalizeLanding", () => {
@@ -190,3 +206,53 @@ describe("finalizeMovieLanding", () => {
     ]);
   });
 });
+it("功能3+功能2: overrides 喂给 finalize 后 rename 能落地,mark 以真实改名结果为准", async () => {
+    // 落盘 `狂飙 - 01.mkv`:digest 通过 overrides(AI 集数映射)认为它是 S01E01,
+    // 且 finalize 也收到同一份 overrides → rename 用映射 code 改成 `狂飙.S01E01.mkv`
+    // → renamed 非空 → mark S01E01(不是空洞,文件真的规整落位)。
+    const { sandbox, storage, stagingDirectoryId, s1 } = await createSandbox(["S01E01", "S01E02"]);
+    await landFile(storage, stagingDirectoryId, "狂飙 - 01.mkv");
+    const digest = digestStaging({
+      files: await sandbox.inspectStaging(),
+      seasons: [1],
+      needCodes: ["S01E01", "S01E02"],
+      overrides: { "狂飙 - 01.mkv": "S01E01" },
+    });
+    // digest 层面通过了(overrides 让代码以为覆盖了 S01E01)。
+    expect(digest.episodeCodes).toEqual(["S01E01"]);
+    expect(digest.passes).toBe(true);
+
+    const result = await finalizeLanding({
+      sandbox,
+      digest,
+      canonicalTitle: "狂飙",
+      seasons: [1],
+      overrides: { "狂飙 - 01.mkv": "S01E01" },
+    });
+    // 映射表让 rename 落地:原名 `狂飙 - 01.mkv` → `狂飙.S01E01.mkv`。
+    expect(result.renamed).toEqual(["狂飙.S01E01.mkv"]);
+    expect(result.marked).toEqual(["S01E01"]);
+    // 归位到 Season 1(staging 里 rename 后 move 过去)。staging 目录被 wipe 删除,
+    // 文件系统里只剩 season 目录里这一份。
+    expect(result.discarded.length).toBeGreaterThan(0); // staging wipe:文件+目录 id
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual(["狂飙.S01E01.mkv"]);
+  });
+
+  it("功能3 空洞校验: digest 有 code 但无 overrides 时 rename 无法落地 → mark 保持空(不以 digest 为准)", async () => {
+    // 同一文件 `狂飙 - 01.mkv` 但 finalize 没收到 overrides(例如映射未传下来):
+    // digest 说它是 S01E01,但 rename 按裸文件名解析不出 → renamed 空 → mark 空。
+    const { sandbox, storage, stagingDirectoryId, s1 } = await createSandbox(["S01E01", "S01E02"]);
+    await landFile(storage, stagingDirectoryId, "狂飙 - 01.mkv");
+    const digest = digestStaging({
+      files: await sandbox.inspectStaging(),
+      seasons: [1],
+      needCodes: ["S01E01", "S01E02"],
+      overrides: { "狂飙 - 01.mkv": "S01E01" },
+    });
+    expect(digest.passes).toBe(true);
+
+    const result = await finalizeLanding({ sandbox, digest, canonicalTitle: "狂飙", seasons: [1] });
+    expect(result.renamed).toEqual([]);
+    expect(result.marked).toEqual([]);
+    expect(await storage.listTree({ directoryId: s1 })).toEqual([]);
+  });
