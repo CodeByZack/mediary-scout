@@ -82,6 +82,10 @@ function stripQualitySubtitleTokens(keyword: string): { keyword: string; strippe
  */
 export interface TaskSandboxOptions {
   provider: ResourceProviderV2;
+  /** Run-scoped identifier for stdout step logs (`[mediary-run][{runId}] …`).
+   *  Wired by the orchestrator from the workflow run; tests omit it (falls back
+   *  to the staging dir id, see logRunId). */
+  workflowRunId?: string;
   /** Max distinct PanSou searches per task (the system's search budget). */
   searchBudget?: number;
   /** Scoped storage + the staging handle this task may transfer into. */
@@ -166,6 +170,8 @@ export class TaskSandbox {
   private readonly searchBudget: number;
   private readonly storage: StorageV2 | undefined;
   private readonly stagingDirectoryId: string | undefined;
+  /** Run-scoped id for stdout step logs (see logRunId). */
+  private readonly workflowRunId: string | undefined;
   /** TV: season number -> scoped Season directory (multi-season distribution). */
   private readonly seasonDirs: Map<number, string>;
   /** A movie task's one target directory (movies have no seasons). */
@@ -205,6 +211,7 @@ export class TaskSandbox {
 
   constructor(options: TaskSandboxOptions) {
     this.provider = options.provider;
+    this.workflowRunId = options.workflowRunId;
     this.subtitleFallback = options.subtitleFallback ?? false;
     // Movie 8+2: default to MOVIE_SEARCH_BUDGET (10) with a reserve at 8 when the
     // subtitle fallback is on; otherwise the normal hard-8 (no reserve zone).
@@ -223,6 +230,13 @@ export class TaskSandbox {
     this.canonicalTitle = options.canonicalTitle;
     this.canonicalYear = options.canonicalYear;
     this.subtitleProvider = options.subtitleProvider;
+  }
+
+  /** The run id surfaced in step logs (`[mediary-run][{id}] …`): the workflow run
+   *  id when wired by the orchestrator, else the staging dir id (unique per run),
+   *  else "-" (bare sandbox tests). */
+  get logRunId(): string {
+    return this.workflowRunId ?? this.stagingDirectoryId ?? "-";
   }
 
   /** Every scoped target directory (all seasons + the movie) — the union used for
