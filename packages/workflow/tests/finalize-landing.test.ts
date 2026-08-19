@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 import { TaskSandbox } from "../src/acquisition-v2/sandbox.js";
 import { FakeResourceProviderV2 } from "../src/acquisition-v2/fake-provider.js";
 import { Storage115Simulator } from "../src/acquisition-v2/storage-115-simulator.js";
-import { digestStaging } from "../src/acquisition-v2/staging-digest.js";
-import { buildSeasonMoves, finalizeLanding, seasonFromEpisodeCode } from "../src/acquisition-v2/finalize-landing.js";
+import { digestMovieStaging, digestStaging } from "../src/acquisition-v2/staging-digest.js";
+import {
+  buildSeasonMoves,
+  finalizeLanding,
+  finalizeMovieLanding,
+  seasonFromEpisodeCode,
+} from "../src/acquisition-v2/finalize-landing.js";
 
 async function createSandbox(need = ["S01E01", "S01E02"]) {
   const provider = new FakeResourceProviderV2({ results: {} });
@@ -120,5 +125,68 @@ describe("finalizeLanding", () => {
     // staging fully wiped (the S02 leftover is discarded, not moved anywhere).
     await expect(storage.listTree({ directoryId: stagingDirectoryId })).rejects.toThrow(/SIM_DIR_NOT_FOUND/);
     expect(await storage.listTree({ directoryId: s2 })).toEqual([]);
+  });
+});
+
+describe("finalizeMovieLanding", () => {
+  /** Movie sandbox: staging === movie dir (flatten in place, §5). */
+  async function createMovieSandbox(packs: Record<string, { files: Array<{ path: string; sizeBytes: number }> }>) {
+    const provider = new FakeResourceProviderV2({ results: {} });
+    const storage = new Storage115Simulator({ packs });
+    const movieDir = await storage.createDirectory({ name: "流浪地球 (2019)", parentId: "root" });
+    const sandbox = new TaskSandbox({
+      provider,
+      storage,
+      stagingDirectoryId: movieDir,
+      targetMovieDirectoryId: movieDir,
+      need: ["MOVIE"],
+      canonicalTitle: "流浪地球",
+      canonicalYear: 2019,
+      titleTerms: ["流浪地球"],
+    });
+    return { sandbox, storage, movieDir };
+  }
+
+  it("flattens + canonical-renames the film and marks MOVIE (no discardStaging)", async () => {
+    const { sandbox, storage, movieDir } = await createMovieSandbox({
+      p1: { files: [{ path: "包/流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 }] },
+    });
+    await storage.transferCandidate({ candidateId: "p1", intoDirectoryId: movieDir });
+
+    const digest = digestMovieStaging(await sandbox.inspectStaging());
+    expect(digest.passes).toBe(true);
+
+    const result = await finalizeMovieLanding({ sandbox, digest });
+
+    expect(result.marked).toEqual(["MOVIE"]);
+    // The wrapper dir is peeled, the film canonical-renamed at the movie dir root.
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+    expect((await sandbox.finish()).coverageMet).toBe(true);
+  });
+
+  it("an accepted dirty landing drops every video except the LARGEST (the film) before flatten", async () => {
+    const { sandbox, storage, movieDir } = await createMovieSandbox({
+      p1: {
+        files: [
+          { path: "包/流浪地球.预告.mkv", sizeBytes: 100_000_000 },
+          { path: "包/流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 },
+        ],
+      },
+    });
+    await storage.transferCandidate({ candidateId: "p1", intoDirectoryId: movieDir });
+
+    const digest = digestMovieStaging(await sandbox.inspectStaging());
+    expect(digest.passes).toBe(false);
+    expect(digest.isDirtyPack).toBe(true);
+
+    const result = await finalizeMovieLanding({ sandbox, digest });
+
+    expect(result.marked).toEqual(["MOVIE"]);
+    // The trailer (smallest video) is dropped; only the film survives, renamed.
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
   });
 });

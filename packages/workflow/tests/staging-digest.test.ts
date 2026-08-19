@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { digestStaging } from "../src/acquisition-v2/staging-digest.js";
+import { digestMovieStaging, digestStaging } from "../src/acquisition-v2/staging-digest.js";
 import type { SimTreeFile } from "../src/acquisition-v2/storage-115-simulator.js";
 
 function video(name: string, id = name): SimTreeFile {
@@ -85,5 +85,34 @@ describe("digestStaging — movie", () => {
       needCodes: ["MOVIE"],
     });
     expect(d.isDirtyPack).toBe(true);
+  });
+});
+
+describe("digestMovieStaging — the movie fast path's one-film judgment", () => {
+  it("passes exactly one clean video (subtitles ride along, never junk)", () => {
+    const d = digestMovieStaging([video("流浪地球.2019.4K.mkv"), sub("流浪地球.zh.ass")]);
+    expect(d.passes).toBe(true);
+    expect(d.isDirtyPack).toBe(false);
+    expect(d.videos).toHaveLength(1);
+  });
+
+  it("dirty when ≥2 videos land (collection / film+trailer bundle)", () => {
+    const d = digestMovieStaging([video("a.mkv"), video("b.mkv")]);
+    expect(d.passes).toBe(false);
+    expect(d.isDirtyPack).toBe(true);
+  });
+
+  it("dirty when any video carries a junk signal (预告/花絮/sample)", () => {
+    const d = digestMovieStaging([video("流浪地球.2019.4K.mkv"), video("流浪地球.预告.mkv")]);
+    expect(d.passes).toBe(false);
+    expect(d.isDirtyPack).toBe(true);
+    expect(d.junkSignals).toEqual(["流浪地球.预告.mkv"]);
+  });
+
+  it("neither passes nor dirty when nothing lands as a video (subtitle-only)", () => {
+    const d = digestMovieStaging([sub("流浪地球.zh.ass")]);
+    expect(d.passes).toBe(false);
+    expect(d.isDirtyPack).toBe(false);
+    expect(d.videos).toHaveLength(0);
   });
 });

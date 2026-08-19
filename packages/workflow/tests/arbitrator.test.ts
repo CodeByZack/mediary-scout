@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { MockLanguageModelV3 } from "ai/test";
 import {
   arbitrateDiagnosis,
+  arbitrateMovieDiagnosis,
+  arbitrateMovieSelection,
   arbitrateSelection,
   extractJson,
 } from "../src/acquisition-v2/arbitrator.js";
@@ -97,6 +99,70 @@ describe("arbitrateDiagnosis", () => {
       model: textModel("not json"),
       summary: "whatever",
       title: "狂飙",
+    });
+    expect(result.action).toBe("abandon");
+  });
+});
+
+describe("arbitrateMovieSelection", () => {
+  it("returns the chosen candidate id (film identity = title + year)", async () => {
+    const result = await arbitrateMovieSelection({
+      model: textModel('{"candidateId":"c-9","reasoning":"片名年份都一致"}'),
+      summary: "[B] 流浪地球 4K",
+      title: "流浪地球",
+      year: 2019,
+    });
+    expect(result.candidateId).toBe("c-9");
+  });
+
+  it("returns null when the model declines", async () => {
+    const result = await arbitrateMovieSelection({
+      model: textModel('{"candidateId":null,"reasoning":"都是同名异作"}'),
+      summary: "[C] 流浪地球 2023",
+      title: "流浪地球",
+      year: 2019,
+    });
+    expect(result.candidateId).toBeNull();
+  });
+
+  it("degrades to a safe decline on unparseable output", async () => {
+    const result = await arbitrateMovieSelection({
+      model: textModel("不知道"),
+      summary: "[B] 流浪地球 4K",
+      title: "流浪地球",
+      year: 2019,
+    });
+    expect(result.candidateId).toBeNull();
+  });
+});
+
+describe("arbitrateMovieDiagnosis", () => {
+  it("returns the action", async () => {
+    const result = await arbitrateMovieDiagnosis({
+      model: textModel('{"action":"retry_other","reasoning":"年份对不上，是 remake"}'),
+      summary: "视频: 流浪地球.2023.mkv",
+      title: "流浪地球",
+      year: 2019,
+    });
+    expect(result.action).toBe("retry_other");
+  });
+
+  it("validates the action against the three allowed values", async () => {
+    const result = await arbitrateMovieDiagnosis({
+      model: textModel('{"action":"explode","reasoning":"bad"}'),
+      summary: "whatever",
+      title: "流浪地球",
+      year: 2019,
+    });
+    expect(result.action).toBe("abandon");
+  });
+
+  it("degrades to abandon on unparseable output", async () => {
+    const result = await arbitrateMovieDiagnosis({
+      model: textModel("not json"),
+      summary: "whatever",
+      title: "流浪地球",
+      year: 2019,
     });
     expect(result.action).toBe("abandon");
   });

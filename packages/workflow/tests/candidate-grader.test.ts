@@ -123,6 +123,39 @@ describe("gradeCandidates", () => {
   });
 });
 
+describe("movie mode (year identity)", () => {
+  const movieCtx = { title: "流浪地球", aliases: [], seasons: [], year: 2019 };
+
+  it("grades A when title + release year both match", () => {
+    const g = gradeCandidate({ id: "1", title: "流浪地球.2019.4K.中字" }, movieCtx);
+    expect(g.grade).toBe("A");
+  });
+
+  it("grades C when the release year mismatches (同名异作/remake trap)", () => {
+    const g = gradeCandidate({ id: "2", title: "流浪地球.2023.4K" }, movieCtx);
+    expect(g.grade).toBe("C");
+    expect(g.reasons.some((r) => r.includes("年份不符"))).toBe(true);
+  });
+
+  it("grades B when the release name carries no year (identity unverifiable, never auto-killed)", () => {
+    const g = gradeCandidate({ id: "3", title: "流浪地球 4K" }, movieCtx);
+    expect(g.grade).toBe("B");
+  });
+
+  it("grades B when the target year is unknown (<=0) — cannot verify identity", () => {
+    const g = gradeCandidate(
+      { id: "4", title: "流浪地球.2019.4K" },
+      { title: "流浪地球", aliases: [], seasons: [], year: 0 },
+    );
+    expect(g.grade).toBe("B");
+  });
+
+  it("a resolution string never reads as a year (1920x1080)", () => {
+    const g = gradeCandidate({ id: "5", title: "流浪地球.1920x1080.4K" }, movieCtx);
+    expect(g.grade).toBe("B"); // no year token parsed → B, not a C on year 1920
+  });
+});
+
 describe("summarizeGrading", () => {
   it("emits a compact ranked summary and drops the D tail", () => {
     const result = gradeCandidates(

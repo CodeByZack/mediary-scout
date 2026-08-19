@@ -158,3 +158,62 @@ function summarizeDigest(d: Omit<StagingDigest, "summary">): string {
   lines.push(`判定: ${d.passes ? "符合，可归位标记" : d.isDirtyPack ? "脏包，需诊断" : "未覆盖目标，需诊断"}`);
   return lines.join("\n");
 }
+
+/**
+ * Movie staging digest — the fast path's movie-specific judgment (simpler than TV:
+ * no episode mapping). After a candidate transfer lands, this verifies in CODE that
+ * the landing is ONE film:
+ *
+ *   - exactly one video → the film, clean → `passes`.
+ *   - zero videos → nothing useful landed (a subtitle-only / stray pack) → neither
+ *     passes nor dirty; the caller advances to the next candidate like a dead link.
+ *   - ≥2 videos → a collection / multi-part / film+trailer bundle → dirty → escalates
+ *     to the diagnostic arbitrator (which names which single film to keep).
+ *   - a junk signal (sample/广告/花絮/预告/…) on any video → dirty.
+ *
+ * Subtitles are never junk (they ride the film, per §1.14).
+ */
+export interface MovieStagingDigest {
+  videos: SimTreeFile[];
+  subtitles: SimTreeFile[];
+  /** Human-readable junk signals (sample/广告/花絮/预告/…). */
+  junkSignals: string[];
+  /** The clean one-film landing → flattenMovie + markObtained in code, zero LLM. */
+  passes: boolean;
+  /** Needs the diagnostic arbitrator (junk, or more than one video). */
+  isDirtyPack: boolean;
+  /** Compact LLM-ready summary (the diagnostic arbitrator's input). */
+  summary: string;
+}
+
+export function digestMovieStaging(files: SimTreeFile[]): MovieStagingDigest {
+  const videos = files.filter((file) => file.isVideo);
+  const subtitles = files.filter((file) => file.isSubtitle);
+  const junkSignals: string[] = [];
+
+  for (const video of videos) {
+    const base = fileBaseName(video);
+    const junk = JUNK_FILE_MARKER.exec(base);
+    if (junk) {
+      junkSignals.push(base);
+    }
+  }
+
+  const hasJunk = junkSignals.length > 0;
+  const isDirtyPack = hasJunk || videos.length > 1;
+  const passes = videos.length === 1 && !hasJunk;
+
+  const summary = [
+    `视频 ${videos.length} 个 / 字幕 ${subtitles.length} 个`,
+    videos.length === 0
+      ? "未落盘任何视频（空转/仅字幕/杂项）"
+      : `视频: ${videos.map((v) => fileBaseName(v)).join(" / ")}`,
+    junkSignals.length > 0 ? `脏包信号: ${junkSignals.join(" / ")}` : null,
+    `判定: ${passes ? "一部正片，可归位标记" : isDirtyPack ? "非单部正片/脏包，需诊断" : "无视频，需换候选"}`,
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+
+  return { videos, subtitles, junkSignals, passes, isDirtyPack, summary };
+}
+

@@ -169,7 +169,7 @@ describe("runAcquisitionV2 — raw snapshot pre-warming integration", () => {
     expect(callCount).toBe(1);
   });
 
-  it("movie task also gets raw snapshot pre-warming", async () => {
+  it("movie task also gets raw snapshot pre-warming and runs the movie fast path", async () => {
     const searches: string[] = [];
     const provider: ResourceProvider = {
       search: async ({ keyword }) => {
@@ -186,38 +186,47 @@ describe("runAcquisitionV2 — raw snapshot pre-warming integration", () => {
         return emptySnapshot(keyword);
       },
     };
-    const executor = new FakeStorageExecutor({ directories: { staging: [], movie: [] } });
-
-    let promptChecked = false;
-    const model = new MockLanguageModelV3({
-      doGenerate: async ({ prompt }) => {
-        if (!promptChecked) {
-          const systemMsg = prompt.find((p) => p.role === "system");
-          expect(systemMsg?.content).toContain("1"); // prefetchedCandidateCount
-          expect(systemMsg?.content).toMatch(/RAW SNAPSHOT|活期文档/);
-          promptChecked = true;
-        }
-        return {
-          content: [{ type: "tool-call" as const, toolCallId: "c1", toolName: "reportNoCoverage", input: JSON.stringify({ reason: "test" }) }],
-          finishReason: { unified: "tool-calls" as const, raw: "tool-calls" as const },
-          usage: USAGE,
-          warnings: [],
-        };
+    // The movie fast path: m1 "流浪地球 4K" carries no year → B grade → no unique
+    // A → the movie selection arbitrator (the ONE LLM call of the fast path) picks
+    // m1 → transfer lands the film → flatten + canonical rename → mark MOVIE.
+    // (A movie's staging IS its movie dir, so both handles point at "movie".)
+    const executor = new FakeStorageExecutor({
+      directories: { staging: [], movie: [] },
+      transferOutcomes: {
+        m1: {
+          status: "succeeded",
+          providerMessage: "ok",
+          files: [
+            {
+              id: "f1",
+              storageDirectoryId: "movie",
+              name: "流浪地球.2019.4K.mkv",
+              sizeBytes: 2_000_000_000,
+              episodeCode: null,
+              providerFileId: "f1",
+            },
+          ],
+        },
       },
     });
 
-    await runAcquisitionV2({
+    const result = await runAcquisitionV2({
       provider,
       executor,
-      model,
+      model: jsonModel('{"candidateId":"m1","reasoning":"唯一候选"}'),
       workflowRunId: "run-movie-prime",
       target: { kind: "movie", title: "流浪地球", aliases: [], year: 2019, qualityPreference: "4K" },
-      stagingDirectoryId: "staging",
+      stagingDirectoryId: "movie",
       targetMovieDirectoryId: "movie",
     });
 
     expect(searches[0]).toBe("流浪地球"); // 预热
-    expect(promptChecked).toBe(true);
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual(["MOVIE"]);
+    // The film was flattened + canonical-renamed in the movie dir (no episode
+    // code → listVideoFiles still reports it, name is the canonical form).
+    const movieFiles = await executor.listVideoFiles("movie");
+    expect(movieFiles.map((f) => f.name)).toEqual(["流浪地球 (2019).mkv"]);
   });
 
   it("auditEvents surface from sandbox through orchestrator (病4)", async () => {

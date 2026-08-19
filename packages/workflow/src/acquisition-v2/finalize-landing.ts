@@ -1,6 +1,7 @@
 import { canonicalEpisodeFileName, episodeCodeFromFileName } from "../episode-code.js";
 import { TaskSandbox } from "./sandbox.js";
-import type { StagingDigest } from "./staging-digest.js";
+import type { SimTreeFile } from "./storage-115-simulator.js";
+import type { MovieStagingDigest, StagingDigest } from "./staging-digest.js";
 
 /**
  * Finalize-landing for the fast path (zero-LLM): after the staging digest says a
@@ -133,3 +134,52 @@ export async function finalizeLanding(
 
   return { renamed, movedSeasons, marked, discarded };
 }
+
+/**
+ * Movie finalize-landing for the fast path (zero-LLM): after the movie staging
+ * digest confirms ONE film landed, this runs the same close-out the agent used to
+ * drive by hand — flatten (move the film + subtitles up, auto-rename to
+ * `Title (Year).ext`, strip the wrapper) and mark the MOVIE obtained. No
+ * discardStaging: a movie's staging IS its movie dir (flatten in place, §5), so
+ * there is nothing to wipe — the flatten already peeled the wrapper.
+ *
+ * When a dirty landing was ACCEPTED by the diagnostic arbitrator (film + a
+ * trailer / 花絮 bundled), the extra videos are dropped first — the film is the
+ * largest video, everything else is a wrapper remnant, never the film.
+ */
+
+export interface FinalizeMovieLandingOptions {
+  sandbox: TaskSandbox;
+  digest: MovieStagingDigest;
+}
+
+export interface FinalizeMovieLandingResult {
+  /** The flattened (canonical-named) movie dir contents after flatten. */
+  movie: SimTreeFile[];
+  /** The obtained tokens (always ["MOVIE"]). */
+  marked: string[];
+}
+
+export async function finalizeMovieLanding(
+  options: FinalizeMovieLandingOptions,
+): Promise<FinalizeMovieLandingResult> {
+  const { sandbox, digest } = options;
+
+  // A clean landing holds exactly one video; an accepted dirty landing may carry
+  // extras (trailers/花絮/sample). The film is the LARGEST video — drop the rest
+  // before flattening so flattenMovie renames only the film (two same-named
+  // canonical renames would collide).
+  if (digest.videos.length > 1) {
+    const bySize = [...digest.videos].sort((a, b) => b.sizeBytes - a.sizeBytes);
+    const extras = bySize.slice(1).map((file) => file.id);
+    await sandbox.deleteFiles({ directory: "staging", fileIds: extras });
+  }
+
+  // flattenMovie auto-renames the film + subtitles to `Title (Year).ext` and
+  // removes the wrapper subdirs (staging === movie dir, so no discardStaging).
+  const { movie } = await sandbox.flattenMovie();
+  const marked = (await sandbox.markObtained({ codes: ["MOVIE"] })).confirmed;
+
+  return { movie, marked };
+}
+

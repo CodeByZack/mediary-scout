@@ -48,6 +48,11 @@ export interface GradingContext {
   /** CN-origin works are natively Chinese-spoken — no 中字 to hunt, so the
    *  Chinese-sub signal is not required for an A grade. */
   isChineseNative?: boolean;
+  /** Movie release year (TMDB). When set, grading flips to movie mode: identity
+   *  is title + year (a year mismatch downgrades the 同名异作/remake trap; a
+   *  year-less release stays a plausible B, never auto-killed). `0`/negative =
+   *  year unknown → title match alone is a B (cannot verify identity). */
+  year?: number;
 }
 
 export interface GradingResult {
@@ -86,6 +91,11 @@ const DIFFERENT_WORK_MARKER =
 const SEASON_MARKER_SXX = /[Ss](\d{1,2})/;
 const SEASON_MARKER_CN = /第\s*([一二三四五六七八九十\d]+)\s*季/;
 const SEASON_MARKER_EN = /\bseason\s*(\d{1,2})\b/i;
+
+/** A release year embedded in the title — `(2023)`, `2023年`, `Title.2008.1080p`.
+ *  `\b` bounds it so a resolution string (`1920x1080`) never reads as year 1920
+ *  (the trailing `0x` has no word boundary). Movies live in 19xx/20xx. */
+const YEAR_MARKER = /\b(?:19|20)\d{2}\b/;
 
 const CN_DIGITS: Record<string, number> = {
   一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
@@ -126,6 +136,17 @@ export function seasonNumbersInTitle(title: string): number[] {
     if (n >= 1) found.push(n);
   }
   return [...new Set(found)];
+}
+
+/** The release year embedded in a candidate title (19xx/20xx), or null when the
+ *  title carries none. Movie identity anchor — a year-less release is a legit but
+ *  unverifiable candidate (never auto-killed), while a mismatched year flags the
+ *  同名异作/remake. */
+export function yearInTitle(title: string): number | null {
+  YEAR_MARKER.lastIndex = 0;
+  const match = YEAR_MARKER.exec(title);
+  YEAR_MARKER.lastIndex = 0;
+  return match ? Number(match[0]) : null;
 }
 
 /** Whether the candidate title names the target work (title or an alias), after
@@ -182,6 +203,29 @@ export function gradeCandidate(
   if (!titleMatches(candidate.title, context)) {
     reasons.push("标题不匹配目标");
     return makeGraded(candidate, "D", reasons, hasChineseSub, seasons, quality);
+  }
+
+  // Movie mode (a year is supplied): identity is title + release year, no
+  // seasons/episodes. The 同名异作/remake trap is caught by a year mismatch; a
+  // year-less release is a legit but unverifiable candidate → B, never auto-killed.
+  // The 中字 signal is NOT an A-gate here — the movie fast path is video-only (a
+  // 中字/软兜底 order escalates to the LLM agent upstream, never reaches this).
+  if (context.year !== undefined) {
+    const year = yearInTitle(candidate.title);
+    if (context.year <= 0) {
+      reasons.push("标题命中，但目标年份未知（无法校验年份）");
+      return makeGraded(candidate, "B", reasons, hasChineseSub, seasons, quality);
+    }
+    if (year !== null && year !== context.year) {
+      reasons.push(`年份不符:${year}(目标 ${context.year}),疑似同名异作/remake`);
+      return makeGraded(candidate, "C", reasons, hasChineseSub, seasons, quality);
+    }
+    if (year === context.year) {
+      reasons.push("标题命中 + 年份一致");
+      return makeGraded(candidate, "A", reasons, hasChineseSub, seasons, quality);
+    }
+    reasons.push("标题命中，但发行名未带年份（身份存疑）");
+    return makeGraded(candidate, "B", reasons, hasChineseSub, seasons, quality);
   }
 
   // C — names the target but is a DIFFERENT work from the same IP (电影版/真人版…).

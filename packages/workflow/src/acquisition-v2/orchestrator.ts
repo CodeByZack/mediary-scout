@@ -19,7 +19,7 @@ import {
   type MovieTarget,
   type TvAnimeTarget,
 } from "./task-agents.js";
-import { runFastPathAcquisition } from "./fast-path.js";
+import { runFastPathAcquisition, runMovieFastPathAcquisition } from "./fast-path.js";
 
 /**
  * Phase 6 — the composition root. Given the real provider + executor, a model,
@@ -205,15 +205,30 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
     ...(prefetchedCandidateCount === undefined ? {} : { prefetchedCandidateCount }),
   };
 
+  const isChineseNative = origins.includes("CN");
+  // A foreign film with a 中文 subtitle preference needs the LLM agent's subtitle
+  // judgment (assrt 选包 + 软兜底). The movie fast path is video-only; this single
+  // gate routes that whole order to the agent before the fast path is considered.
+  const prefersChineseSubtitles = (request.preferredLanguage ?? "").includes("中");
+
   const result =
     request.target.kind === "tv"
       ? await runFastPathAcquisition({
           sandbox,
           model: request.model,
           target: stripKind(request.target),
-          isChineseNative: (request.originCountries ?? []).includes("CN"),
+          isChineseNative,
         })
-      : await runMovieTaskAgent({ ...common, target: stripKind(request.target) });
+      : prefersChineseSubtitles && !isChineseNative
+        ? // 中字/软兜底: a foreign film with a 中文 subtitle preference needs the LLM
+          // agent's subtitle judgment (assrt 选包 + 软兜底). The fast path is video-only;
+          // escalate the WHOLE order — never a deterministic subtitle selector.
+          await runMovieTaskAgent({ ...common, target: stripKind(request.target) })
+        : await runMovieFastPathAcquisition({
+            sandbox,
+            model: request.model,
+            target: stripKind(request.target),
+          });
 
   // The agent transferred candidates by id; the storage adapter recorded the
   // domain attempts and the provider adapter the domain snapshots. Assemble the
