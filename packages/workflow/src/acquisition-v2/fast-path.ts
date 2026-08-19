@@ -1,5 +1,6 @@
 import type { LanguageModel } from "ai";
 import { episodeCodeFromFileName } from "../episode-code.js";
+import { normalizeSearchKeyword } from "../planning-search-gate.js";
 import {
   arbitrateDiagnosis,
   arbitrateMovieDiagnosis,
@@ -28,6 +29,11 @@ import type { MovieTarget, TvAnimeTarget } from "./task-agents.js";
 
 /** Hard ceiling on transfer attempts per fast-path run. */
 const MAX_TRANSFER_ATTEMPTS = 3;
+
+/** Hard ceiling on ALIASES 兜底重搜 rounds per fast-path run. The primary search
+ *  already ran; each fallback round is one more PanSou hit, so cap it hard (≤3)
+ *  to keep a title that fails to recall from hammering the shared quota. */
+const MAX_FALLBACK_SEARCHES = 3;
 
 /** Stdout step log — the fnOS app log's per-run trace, so the user can follow
  *  which step a task reached and where it failed:
@@ -94,6 +100,95 @@ function fileBaseName(path: string): string {
   return path.split("/").pop() ?? path;
 }
 
+/** A/B/C/D 分布,兜底评分日志用(与主流程 stepLog 的「A x / B y / C z / D w」同款)。 */
+function gradeDistribution(grading: ReturnType<typeof gradeCandidates>): string {
+  const counts = { A: 0, B: 0, C: 0, D: 0 };
+  for (const g of grading.ranked) {
+    counts[g.grade] += 1;
+  }
+  return `A ${counts.A} / B ${counts.B} / C ${counts.C} / D ${counts.D}`;
+}
+
+/**
+ * Aliases 兜底重搜 (§C). The fast path's primary search recalls by the bare
+ * title ONLY — when it comes back empty, or grades without a unique A-grade
+ * (the 泰德·拉索 case: the title search drowns in unrelated hits while the
+ * aliases' 足球教练 never gets searched), each alias gets ONE more
+ * primeRawSnapshot round, in the order the target carries them — English
+ * original first, then the other 译名 (zh-TW/zh-HK) — until a unique A-grade
+ * appears or the budget (≤ MAX_FALLBACK_SEARCHES rounds) runs out.
+ *
+ * primeRawSnapshot OVERWRITES the prior raw snapshot, so the returned
+ * view/grading are the LAST searched evidence — the caller's arbitration /
+ * transfer must read them, never the pre-fallback snapshot.
+ *
+ * Budget: ≤ MAX_FALLBACK_SEARCHES additional PanSou hits, keywords deduped
+ * (the title counts as already used). A provider failure on one round keeps the
+ * previous snapshot and moves to the next alias — bounded, so a dead source
+ * costs at most the budget, never the run. aliases 为空时调用方根本不会进来,
+ * 行为与「一次搜索直接走原逻辑」完全一致。
+ */
+async function aliasesFallbackReSearch(input: {
+  sandbox: TaskSandbox;
+  title: string;
+  aliases: string[];
+  view: NonNullable<ReturnType<TaskSandbox["rawSnapshotView"]>>;
+  grading: ReturnType<typeof gradeCandidates>;
+  grade: (candidates: Array<{ id: string; title: string }>) => ReturnType<typeof gradeCandidates>;
+}): Promise<{
+  view: NonNullable<ReturnType<TaskSandbox["rawSnapshotView"]>>;
+  grading: ReturnType<typeof gradeCandidates>;
+}> {
+  const { sandbox, title, aliases, view, grading, grade } = input;
+  const searched = new Set<string>([normalizeSearchKeyword(title)]);
+  let currentView = view;
+  let currentGrading = grading;
+  let rounds = 0;
+  for (const alias of aliases) {
+    if (rounds >= MAX_FALLBACK_SEARCHES) break;
+    const keyword = normalizeSearchKeyword(alias);
+    if (keyword === "" || searched.has(keyword)) continue; // 用过的词去重
+    searched.add(keyword);
+    rounds += 1;
+    stepLog(
+      sandbox,
+      title,
+      "兜底重搜",
+      `keyword=「${alias}」(第 ${rounds}/${MAX_FALLBACK_SEARCHES} 轮)`,
+    );
+    try {
+      await sandbox.primeRawSnapshot(alias);
+    } catch (error) {
+      // Provider down on a fallback round — keep the current snapshot and try the
+      // next alias (bounded by the budget; a dead source never kills the run).
+      stepLog(
+        sandbox,
+        title,
+        "兜底重搜",
+        `keyword=「${alias}」搜索失败:${error instanceof Error ? error.message : String(error)}`,
+        "warn",
+      );
+      continue;
+    }
+    const nextView = sandbox.rawSnapshotView();
+    if (!nextView) continue; // defensive: prime succeeded, so a view must exist
+    currentView = nextView;
+    currentGrading = grade(nextView.candidates);
+    stepLog(
+      sandbox,
+      title,
+      "兜底评分",
+      `keyword=「${alias}」命中=${nextView.candidates.length} ${
+        currentGrading.uniqueTopGrade
+          ? `唯一A级 top=${currentGrading.top?.id}(${currentGrading.top?.title})`
+          : gradeDistribution(currentGrading)
+      }`,
+    );
+    if (nextView.candidates.length > 0 && currentGrading.uniqueTopGrade) break; // 唯一 A → 直接转存
+  }
+  return { view: currentView, grading: currentGrading };
+}
+
 export async function runFastPathAcquisition(options: FastPathOptions): Promise<FastPathResult> {
   const { sandbox, model, target, isChineseNative } = options;
   const seasons = target.seasons;
@@ -135,7 +230,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   }
 
   // 1. Grade the primed raw-snapshot candidates (code, zero LLM).
-  const raw = sandbox.rawSnapshotView();
+  let raw = sandbox.rawSnapshotView();
   if (!raw) {
     // The raw pre-warm never landed (search source down) — there is NO evidence
     // base, so reportNoCoverage would throw SANDBOX_NO_PROVIDER_EVIDENCE (its
@@ -152,6 +247,44 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   }
   if (raw.candidates.length === 0) {
     stepLog(sandbox, target.title, "预搜快照", "候选 0 条(快照为空)", "warn");
+  } else {
+    stepLog(sandbox, target.title, "预搜快照", `候选 ${raw.candidates.length} 条`);
+  }
+
+  let grading = gradeCandidates(raw.candidates, {
+    title: target.title,
+    aliases: target.aliases,
+    seasons,
+    isChineseNative,
+  });
+
+  // 1b. Aliases 兜底重搜: the primary search recalled by target.title ONLY — when
+  //     it comes back empty, or grades without a unique A (the 泰德·拉索 case: the
+  //     title search drowns in unrelated hits while the aliases' 足球教练 never
+  //     gets searched), re-search with each alias until a unique A-grade appears
+  //     or the budget (≤3 rounds) runs out. primeRawSnapshot OVERWRITES the
+  //     snapshot, so grading/arbitration/transfer after a fallback read the NEW
+  //     evidence.
+  if ((raw.candidates.length === 0 || !grading.uniqueTopGrade) && target.aliases.length > 0) {
+    const fallback = await aliasesFallbackReSearch({
+      sandbox,
+      title: target.title,
+      aliases: target.aliases,
+      view: raw,
+      grading,
+      grade: (candidates) =>
+        gradeCandidates(candidates, {
+          title: target.title,
+          aliases: target.aliases,
+          seasons,
+          isChineseNative,
+        }),
+    });
+    raw = fallback.view;
+    grading = fallback.grading;
+  }
+
+  if (raw.candidates.length === 0) {
     stepLog(sandbox, target.title, "结论", "暂无资源(快照为空)");
     return concludeUncovered(sandbox, {
       text: "无候选(raw snapshot 为空)",
@@ -160,14 +293,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       reason: "raw snapshot 为空",
     });
   }
-  stepLog(sandbox, target.title, "预搜快照", `候选 ${raw.candidates.length} 条`);
 
-  const grading = gradeCandidates(raw.candidates, {
-    title: target.title,
-    aliases: target.aliases,
-    seasons,
-    isChineseNative,
-  });
   const gradeCounts = { A: 0, B: 0, C: 0, D: 0 };
   for (const candidate of grading.ranked) gradeCounts[candidate.grade] += 1;
   stepLog(
@@ -466,7 +592,7 @@ export async function runMovieFastPathAcquisition(
 
   // 1. Grade the primed raw-snapshot candidates (code, zero LLM): identity is
   //    title + release year.
-  const raw = sandbox.rawSnapshotView();
+  let raw = sandbox.rawSnapshotView();
   if (!raw) {
     stepLog(sandbox, target.title, "预搜快照", "无(搜索源未响应)", "warn");
     stepLog(sandbox, target.title, "结论", "暂无资源(搜索源未响应)");
@@ -479,6 +605,43 @@ export async function runMovieFastPathAcquisition(
   }
   if (raw.candidates.length === 0) {
     stepLog(sandbox, target.title, "预搜快照", "候选 0 条(快照为空)", "warn");
+  } else {
+    stepLog(sandbox, target.title, "预搜快照", `候选 ${raw.candidates.length} 条`);
+  }
+
+  let grading = gradeCandidates(raw.candidates, {
+    title: target.title,
+    aliases: target.aliases,
+    seasons: [],
+    year: target.year,
+  });
+
+  // 1b. Aliases 兜底重搜 (movie twin of the TV §C fallback): when the primary
+  //     search by target.title comes back empty, or grades without a unique A
+  //     (title + year), re-search with each alias until a unique A-grade appears
+  //     or the budget (≤3 rounds) runs out. primeRawSnapshot OVERWRITES the
+  //     snapshot — grading/arbitration/transfer after a fallback read the NEW
+  //     evidence.
+  if ((raw.candidates.length === 0 || !grading.uniqueTopGrade) && target.aliases.length > 0) {
+    const fallback = await aliasesFallbackReSearch({
+      sandbox,
+      title: target.title,
+      aliases: target.aliases,
+      view: raw,
+      grading,
+      grade: (candidates) =>
+        gradeCandidates(candidates, {
+          title: target.title,
+          aliases: target.aliases,
+          seasons: [],
+          year: target.year,
+        }),
+    });
+    raw = fallback.view;
+    grading = fallback.grading;
+  }
+
+  if (raw.candidates.length === 0) {
     stepLog(sandbox, target.title, "结论", "暂无资源(快照为空)");
     return concludeUncovered(sandbox, {
       text: "无候选(raw snapshot 为空)",
@@ -487,14 +650,7 @@ export async function runMovieFastPathAcquisition(
       reason: "raw snapshot 为空",
     });
   }
-  stepLog(sandbox, target.title, "预搜快照", `候选 ${raw.candidates.length} 条`);
 
-  const grading = gradeCandidates(raw.candidates, {
-    title: target.title,
-    aliases: target.aliases,
-    seasons: [],
-    year: target.year,
-  });
   const gradeCounts = { A: 0, B: 0, C: 0, D: 0 };
   for (const candidate of grading.ranked) gradeCounts[candidate.grade] += 1;
   stepLog(

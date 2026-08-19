@@ -46,12 +46,19 @@ interface SetupOptions {
   candidates: Array<{ id: string; title: string }>;
   packs: Record<string, { files: Array<{ path: string; sizeBytes: number }> }>;
   failureMessages?: Record<string, string>;
+  /** Additional keyword → candidates for the alias 兜底重搜 rounds. */
+  extraResults?: Record<string, Array<{ id: string; title: string }>>;
+  /** Counts every provider.search call (primary prime + fallback rounds). */
+  onSearch?: () => void;
 }
 
 /** Movie setup: staging === the movie dir (flatten-in-place, per §5), so BOTH
  *  sandbox handles point at the same directory — matching movie-workflow-v2. */
 async function createMovieSetup(options: SetupOptions) {
-  const provider = new FakeResourceProviderV2({ results: { 流浪地球: options.candidates } });
+  const provider = new FakeResourceProviderV2({
+    results: { 流浪地球: options.candidates, ...options.extraResults },
+    ...(options.onSearch ? { onSearch: options.onSearch } : {}),
+  });
   const storage = new Storage115Simulator({
     packs: options.packs,
     ...(options.failureMessages ? { failureMessages: options.failureMessages } : {}),
@@ -352,5 +359,187 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     expect(result.notification.body).toContain("配额");
     expect(result.notification.body).not.toContain("暂未找到");
     expect(result.notification.kind).toBe("transfer_failed");
+  });
+
+  it("空快照时用 aliases 兜底重搜（movie twin），命中唯一 A（标题+年份）直接盲转", async () => {
+    let searches = 0;
+    const fallbackMovieTarget: MovieTarget = {
+      ...movieTarget,
+      aliases: ["The Wandering Earth"], // 流浪地球 英文原名
+    };
+    const { sandbox, movieDir, storage } = await createMovieSetup({
+      candidates: [], // 流浪地球 title 预搜落空 → 触发兜底
+      extraResults: {
+        "the wandering earth": [{ id: "c1", title: "The Wandering Earth.2019.4K" }],
+      },
+      packs: {
+        c1: { files: [{ path: "The Wandering Earth.2019.4K.mkv", sizeBytes: 2_000_000_000 }] },
+      },
+      onSearch: () => {
+        searches += 1;
+      },
+    });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: fallbackMovieTarget,
+    });
+
+    expect(result.escalated).toBe(false); // 兜底命中唯一 A → 零 LLM
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual(["MOVIE"]);
+    expect(searches).toBe(2); // 1 预搜 + 1 兜底
+    // 兜底命中的影片被 flatten + canonical 重命名。
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+  });
+
+  it("标题搜索无唯一 A（两个 A 平级）时用 aliases 兜底（movie twin），命中唯一 A 直接盲转", async () => {
+    let searches = 0;
+    const fallbackMovieTarget: MovieTarget = {
+      ...movieTarget,
+      aliases: ["The Wandering Earth"],
+    };
+    const { sandbox, movieDir, storage } = await createMovieSetup({
+      candidates: [
+        { id: "c1", title: "流浪地球.2019.4K" },
+        { id: "c2", title: "流浪地球.2019.1080p" }, // 两个 A → 无唯一 top → 触发兜底
+      ],
+      extraResults: {
+        "the wandering earth": [{ id: "c3", title: "The Wandering Earth.2019.4K" }],
+      },
+      packs: {
+        c3: { files: [{ path: "The Wandering Earth.2019.4K.mkv", sizeBytes: 2_000_000_000 }] },
+      },
+      onSearch: () => {
+        searches += 1;
+      },
+    });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: fallbackMovieTarget,
+    });
+
+    expect(result.escalated).toBe(false);
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual(["MOVIE"]);
+    expect(searches).toBe(2);
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+  });
+});
+
+describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
+  /** C-specific movie setup: per-keyword results + target aliases + search
+   *  counter. primeRawSnapshot("流浪地球") = the orchestrator pre-warm (#1). */
+  async function createMovieAliasSetup(options: {
+    results: Record<string, Array<{ id: string; title: string }>>;
+    errorKeywords?: string[];
+    packs: Record<string, { files: Array<{ path: string; sizeBytes: number }> }>;
+    aliases: string[];
+  }) {
+    const searches: string[] = [];
+    const provider = new FakeResourceProviderV2({
+      results: options.results,
+      ...(options.errorKeywords ? { errorKeywords: options.errorKeywords } : {}),
+      onSearch: () => {
+        searches.push("x");
+      },
+    });
+    const storage = new Storage115Simulator({ packs: options.packs });
+    const movieDir = await storage.createDirectory({ name: "流浪地球 (2019)", parentId: "root" });
+    const sandbox = new TaskSandbox({
+      provider,
+      storage,
+      stagingDirectoryId: movieDir,
+      targetMovieDirectoryId: movieDir,
+      need: ["MOVIE"],
+      canonicalTitle: "流浪地球",
+      canonicalYear: 2019,
+      titleTerms: ["流浪地球"],
+    });
+    await sandbox.primeRawSnapshot("流浪地球");
+    const aliasTarget: MovieTarget = {
+      title: "流浪地球",
+      aliases: options.aliases,
+      year: 2019,
+      qualityPreference: "4K",
+    };
+    return { sandbox, storage, movieDir, aliasTarget, searches };
+  }
+
+  it("兜底:primary 空快照 + alias 命中唯一 A(title+年份) → 直接转存(零 LLM)", async () => {
+    const { sandbox, movieDir, storage, aliasTarget, searches } = await createMovieAliasSetup({
+      results: {
+        流浪地球: [], // primary title → 0 候选
+        "The Wandering Earth": [{ id: "c1", title: "流浪地球.2019.4K.中字" }], // 译名 → 唯一 A
+      },
+      packs: { c1: { files: [{ path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 }] } },
+      aliases: ["The Wandering Earth"],
+    });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: aliasTarget,
+    });
+
+    expect(result.escalated).toBe(false);
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual(["MOVIE"]);
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+    expect(searches.length).toBe(2); // 1 primary + 1 alias
+  });
+
+  it("兜底:primary 无唯一 A + alias 命中唯一 A → 直接转存(零 LLM)", async () => {
+    const { sandbox, movieDir, storage, aliasTarget, searches } = await createMovieAliasSetup({
+      results: {
+        流浪地球: [
+          { id: "c1", title: "流浪地球 4K" }, // B — 无年份
+          { id: "c2", title: "流浪地球 1080p" }, // B — 无年份
+        ],
+        "The Wandering Earth": [{ id: "c3", title: "流浪地球.2019.4K.中字" }], // 唯一 A
+      },
+      packs: { c3: { files: [{ path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 }] } },
+      aliases: ["The Wandering Earth"],
+    });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: aliasTarget,
+    });
+
+    expect(result.escalated).toBe(false);
+    expect(result.coverage.coverageMet).toBe(true);
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+    expect(searches.length).toBe(2); // 1 primary + 1 alias
+  });
+
+  it("兜底:aliases 为空 → 行为与原来完全一致(空快照 1 次搜索即放弃)", async () => {
+    const { sandbox, aliasTarget, searches } = await createMovieAliasSetup({
+      results: { 流浪地球: [] },
+      packs: {},
+      aliases: [],
+    });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: aliasTarget,
+    });
+
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.escalated).toBe(false);
+    expect(searches.length).toBe(1); // 无兜底
   });
 });
