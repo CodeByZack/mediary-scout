@@ -127,6 +127,10 @@ describe("runMovieAcquisitionV2 — obtained comes from the AGENT'S coverage, ne
       ]),
       workflowRunId: "run-blocked",
       moviesParentDirectoryId: "movies_root",
+      // Agent-path semantics test: pin the 中文 subtitle preference so the
+      // orchestrator routes to the LLM movie agent (runMovieTaskAgent), not the
+      // video-only fast path — this test validates the AGENT'S honest report.
+      preferredLanguage: "中文",
       now: () => "2026-06-14T00:00:00.000Z",
     });
 
@@ -152,6 +156,9 @@ describe("runMovieAcquisitionV2 — obtained comes from the AGENT'S coverage, ne
       ]),
       workflowRunId: "run-m2",
       moviesParentDirectoryId: "movies_root",
+      // Agent-path semantics: 中文 preference routes to the LLM movie agent, whose
+      // markObtained declares coverage (NOT the fast path's file scan).
+      preferredLanguage: "中文",
       now: () => "2026-06-14T00:00:00.000Z",
     });
 
@@ -175,6 +182,9 @@ describe("runMovieAcquisitionV2 — obtained comes from the AGENT'S coverage, ne
       ]),
       workflowRunId: "run-m-fb",
       moviesParentDirectoryId: "movies_root",
+      // 中字软兜底订单 is a real product path — the LLM agent (not the fast path)
+      // exercises markObtained({subtitleFallback:true}).
+      preferredLanguage: "中文",
       now: () => "2026-06-14T00:00:00.000Z",
     });
 
@@ -202,6 +212,9 @@ describe("runMovieAcquisitionV2 — obtained comes from the AGENT'S coverage, ne
       ]),
       workflowRunId: "run-m3",
       moviesParentDirectoryId: "movies_root",
+      // Agent-path semantics: only the agent's markObtained decides coverage — a
+      // stray file on disk must NOT mark MOVIE (fast path would, by design).
+      preferredLanguage: "中文",
       now: () => "2026-06-14T00:00:00.000Z",
     });
 
