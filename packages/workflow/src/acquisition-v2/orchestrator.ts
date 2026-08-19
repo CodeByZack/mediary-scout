@@ -219,6 +219,10 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
           model: request.model,
           target: stripKind(request.target),
           isChineseNative,
+          // Task D: fast-path steps are traced through the SAME onProgress the
+          // agent path uses — the runner wires it to the progress + agent-trace
+          // sinks, so the activity page shows fast-path steps in agent_steps.
+          ...(request.onProgress ? { onProgress: request.onProgress } : {}),
         })
       : prefersChineseSubtitles && !isChineseNative
         ? // 中字/软兜底: a foreign film with a 中文 subtitle preference needs the LLM
@@ -229,6 +233,7 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
             sandbox,
             model: request.model,
             target: stripKind(request.target),
+            ...(request.onProgress ? { onProgress: request.onProgress } : {}),
           });
 
   // The agent transferred candidates by id; the storage adapter recorded the

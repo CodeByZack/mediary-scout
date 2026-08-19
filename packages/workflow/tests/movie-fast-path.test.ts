@@ -4,11 +4,17 @@ import { TaskSandbox } from "../src/acquisition-v2/sandbox.js";
 import { FakeResourceProviderV2 } from "../src/acquisition-v2/fake-provider.js";
 import { Storage115Simulator } from "../src/acquisition-v2/storage-115-simulator.js";
 import { runMovieFastPathAcquisition } from "../src/acquisition-v2/fast-path.js";
+import { makeAgentTraceSink } from "../src/acquisition-v2/agent-trace-sink.js";
+import { InMemoryWorkflowRepository } from "../src/index.js";
 import type { MovieTarget } from "../src/acquisition-v2/task-agents.js";
 import type { MediaTitle, ResourceSnapshot } from "../src/domain.js";
 import { FakeStorageExecutor } from "../src/fakes.js";
 import { runMovieAcquisitionV2 } from "../src/movie-workflow-v2.js";
 import type { ResourceProvider } from "../src/ports.js";
+
+/** Let the trace sink's fire-and-forget append chain settle (same as
+ *  agent-trace-sink.test.ts). */
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const USAGE = {
   inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
@@ -541,5 +547,143 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect(result.coverage.coverageMet).toBe(false);
     expect(result.escalated).toBe(false);
     expect(searches.length).toBe(1); // 无兜底
+  });
+
+  it("兜底全失败且 primary 有候选 → 恢复 primary 快照继续仲裁(movie twin)", async () => {
+    const { sandbox, movieDir, storage, aliasTarget, searches } = await createMovieAliasSetup({
+      results: {
+        流浪地球: [
+          { id: "c1", title: "流浪地球 4K" }, // B — 无年份
+          { id: "c2", title: "流浪地球 1080p" }, // B — 无年份
+        ], // 无唯一 A → 触发兜底
+        "The Wandering Earth": [], // 兜底命中 0 → 旧行为:最后一个兜底快照为空覆盖 primary → 误报「暂无资源(快照为空)」
+      },
+      packs: { c1: { files: [{ path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 }] } },
+      aliases: ["The Wandering Earth"],
+    });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: textModel('{"candidateId":"c1","reasoning":"primary 候选"}'),
+      target: aliasTarget,
+    });
+
+    expect(result.escalated).toBe(true); // 回到 primary 走仲裁(而非直接放弃)
+    expect(result.coverage.coverageMet).toBe(true); // 不是「暂无资源(快照为空)」
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+    expect(searches.length).toBe(2); // 1 primary + 1 兜底;恢复 primary 零额外搜索
+  });
+});
+
+describe("runMovieFastPathAcquisition — 步骤写入 agent_steps（Task D）", () => {
+  it("成功转存路径:每步写一条 AgentStep(落点检查→预搜→评分→选片→转存→digest→归位→结论)", async () => {
+    const repo = new InMemoryWorkflowRepository();
+    const trace = makeAgentTraceSink({ repository: repo, workflowRunId: "run-mfp-d1" });
+    const { sandbox, movieDir, storage } = await createMovieSetup({
+      candidates: [{ id: "c1", title: "流浪地球.2019.4K.中字" }],
+      packs: { c1: { files: [{ path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 }] } },
+    });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: movieTarget,
+      onProgress: trace,
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    await tick();
+    const steps = await repo.listAgentSteps("run-mfp-d1");
+    expect(steps.map((s) => s.toolName)).toEqual([
+      "inspectTargetDir",
+      "viewResourceSnapshot",
+      "gradeCandidates",
+      "pickCandidate",
+      "transferCandidate",
+      "stagingDigest",
+      "finalizeLanding",
+      "finish",
+    ]);
+    expect(steps.map((s) => s.phase)).toEqual([
+      "search",
+      "search",
+      "search",
+      "pick",
+      "transfer",
+      "verify",
+      "organize",
+      "finalize",
+    ]);
+    // activity = stepLog 的 detail;序号连续;markObtained 的 MOVIE sentinel 不污染计数
+    expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(steps[1]!.activity).toBe("候选 1 条");
+    expect(steps[7]!.activity).toBe("入库(MOVIE)");
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+  });
+
+  it("影片已在库路径:写 markObtained(MOVIE, mark 阶段)+ 结论步骤", async () => {
+    const repo = new InMemoryWorkflowRepository();
+    const trace = makeAgentTraceSink({ repository: repo, workflowRunId: "run-mfp-d2" });
+    const provider = new FakeResourceProviderV2({ results: { 流浪地球: [] } });
+    const storage = new Storage115Simulator({ packs: {} });
+    const movieDir = await storage.createDirectory({ name: "流浪地球 (2019)", parentId: "root" });
+    // Place a film directly on disk (already-on-disk scenario).
+    await storage.transferSubtitleUrl({
+      url: "http://x/流浪地球.2019.4K.mkv",
+      filename: "流浪地球.2019.4K.mkv",
+      intoDirectoryId: movieDir,
+    });
+    const sandbox = new TaskSandbox({
+      provider,
+      storage,
+      stagingDirectoryId: movieDir,
+      targetMovieDirectoryId: movieDir,
+      need: ["MOVIE"],
+      canonicalTitle: "流浪地球",
+      canonicalYear: 2019,
+      titleTerms: ["流浪地球"],
+    });
+    await sandbox.primeRawSnapshot("流浪地球");
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: movieTarget,
+      onProgress: trace,
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    await tick();
+    const steps = await repo.listAgentSteps("run-mfp-d2");
+    expect(steps.map((s) => s.toolName)).toEqual(["inspectTargetDir", "markObtained", "finish"]);
+    expect(steps.map((s) => s.phase)).toEqual(["search", "mark", "finalize"]);
+    expect(steps[1]!.args.codes).toEqual(["MOVIE"]);
+  });
+
+  it("无候选路径:写 reportNoCoverage 结论步骤(写失败静默,不崩溃)", async () => {
+    const repo = new InMemoryWorkflowRepository();
+    const trace = makeAgentTraceSink({ repository: repo, workflowRunId: "run-mfp-d3" });
+    const { sandbox } = await createMovieSetup({ candidates: [], packs: {} });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: movieTarget,
+      onProgress: trace,
+    });
+
+    expect(result.coverage.coverageMet).toBe(false);
+    await tick();
+    const steps = await repo.listAgentSteps("run-mfp-d3");
+    expect(steps.map((s) => s.toolName)).toEqual([
+      "inspectTargetDir",
+      "viewResourceSnapshot",
+      "reportNoCoverage",
+    ]);
+    expect(steps[2]!.activity).toBe("暂无资源(快照为空)");
   });
 });

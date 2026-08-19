@@ -12,6 +12,7 @@ import { finalizeLanding, finalizeMovieLanding } from "./finalize-landing.js";
 import { TaskSandbox } from "./sandbox.js";
 import { digestMovieStaging, digestStaging } from "./staging-digest.js";
 import type { MovieTarget, TvAnimeTarget } from "./task-agents.js";
+import type { AgentPhase, AgentToolEvent } from "./activity.js";
 
 /**
  * The fast path (§6.5): the acquisition happy path runs entirely in CODE, with
@@ -53,12 +54,39 @@ function stepLog(
   else console.log(line);
 }
 
+/** Fire-and-forget step trace: EVERY fast-path step also emits an AgentToolEvent
+ *  through onProgress — the runner wires that to the SAME progress + agent-trace
+ *  sinks the agent path uses, so the activity page shows fast-path steps (and a
+ *  live progress bar) instead of a blank row. toolName mirrors the semantic
+ *  agent tool where one exists; phase follows the requirement mapping
+ *  (落点检查→search、预搜/评分→search、选片→pick、转存→transfer、digest→verify、
+ *  归位→organize、markObtained→mark、结论→finalize). A missing/throwing sink must
+ *  NEVER fail the run — observability only. */
+function emitStep(
+  onProgress: ((event: AgentToolEvent) => void) | undefined,
+  toolName: string,
+  phase: AgentPhase,
+  activity: string,
+  args: Record<string, unknown> = {},
+): void {
+  if (!onProgress) return;
+  try {
+    onProgress({ toolName, args, activity, phase });
+  } catch {
+    // observability never fails the fast path
+  }
+}
+
 export interface FastPathOptions {
   sandbox: TaskSandbox;
   model: LanguageModel;
   target: TvAnimeTarget;
   /** CN-origin works are natively Chinese-spoken → no 中字 gate in grading. */
   isChineseNative: boolean;
+  /** Live step trace for the activity page (Task D): the runner wires its
+   *  progress + agent-trace sinks here; the fast path emits one AgentToolEvent
+   *  per step, fire-and-forget. Undefined (tests / bare sandbox) = no trace. */
+  onProgress?: (event: AgentToolEvent) => void;
 }
 
 export interface FastPathResult {
@@ -118,9 +146,18 @@ function gradeDistribution(grading: ReturnType<typeof gradeCandidates>): string 
  * original first, then the other 译名 (zh-TW/zh-HK) — until a unique A-grade
  * appears or the budget (≤ MAX_FALLBACK_SEARCHES rounds) runs out.
  *
- * primeRawSnapshot OVERWRITES the prior raw snapshot, so the returned
- * view/grading are the LAST searched evidence — the caller's arbitration /
- * transfer must read them, never the pre-fallback snapshot.
+ * primeRawSnapshot OVERWRITES the prior raw snapshot, so a successful fallback's
+ * returned view/grading are the LAST searched evidence — the caller's
+ * arbitration / transfer must read them, never the pre-fallback snapshot.
+ *
+ * §E restore: when the fallback exhausts its budget WITHOUT finding a unique
+ * A-grade AND the primary snapshot had candidates, the primary evidence is
+ * restored (returned as-is) so the caller continues the ORIGINAL arbitration /
+ * give-up logic on the primary candidates — never "暂无资源" just because the
+ * LAST fallback snapshot came back empty (the 狂飙 case: primary 45 候选被丢).
+ * The restore is in-memory (the primary snapshot id is already in
+ * observedSnapshots, so transferCandidate works), NOT a re-prime — zero extra
+ * PanSou hits, the budget semantics stay untouched.
  *
  * Budget: ≤ MAX_FALLBACK_SEARCHES additional PanSou hits, keywords deduped
  * (the title counts as already used). A provider failure on one round keeps the
@@ -135,62 +172,68 @@ async function aliasesFallbackReSearch(input: {
   view: NonNullable<ReturnType<TaskSandbox["rawSnapshotView"]>>;
   grading: ReturnType<typeof gradeCandidates>;
   grade: (candidates: Array<{ id: string; title: string }>) => ReturnType<typeof gradeCandidates>;
+  onProgress?: (event: AgentToolEvent) => void;
 }): Promise<{
   view: NonNullable<ReturnType<TaskSandbox["rawSnapshotView"]>>;
   grading: ReturnType<typeof gradeCandidates>;
 }> {
-  const { sandbox, title, aliases, view, grading, grade } = input;
+  const { sandbox, title, aliases, view, grading, grade, onProgress } = input;
   const searched = new Set<string>([normalizeSearchKeyword(title)]);
   let currentView = view;
   let currentGrading = grading;
   let rounds = 0;
+  let foundUniqueA = false;
   for (const alias of aliases) {
     if (rounds >= MAX_FALLBACK_SEARCHES) break;
     const keyword = normalizeSearchKeyword(alias);
     if (keyword === "" || searched.has(keyword)) continue; // 用过的词去重
     searched.add(keyword);
     rounds += 1;
-    stepLog(
-      sandbox,
-      title,
-      "兜底重搜",
-      `keyword=「${alias}」(第 ${rounds}/${MAX_FALLBACK_SEARCHES} 轮)`,
-    );
+    const roundDetail = `keyword=「${alias}」(第 ${rounds}/${MAX_FALLBACK_SEARCHES} 轮)`;
+    stepLog(sandbox, title, "兜底重搜", roundDetail);
+    emitStep(onProgress, "searchResources", "search", roundDetail, { keyword: alias });
     try {
       await sandbox.primeRawSnapshot(alias);
     } catch (error) {
       // Provider down on a fallback round — keep the current snapshot and try the
       // next alias (bounded by the budget; a dead source never kills the run).
-      stepLog(
-        sandbox,
-        title,
-        "兜底重搜",
-        `keyword=「${alias}」搜索失败:${error instanceof Error ? error.message : String(error)}`,
-        "warn",
-      );
+      const failDetail = `keyword=「${alias}」搜索失败:${error instanceof Error ? error.message : String(error)}`;
+      stepLog(sandbox, title, "兜底重搜", failDetail, "warn");
+      emitStep(onProgress, "searchResources", "search", failDetail, { keyword: alias });
       continue;
     }
     const nextView = sandbox.rawSnapshotView();
     if (!nextView) continue; // defensive: prime succeeded, so a view must exist
     currentView = nextView;
     currentGrading = grade(nextView.candidates);
-    stepLog(
-      sandbox,
-      title,
-      "兜底评分",
-      `keyword=「${alias}」命中=${nextView.candidates.length} ${
-        currentGrading.uniqueTopGrade
-          ? `唯一A级 top=${currentGrading.top?.id}(${currentGrading.top?.title})`
-          : gradeDistribution(currentGrading)
-      }`,
-    );
-    if (nextView.candidates.length > 0 && currentGrading.uniqueTopGrade) break; // 唯一 A → 直接转存
+    const gradeDetail = `keyword=「${alias}」命中=${nextView.candidates.length} ${
+      currentGrading.uniqueTopGrade
+        ? `唯一A级 top=${currentGrading.top?.id}(${currentGrading.top?.title})`
+        : gradeDistribution(currentGrading)
+    }`;
+    stepLog(sandbox, title, "兜底评分", gradeDetail);
+    emitStep(onProgress, "gradeCandidates", "search", gradeDetail);
+    if (nextView.candidates.length > 0 && currentGrading.uniqueTopGrade) {
+      foundUniqueA = true;
+      break; // 唯一 A → 直接转存
+    }
+  }
+  // §E: 兜底全失败(没有唯一 A)且 primary 快照有候选 → 恢复 primary 证据继续原
+  // 仲裁/放弃逻辑。旧行为让「最后一个兜底快照为空」覆盖 primary 的候选,于是
+  // 狂飙 primary 45 条候选被丢、误报「暂无资源(快照为空)」。恢复用内存里的
+  // primary view(其 snapshotId 早已在 observedSnapshots,transferCandidate 可直接
+  // 用),不重新 primeRawSnapshot —— 零额外 PanSou 请求,预算语义原样保持。
+  if (!foundUniqueA && view.candidates.length > 0) {
+    const restoreDetail = `全部兜底无唯一 A,恢复 primary 快照(${view.candidates.length} 条候选)继续仲裁`;
+    stepLog(sandbox, title, "兜底重搜", restoreDetail);
+    emitStep(onProgress, "gradeCandidates", "search", restoreDetail);
+    return { view, grading };
   }
   return { view: currentView, grading: currentGrading };
 }
 
 export async function runFastPathAcquisition(options: FastPathOptions): Promise<FastPathResult> {
-  const { sandbox, model, target, isChineseNative } = options;
+  const { sandbox, model, target, isChineseNative, onProgress } = options;
   const seasons = target.seasons;
 
   // 0. Inspect the landing point FIRST (§6b#8): the DB can lag the disk (a prior
@@ -207,20 +250,29 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     }
   }
   if (alreadyPresent.size > 0) {
-    await sandbox.markObtained({ codes: [...alreadyPresent] });
     needCodes = needCodes.filter((code) => !alreadyPresent.has(code));
   }
-  stepLog(
-    sandbox,
-    target.title,
-    "落点检查",
+  const landingDetail =
     alreadyPresent.size > 0
       ? `已在库 ${alreadyPresent.size} 集(${[...alreadyPresent].join(",")}),仍需 ${needCodes.length} 集`
-      : `目标目录无已落盘集,仍需 ${needCodes.length} 集`,
-  );
+      : `目标目录无已落盘集,仍需 ${needCodes.length} 集`;
+  emitStep(onProgress, "inspectTargetDir", "search", landingDetail);
+  if (alreadyPresent.size > 0) {
+    await sandbox.markObtained({ codes: [...alreadyPresent] });
+    emitStep(
+      onProgress,
+      "markObtained",
+      "mark",
+      `已确认 ${alreadyPresent.size} 集入库(${[...alreadyPresent].join(",")})`,
+      { codes: [...alreadyPresent] },
+    );
+  }
+  stepLog(sandbox, target.title, "落点检查", landingDetail);
   if (needCodes.length === 0) {
     // The library already holds the whole need — no search, no transfer, no LLM.
-    stepLog(sandbox, target.title, "结论", `入库:已在库(${[...alreadyPresent].join(",") || "-"})`);
+    const doneDetail = `入库:已在库(${[...alreadyPresent].join(",") || "-"})`;
+    stepLog(sandbox, target.title, "结论", doneDetail);
+    emitStep(onProgress, "finish", "finalize", doneDetail);
     return {
       text: `fast path 已在库:${[...alreadyPresent].join(",")}`,
       steps: 0,
@@ -236,8 +288,12 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     // base, so reportNoCoverage would throw SANDBOX_NO_PROVIDER_EVIDENCE (its
     // §9 guard: no search ran). Surface the source fault as uncovered, not as
     // "no resource".
-    stepLog(sandbox, target.title, "预搜快照", "无(搜索源未响应)", "warn");
-    stepLog(sandbox, target.title, "结论", "暂无资源(搜索源未响应)");
+    const snapshotDetail = "无(搜索源未响应)";
+    stepLog(sandbox, target.title, "预搜快照", snapshotDetail, "warn");
+    emitStep(onProgress, "viewResourceSnapshot", "search", snapshotDetail);
+    const doneDetail = "暂无资源(搜索源未响应)";
+    stepLog(sandbox, target.title, "结论", doneDetail);
+    emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
     return {
       text: "无预搜快照(搜索源未响应)",
       steps: 0,
@@ -245,11 +301,10 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       escalated: false,
     };
   }
-  if (raw.candidates.length === 0) {
-    stepLog(sandbox, target.title, "预搜快照", "候选 0 条(快照为空)", "warn");
-  } else {
-    stepLog(sandbox, target.title, "预搜快照", `候选 ${raw.candidates.length} 条`);
-  }
+  const snapshotDetail =
+    raw.candidates.length === 0 ? "候选 0 条(快照为空)" : `候选 ${raw.candidates.length} 条`;
+  stepLog(sandbox, target.title, "预搜快照", snapshotDetail, raw.candidates.length === 0 ? "warn" : "log");
+  emitStep(onProgress, "viewResourceSnapshot", "search", snapshotDetail);
 
   let grading = gradeCandidates(raw.candidates, {
     title: target.title,
@@ -264,7 +319,8 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   //     gets searched), re-search with each alias until a unique A-grade appears
   //     or the budget (≤3 rounds) runs out. primeRawSnapshot OVERWRITES the
   //     snapshot, so grading/arbitration/transfer after a fallback read the NEW
-  //     evidence.
+  //     evidence — unless the whole fallback fails AND primary had candidates
+  //     (§E: restore the primary evidence instead of discarding it).
   if ((raw.candidates.length === 0 || !grading.uniqueTopGrade) && target.aliases.length > 0) {
     const fallback = await aliasesFallbackReSearch({
       sandbox,
@@ -272,6 +328,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       aliases: target.aliases,
       view: raw,
       grading,
+      ...(onProgress ? { onProgress } : {}),
       grade: (candidates) =>
         gradeCandidates(candidates, {
           title: target.title,
@@ -285,7 +342,9 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   }
 
   if (raw.candidates.length === 0) {
-    stepLog(sandbox, target.title, "结论", "暂无资源(快照为空)");
+    const doneDetail = "暂无资源(快照为空)";
+    stepLog(sandbox, target.title, "结论", doneDetail);
+    emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
     return concludeUncovered(sandbox, {
       text: "无候选(raw snapshot 为空)",
       steps: 0,
@@ -296,12 +355,9 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
 
   const gradeCounts = { A: 0, B: 0, C: 0, D: 0 };
   for (const candidate of grading.ranked) gradeCounts[candidate.grade] += 1;
-  stepLog(
-    sandbox,
-    target.title,
-    "评分",
-    `A ${gradeCounts.A} / B ${gradeCounts.B} / C ${gradeCounts.C} / D ${gradeCounts.D}`,
-  );
+  const gradingDetail = `A ${gradeCounts.A} / B ${gradeCounts.B} / C ${gradeCounts.C} / D ${gradeCounts.D}`;
+  stepLog(sandbox, target.title, "评分", gradingDetail);
+  emitStep(onProgress, "gradeCandidates", "search", gradingDetail);
 
   // 2. Pick the first candidate: a unique A-grade transfers blind; otherwise the
   //    selection arbitrator picks one (escalation #1).
@@ -309,7 +365,9 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   let current: string | null;
   if (grading.uniqueTopGrade && grading.top) {
     current = grading.top.id;
-    stepLog(sandbox, target.title, "选片", `唯一 A 盲转:候选 ${current}(${grading.top.title})`);
+    const pickDetail = `唯一 A 盲转:候选 ${current}(${grading.top.title})`;
+    stepLog(sandbox, target.title, "选片", pickDetail);
+    emitStep(onProgress, "pickCandidate", "pick", pickDetail);
   } else {
     escalated = true;
     const arbitration = await arbitrateSelection({
@@ -320,14 +378,12 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     });
     current = arbitration.candidateId;
     if (current === null) {
-      stepLog(
-        sandbox,
-        target.title,
-        "仲裁",
-        `放弃:${arbitration.reasoning || "无可用候选"}`,
-        "warn",
-      );
-      stepLog(sandbox, target.title, "结论", `暂无资源(仲裁放弃:${arbitration.reasoning || "无可用候选"})`);
+      const declineDetail = `放弃:${arbitration.reasoning || "无可用候选"}`;
+      stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
+      const doneDetail = `暂无资源(仲裁放弃:${arbitration.reasoning || "无可用候选"})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "arbitrateSelection", "pick", declineDetail);
+      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return concludeUncovered(sandbox, {
         text: `仲裁放弃:${arbitration.reasoning || "无可用候选"}`,
         steps: 0,
@@ -340,8 +396,12 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     // reach transferCandidate's SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT throw and blow
     // up the whole run — treat it like a declined arbitration (safe uncover).
     if (!raw.candidates.some((candidate) => candidate.id === current)) {
-      stepLog(sandbox, target.title, "仲裁", `返回非法候选 id:${current}`, "error");
-      stepLog(sandbox, target.title, "结论", `暂无资源(仲裁返回非法候选:${current})`);
+      const badIdDetail = `返回非法候选 id:${current}`;
+      stepLog(sandbox, target.title, "仲裁", badIdDetail, "error");
+      const doneDetail = `暂无资源(仲裁返回非法候选:${current})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "arbitrateSelection", "pick", badIdDetail);
+      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return concludeUncovered(sandbox, {
         text: `仲裁返回非法候选:${current}`,
         steps: 0,
@@ -349,12 +409,9 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
         reason: `仲裁返回非法候选 id（不在快照中）:${current}`,
       });
     }
-    stepLog(
-      sandbox,
-      target.title,
-      "仲裁",
-      `选中候选 ${current}${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`,
-    );
+    const pickedDetail = `选中候选 ${current}${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`;
+    stepLog(sandbox, target.title, "仲裁", pickedDetail);
+    emitStep(onProgress, "arbitrateSelection", "pick", pickedDetail);
   }
 
   // 3. Transfer → digest → finalize / diagnose, with limited retries for dead
@@ -362,7 +419,9 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   const attempted = new Set<string>();
   while (current !== null && attempted.size < MAX_TRANSFER_ATTEMPTS) {
     attempted.add(current);
-    stepLog(sandbox, target.title, "转存", `候选 ${current}(第 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} 次)`);
+    const transferDetail = `候选 ${current}(第 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} 次)`;
+    stepLog(sandbox, target.title, "转存", transferDetail);
+    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current });
     const transfer = await sandbox.transferCandidate({
       snapshotId: raw.snapshotId,
       candidateId: current,
@@ -371,8 +430,12 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     // Systemic block (quota/auth/VIP) — every remaining candidate fails the same
     // way; stop grinding.
     if (transfer.systemicBlock) {
-      stepLog(sandbox, target.title, "转存失败", `系统阻塞:${transfer.systemicBlock.reason}`, "error");
-      stepLog(sandbox, target.title, "结论", `失败(系统阻塞:${transfer.systemicBlock.reason})`);
+      const blockDetail = `系统阻塞:${transfer.systemicBlock.reason}`;
+      stepLog(sandbox, target.title, "转存失败", blockDetail, "error");
+      const doneDetail = `失败(系统阻塞:${transfer.systemicBlock.reason})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "transferCandidate", "transfer", blockDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
         text: `系统阻塞:${transfer.systemicBlock.reason}`,
         steps: attempted.size,
@@ -384,38 +447,33 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     // Dead link (nothing landed) — advance to the next candidate.
     if (transfer.staging.length === 0) {
       const next = nextCandidate(grading, attempted);
-      stepLog(
-        sandbox,
-        target.title,
-        "转存失败",
-        `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}` : ",无下一候选"}`,
-        "warn",
-      );
+      const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}` : ",无下一候选"}`;
+      stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
+      emitStep(onProgress, "transferCandidate", "transfer", deadDetail, { candidateId: current });
       current = next;
       continue;
     }
 
     const digest = digestStaging({ files: transfer.staging, seasons, needCodes });
+    const digestDetail = digest.passes
+      ? `干净落地,覆盖 ${digest.coveredCodes.join(",") || "-"}`
+      : `未通过(${digest.isDirtyPack ? "脏包" : "未覆盖目标"}):${digest.summary.split("\n").join(" / ")}`;
     stepLog(
       sandbox,
       target.title,
       "digest 验证",
-      digest.passes
-        ? `干净落地,覆盖 ${digest.coveredCodes.join(",") || "-"}`
-        : `未通过(${digest.isDirtyPack ? "脏包" : "未覆盖目标"}):${digest.summary.split("\n").join(" / ")}`,
+      digestDetail,
       digest.passes ? "log" : "warn",
     );
+    emitStep(onProgress, "stagingDigest", "verify", digestDetail);
 
     // Clean landing → finalize (rename/归位/mark/wipe) in code, zero LLM.
     if (digest.passes) {
       try {
         const finalized = await finalizeLanding({ sandbox, digest, canonicalTitle: target.title, seasons });
-        stepLog(
-          sandbox,
-          target.title,
-          "归位",
-          `标记 ${finalized.marked.join(",") || "-"} / 移动 ${Object.values(finalized.movedSeasons).reduce((sum, n) => sum + n, 0)} 文件 / 清理 ${finalized.discarded.length} 文件`,
-        );
+        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${Object.values(finalized.movedSeasons).reduce((sum, n) => sum + n, 0)} 文件 / 清理 ${finalized.discarded.length} 文件`;
+        stepLog(sandbox, target.title, "归位", organizeDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
       } catch (error) {
         // A rename/move guard refused, or storage failed mid-landing — nothing was
         // reliably placed. Wipe staging and surface honest no-coverage (never a
@@ -425,14 +483,12 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
         } catch {
           // staging already empty / no separate staging — nothing to wipe.
         }
-        stepLog(
-          sandbox,
-          target.title,
-          "归位失败",
-          `${error instanceof Error ? error.message : String(error)}`,
-          "error",
-        );
-        stepLog(sandbox, target.title, "结论", `失败(归位异常:${error instanceof Error ? error.message : String(error)})`);
+        const organizeFailDetail = error instanceof Error ? error.message : String(error);
+        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
         return concludeUncovered(sandbox, {
           text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
           steps: attempted.size,
@@ -440,7 +496,9 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
           reason: error instanceof Error ? error.message : String(error),
         });
       }
-      stepLog(sandbox, target.title, "结论", `入库(obtained=${digest.coveredCodes.join(",") || "-"})`);
+      const doneDetail = `入库(obtained=${digest.coveredCodes.join(",") || "-"})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
         text: `fast path 归位标记:${digest.coveredCodes.join(",") || "-"}`,
         steps: attempted.size,
@@ -465,14 +523,12 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
         } catch {
           // already empty.
         }
-        stepLog(
-          sandbox,
-          target.title,
-          "归位失败",
-          `${error instanceof Error ? error.message : String(error)}`,
-          "error",
-        );
-        stepLog(sandbox, target.title, "结论", `失败(归位异常:${error instanceof Error ? error.message : String(error)})`);
+        const organizeFailDetail = error instanceof Error ? error.message : String(error);
+        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
         return concludeUncovered(sandbox, {
           text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
           steps: attempted.size,
@@ -480,7 +536,9 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
           reason: error instanceof Error ? error.message : String(error),
         });
       }
-      stepLog(sandbox, target.title, "结论", `入库(仲裁 accept:${diagnosis.reasoning})`);
+      const doneDetail = `入库(仲裁 accept:${diagnosis.reasoning})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
         text: `仲裁 accept:${diagnosis.reasoning}`,
         steps: attempted.size,
@@ -490,8 +548,12 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     }
     if (diagnosis.action === "abandon") {
       await sandbox.discardStaging();
-      stepLog(sandbox, target.title, "仲裁", `放弃:${diagnosis.reasoning}`, "warn");
-      stepLog(sandbox, target.title, "结论", `暂无资源(仲裁 abandon:${diagnosis.reasoning})`);
+      const declineDetail = `放弃:${diagnosis.reasoning}`;
+      stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
+      const doneDetail = `暂无资源(仲裁 abandon:${diagnosis.reasoning})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail);
+      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return concludeUncovered(sandbox, {
         text: `仲裁 abandon:${diagnosis.reasoning}`,
         steps: attempted.size,
@@ -506,13 +568,9 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
     }
     const next = nextCandidate(grading, attempted);
-    stepLog(
-      sandbox,
-      target.title,
-      "仲裁",
-      `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}`,
-      "warn",
-    );
+    const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
+    stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
+    emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail);
     current = next;
   }
 
@@ -520,7 +578,9 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   if ((await sandbox.inspectStaging()).length > 0) {
     await sandbox.discardStaging();
   }
-  stepLog(sandbox, target.title, "结论", `缺集(尝试 ${attempted.size} 个候选仍未覆盖)`);
+  const exhaustedDetail = `缺集(尝试 ${attempted.size} 个候选仍未覆盖)`;
+  stepLog(sandbox, target.title, "结论", exhaustedDetail);
+  emitStep(onProgress, "reportNoCoverage", "finalize", exhaustedDetail);
   return {
     text: `fast path 未覆盖(尝试 ${attempted.size} 个候选)`,
     steps: attempted.size,
@@ -549,6 +609,8 @@ export interface MovieFastPathOptions {
   sandbox: TaskSandbox;
   model: LanguageModel;
   target: MovieTarget;
+  /** Live step trace for the activity page (Task D) — same contract as FastPathOptions. */
+  onProgress?: (event: AgentToolEvent) => void;
 }
 
 export interface MovieFastPathResult {
@@ -571,16 +633,20 @@ async function clearMovieLanding(sandbox: TaskSandbox): Promise<void> {
 export async function runMovieFastPathAcquisition(
   options: MovieFastPathOptions,
 ): Promise<MovieFastPathResult> {
-  const { sandbox, model, target } = options;
+  const { sandbox, model, target, onProgress } = options;
 
   // 0. Landing-point check FIRST (movie has no episode codes): if the movie dir
   //    already holds a VIDEO (a prior run placed the film, or a crash left it
   //    mid-flight), mark MOVIE obtained and finish — never re-search/re-transfer.
   const onDisk = await sandbox.inspectTargetDir();
   if (onDisk.some((file) => file.isVideo)) {
+    emitStep(onProgress, "inspectTargetDir", "search", "影片已在库(MOVIE)");
     await sandbox.markObtained({ codes: ["MOVIE"] });
+    emitStep(onProgress, "markObtained", "mark", "影片已入库(MOVIE)", { codes: ["MOVIE"] });
+    const doneDetail = "入库:已在库(MOVIE)";
     stepLog(sandbox, target.title, "落点检查", "影片已在库(MOVIE)");
-    stepLog(sandbox, target.title, "结论", "入库:已在库(MOVIE)");
+    stepLog(sandbox, target.title, "结论", doneDetail);
+    emitStep(onProgress, "finish", "finalize", doneDetail);
     return {
       text: "fast path 已在库:MOVIE",
       steps: 0,
@@ -588,14 +654,20 @@ export async function runMovieFastPathAcquisition(
       escalated: false,
     };
   }
-  stepLog(sandbox, target.title, "落点检查", "目标目录无影片,开始获取");
+  const landingDetail = "目标目录无影片,开始获取";
+  stepLog(sandbox, target.title, "落点检查", landingDetail);
+  emitStep(onProgress, "inspectTargetDir", "search", landingDetail);
 
   // 1. Grade the primed raw-snapshot candidates (code, zero LLM): identity is
   //    title + release year.
   let raw = sandbox.rawSnapshotView();
   if (!raw) {
-    stepLog(sandbox, target.title, "预搜快照", "无(搜索源未响应)", "warn");
-    stepLog(sandbox, target.title, "结论", "暂无资源(搜索源未响应)");
+    const snapshotDetail = "无(搜索源未响应)";
+    stepLog(sandbox, target.title, "预搜快照", snapshotDetail, "warn");
+    emitStep(onProgress, "viewResourceSnapshot", "search", snapshotDetail);
+    const doneDetail = "暂无资源(搜索源未响应)";
+    stepLog(sandbox, target.title, "结论", doneDetail);
+    emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
     return {
       text: "无预搜快照(搜索源未响应)",
       steps: 0,
@@ -603,11 +675,10 @@ export async function runMovieFastPathAcquisition(
       escalated: false,
     };
   }
-  if (raw.candidates.length === 0) {
-    stepLog(sandbox, target.title, "预搜快照", "候选 0 条(快照为空)", "warn");
-  } else {
-    stepLog(sandbox, target.title, "预搜快照", `候选 ${raw.candidates.length} 条`);
-  }
+  const snapshotDetail =
+    raw.candidates.length === 0 ? "候选 0 条(快照为空)" : `候选 ${raw.candidates.length} 条`;
+  stepLog(sandbox, target.title, "预搜快照", snapshotDetail, raw.candidates.length === 0 ? "warn" : "log");
+  emitStep(onProgress, "viewResourceSnapshot", "search", snapshotDetail);
 
   let grading = gradeCandidates(raw.candidates, {
     title: target.title,
@@ -621,7 +692,8 @@ export async function runMovieFastPathAcquisition(
   //     (title + year), re-search with each alias until a unique A-grade appears
   //     or the budget (≤3 rounds) runs out. primeRawSnapshot OVERWRITES the
   //     snapshot — grading/arbitration/transfer after a fallback read the NEW
-  //     evidence.
+  //     evidence, unless the whole fallback fails AND primary had candidates
+  //     (§E: restore the primary evidence instead of discarding it).
   if ((raw.candidates.length === 0 || !grading.uniqueTopGrade) && target.aliases.length > 0) {
     const fallback = await aliasesFallbackReSearch({
       sandbox,
@@ -629,6 +701,7 @@ export async function runMovieFastPathAcquisition(
       aliases: target.aliases,
       view: raw,
       grading,
+      ...(onProgress ? { onProgress } : {}),
       grade: (candidates) =>
         gradeCandidates(candidates, {
           title: target.title,
@@ -642,7 +715,9 @@ export async function runMovieFastPathAcquisition(
   }
 
   if (raw.candidates.length === 0) {
-    stepLog(sandbox, target.title, "结论", "暂无资源(快照为空)");
+    const doneDetail = "暂无资源(快照为空)";
+    stepLog(sandbox, target.title, "结论", doneDetail);
+    emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
     return concludeUncovered(sandbox, {
       text: "无候选(raw snapshot 为空)",
       steps: 0,
@@ -653,12 +728,9 @@ export async function runMovieFastPathAcquisition(
 
   const gradeCounts = { A: 0, B: 0, C: 0, D: 0 };
   for (const candidate of grading.ranked) gradeCounts[candidate.grade] += 1;
-  stepLog(
-    sandbox,
-    target.title,
-    "评分",
-    `(年份判据 ${target.year ?? "未知"}) A ${gradeCounts.A} / B ${gradeCounts.B} / C ${gradeCounts.C} / D ${gradeCounts.D}`,
-  );
+  const gradingDetail = `(年份判据 ${target.year ?? "未知"}) A ${gradeCounts.A} / B ${gradeCounts.B} / C ${gradeCounts.C} / D ${gradeCounts.D}`;
+  stepLog(sandbox, target.title, "评分", gradingDetail);
+  emitStep(onProgress, "gradeCandidates", "search", gradingDetail);
 
   // 2. Pick the first candidate: a unique A-grade (title + year match) transfers
   //    blind; otherwise the movie selection arbitrator picks one (escalation #1).
@@ -666,7 +738,9 @@ export async function runMovieFastPathAcquisition(
   let current: string | null;
   if (grading.uniqueTopGrade && grading.top) {
     current = grading.top.id;
-    stepLog(sandbox, target.title, "选片", `唯一 A 盲转:候选 ${current}(${grading.top.title})`);
+    const pickDetail = `唯一 A 盲转:候选 ${current}(${grading.top.title})`;
+    stepLog(sandbox, target.title, "选片", pickDetail);
+    emitStep(onProgress, "pickCandidate", "pick", pickDetail);
   } else {
     escalated = true;
     const arbitration = await arbitrateMovieSelection({
@@ -677,14 +751,12 @@ export async function runMovieFastPathAcquisition(
     });
     current = arbitration.candidateId;
     if (current === null) {
-      stepLog(
-        sandbox,
-        target.title,
-        "仲裁",
-        `放弃:${arbitration.reasoning || "无可用候选"}`,
-        "warn",
-      );
-      stepLog(sandbox, target.title, "结论", `暂无资源(仲裁放弃:${arbitration.reasoning || "无可用候选"})`);
+      const declineDetail = `放弃:${arbitration.reasoning || "无可用候选"}`;
+      stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
+      const doneDetail = `暂无资源(仲裁放弃:${arbitration.reasoning || "无可用候选"})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "arbitrateSelection", "pick", declineDetail);
+      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return concludeUncovered(sandbox, {
         text: `仲裁放弃:${arbitration.reasoning || "无可用候选"}`,
         steps: 0,
@@ -697,8 +769,12 @@ export async function runMovieFastPathAcquisition(
     // reach transferCandidate's SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT throw and blow
     // up the whole run — treat it like a declined arbitration (safe uncover).
     if (!raw.candidates.some((candidate) => candidate.id === current)) {
-      stepLog(sandbox, target.title, "仲裁", `返回非法候选 id:${current}`, "error");
-      stepLog(sandbox, target.title, "结论", `暂无资源(仲裁返回非法候选:${current})`);
+      const badIdDetail = `返回非法候选 id:${current}`;
+      stepLog(sandbox, target.title, "仲裁", badIdDetail, "error");
+      const doneDetail = `暂无资源(仲裁返回非法候选:${current})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "arbitrateSelection", "pick", badIdDetail);
+      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return concludeUncovered(sandbox, {
         text: `仲裁返回非法候选:${current}`,
         steps: 0,
@@ -706,12 +782,9 @@ export async function runMovieFastPathAcquisition(
         reason: `仲裁返回非法候选 id（不在快照中）:${current}`,
       });
     }
-    stepLog(
-      sandbox,
-      target.title,
-      "仲裁",
-      `选中候选 ${current}${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`,
-    );
+    const pickedDetail = `选中候选 ${current}${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`;
+    stepLog(sandbox, target.title, "仲裁", pickedDetail);
+    emitStep(onProgress, "arbitrateSelection", "pick", pickedDetail);
   }
 
   // 3. Transfer → movie digest → flatten+mark / diagnose, with limited dead-link
@@ -719,15 +792,21 @@ export async function runMovieFastPathAcquisition(
   const attempted = new Set<string>();
   while (current !== null && attempted.size < MAX_TRANSFER_ATTEMPTS) {
     attempted.add(current);
-    stepLog(sandbox, target.title, "转存", `候选 ${current}(第 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} 次)`);
+    const transferDetail = `候选 ${current}(第 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} 次)`;
+    stepLog(sandbox, target.title, "转存", transferDetail);
+    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current });
     const transfer = await sandbox.transferCandidate({
       snapshotId: raw.snapshotId,
       candidateId: current,
     });
 
     if (transfer.systemicBlock) {
-      stepLog(sandbox, target.title, "转存失败", `系统阻塞:${transfer.systemicBlock.reason}`, "error");
-      stepLog(sandbox, target.title, "结论", `失败(系统阻塞:${transfer.systemicBlock.reason})`);
+      const blockDetail = `系统阻塞:${transfer.systemicBlock.reason}`;
+      stepLog(sandbox, target.title, "转存失败", blockDetail, "error");
+      const doneDetail = `失败(系统阻塞:${transfer.systemicBlock.reason})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "transferCandidate", "transfer", blockDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
         text: `系统阻塞:${transfer.systemicBlock.reason}`,
         steps: attempted.size,
@@ -739,13 +818,9 @@ export async function runMovieFastPathAcquisition(
     // Dead link (nothing landed) → advance to the next candidate.
     if (transfer.staging.length === 0) {
       const next = nextCandidate(grading, attempted);
-      stepLog(
-        sandbox,
-        target.title,
-        "转存失败",
-        `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}` : ",无下一候选"}`,
-        "warn",
-      );
+      const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}` : ",无下一候选"}`;
+      stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
+      emitStep(onProgress, "transferCandidate", "transfer", deadDetail, { candidateId: current });
       current = next;
       continue;
     }
@@ -759,42 +834,40 @@ export async function runMovieFastPathAcquisition(
     if (digest.videos.length === 0) {
       await clearMovieLanding(sandbox);
       const next = nextCandidate(grading, attempted);
-      stepLog(
-        sandbox,
-        target.title,
-        "digest 验证",
-        `未落盘视频(仅字幕/杂项),清空后换候选 ${next ?? "无(终止)"}`,
-        "warn",
-      );
+      const noVideoDetail = `未落盘视频(仅字幕/杂项),清空后换候选 ${next ?? "无(终止)"}`;
+      stepLog(sandbox, target.title, "digest 验证", noVideoDetail, "warn");
+      emitStep(onProgress, "stagingDigest", "verify", noVideoDetail);
       current = next;
       continue;
     }
 
+    const digestDetail = digest.passes
+      ? `一部正片(视频 ${digest.videos.length} / 字幕 ${digest.subtitles.length})`
+      : `未通过(${digest.isDirtyPack ? "非单部正片/脏包" : "无视频"}):${digest.summary.split("\n").join(" / ")}`;
     stepLog(
       sandbox,
       target.title,
       "digest 验证",
-      digest.passes
-        ? `一部正片(视频 ${digest.videos.length} / 字幕 ${digest.subtitles.length})`
-        : `未通过(${digest.isDirtyPack ? "非单部正片/脏包" : "无视频"}):${digest.summary.split("\n").join(" / ")}`,
+      digestDetail,
       digest.passes ? "log" : "warn",
     );
+    emitStep(onProgress, "stagingDigest", "verify", digestDetail);
 
     // One clean film → flatten + mark in code, zero LLM.
     if (digest.passes) {
       try {
         const finalized = await finalizeMovieLanding({ sandbox, digest });
-        stepLog(sandbox, target.title, "归位", `flatten+标记 ${finalized.marked.join(",") || "-"}`);
+        const organizeDetail = `flatten+标记 ${finalized.marked.join(",") || "-"}`;
+        stepLog(sandbox, target.title, "归位", organizeDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
       } catch (error) {
         await clearMovieLanding(sandbox).catch(() => {});
-        stepLog(
-          sandbox,
-          target.title,
-          "归位失败",
-          `${error instanceof Error ? error.message : String(error)}`,
-          "error",
-        );
-        stepLog(sandbox, target.title, "结论", `失败(归位异常:${error instanceof Error ? error.message : String(error)})`);
+        const organizeFailDetail = error instanceof Error ? error.message : String(error);
+        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
         return concludeUncovered(sandbox, {
           text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
           steps: attempted.size,
@@ -802,7 +875,9 @@ export async function runMovieFastPathAcquisition(
           reason: error instanceof Error ? error.message : String(error),
         });
       }
-      stepLog(sandbox, target.title, "结论", "入库(MOVIE)");
+      const doneDetail = "入库(MOVIE)";
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
         text: "fast path 归位标记:MOVIE",
         steps: attempted.size,
@@ -824,14 +899,12 @@ export async function runMovieFastPathAcquisition(
         await finalizeMovieLanding({ sandbox, digest });
       } catch (error) {
         await clearMovieLanding(sandbox).catch(() => {});
-        stepLog(
-          sandbox,
-          target.title,
-          "归位失败",
-          `${error instanceof Error ? error.message : String(error)}`,
-          "error",
-        );
-        stepLog(sandbox, target.title, "结论", `失败(归位异常:${error instanceof Error ? error.message : String(error)})`);
+        const organizeFailDetail = error instanceof Error ? error.message : String(error);
+        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
         return concludeUncovered(sandbox, {
           text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
           steps: attempted.size,
@@ -839,7 +912,9 @@ export async function runMovieFastPathAcquisition(
           reason: error instanceof Error ? error.message : String(error),
         });
       }
-      stepLog(sandbox, target.title, "结论", `入库(仲裁 accept:${diagnosis.reasoning})`);
+      const doneDetail = `入库(仲裁 accept:${diagnosis.reasoning})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
         text: `仲裁 accept:${diagnosis.reasoning}`,
         steps: attempted.size,
@@ -849,8 +924,12 @@ export async function runMovieFastPathAcquisition(
     }
     if (diagnosis.action === "abandon") {
       await clearMovieLanding(sandbox);
-      stepLog(sandbox, target.title, "仲裁", `放弃:${diagnosis.reasoning}`, "warn");
-      stepLog(sandbox, target.title, "结论", `暂无资源(仲裁 abandon:${diagnosis.reasoning})`);
+      const declineDetail = `放弃:${diagnosis.reasoning}`;
+      stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
+      const doneDetail = `暂无资源(仲裁 abandon:${diagnosis.reasoning})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail);
+      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return concludeUncovered(sandbox, {
         text: `仲裁 abandon:${diagnosis.reasoning}`,
         steps: attempted.size,
@@ -861,13 +940,9 @@ export async function runMovieFastPathAcquisition(
     // retry_other → clear the bad landing's files and try the next candidate.
     await clearMovieLanding(sandbox);
     const next = nextCandidate(grading, attempted);
-    stepLog(
-      sandbox,
-      target.title,
-      "仲裁",
-      `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}`,
-      "warn",
-    );
+    const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
+    stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
+    emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail);
     current = next;
   }
 
@@ -875,7 +950,9 @@ export async function runMovieFastPathAcquisition(
   // report unmet (a wrong film must NOT linger to be mis-read as obtained next
   // patrol).
   await clearMovieLanding(sandbox);
-  stepLog(sandbox, target.title, "结论", `缺集(尝试 ${attempted.size} 个候选仍未覆盖)`);
+  const exhaustedDetail = `缺集(尝试 ${attempted.size} 个候选仍未覆盖)`;
+  stepLog(sandbox, target.title, "结论", exhaustedDetail);
+  emitStep(onProgress, "reportNoCoverage", "finalize", exhaustedDetail);
   return {
     text: `fast path 未覆盖(尝试 ${attempted.size} 个候选)`,
     steps: attempted.size,
@@ -883,4 +960,3 @@ export async function runMovieFastPathAcquisition(
     escalated,
   };
 }
-
