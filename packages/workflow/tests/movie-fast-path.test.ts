@@ -251,7 +251,7 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     ]);
   });
 
-  it("reports unmet coverage when every candidate is a dead link (attempt cap 3)", async () => {
+  it("reports unmet coverage when every candidate is a dead link (dead-link scan, zero real transfers)", async () => {
     const { sandbox } = await createMovieSetup({
       candidates: [
         { id: "c1", title: "流浪地球.2019.4K" },
@@ -263,8 +263,9 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
       failureMessages: { c1: "dead share", c2: "dead share", c3: "dead share", c4: "dead share" },
     });
 
-    // Three A-grades (all year-match) → no unique top → arbitrator picks c1; then
-    // dead links burn the remaining attempts up to the cap of 3.
+    // Four A-grades (all year-match) → no unique top → arbitrator picks c1; then
+    // dead links are scanned (cheap fail-loud probes, NOT transfer attempts) —
+    // all four are dead, the pool is exhausted, and ZERO real transfers happened.
     const result = await runMovieFastPathAcquisition({
       sandbox,
       model: textModel('{"candidateId":"c1","reasoning":"选第一个"}'),
@@ -273,7 +274,35 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
 
     expect(result.coverage.coverageMet).toBe(false);
     expect(result.coverage.missing).toEqual(["MOVIE"]);
-    expect(result.steps).toBe(3); // MAX_TRANSFER_ATTEMPTS
+    expect(result.steps).toBe(0); // 全是死链：死链不占转存次数，零真实转存
+  });
+
+  it("dead links do NOT consume transfer attempts — scans past 3 dead links to the live candidate", async () => {
+    const { sandbox, movieDir, storage } = await createMovieSetup({
+      candidates: [
+        { id: "c1", title: "流浪地球.2019.4K" },
+        { id: "c2", title: "流浪地球.2019.4K.中字" },
+        { id: "c3", title: "流浪地球.2019.1080p" },
+        { id: "c4", title: "流浪地球 2019" },
+      ],
+      packs: { c4: { files: [{ path: "流浪地球 (2019).mkv", sizeBytes: 2_000_000_000 }] } },
+      failureMessages: { c1: "dead share", c2: "dead share", c3: "dead share" },
+    });
+
+    // 4 A-grades → arbitrator picks c1; c1/c2/c3 are dead links (not counted),
+    // c4 lands — exactly ONE real transfer attempt.
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: textModel('{"candidateId":"c1","reasoning":"选第一个"}'),
+      target: movieTarget,
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual(["MOVIE"]);
+    expect(result.steps).toBe(1);
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
   });
 
   it("marks MOVIE when the film is already on disk and never searches or transfers", async () => {

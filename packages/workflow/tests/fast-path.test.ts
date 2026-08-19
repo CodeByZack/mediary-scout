@@ -258,6 +258,58 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     expect(result.coverage.missing).toEqual(["S01E01"]);
   });
 
+  it("dead links do NOT consume transfer attempts — scans past 3 dead links to the live candidate", async () => {
+    const { sandbox, s1, storage } = await createSetup({
+      candidates: [
+        { id: "c1", title: "狂飙.S01E01.1080p.中字" },
+        { id: "c2", title: "狂飙.S01E01.1080p.中字" },
+        { id: "c3", title: "狂飙.S01E01.1080p.中字" },
+        { id: "c4", title: "狂飙.S01E01.1080p.中字" },
+      ],
+      packs: { c4: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1_000_000_000 }] } },
+      failureMessages: { c1: "dead share", c2: "dead share", c3: "dead share" },
+    });
+
+    // 4 A-grades → arbitrator picks c1; c1/c2/c3 are dead links (cheap probes,
+    // NOT counted against MAX_TRANSFER_ATTEMPTS), c4 lands — exactly ONE real
+    // transfer attempt. (Old behaviour: 3 dead links burned the whole budget.)
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: textModel('{"candidateId":"c1","reasoning":"选第一个"}'),
+      target,
+      isChineseNative: false,
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual(["S01E01"]);
+    expect(result.steps).toBe(1);
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+    ]);
+  });
+
+  it("stops the dead-link scan at MAX_DEAD_LINK_RETRIES with zero real transfers", async () => {
+    const candidates = Array.from({ length: 11 }, (_, i) => ({
+      id: `c${i + 1}`,
+      title: "狂飙.S01E01.1080p.中字",
+    }));
+    const failureMessages = Object.fromEntries(candidates.map((c) => [c.id, "dead share"]));
+    const { sandbox } = await createSetup({ candidates, packs: {}, failureMessages });
+
+    // 11 A-grade dead links → arbitrator picks c1; the scan hits the dead-link
+    // retry cap (10) and gives up — still zero real transfers.
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: textModel('{"candidateId":"c1","reasoning":"选第一个"}'),
+      target,
+      isChineseNative: false,
+    });
+
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.coverage.missing).toEqual(["S01E01"]);
+    expect(result.steps).toBe(0); // 全是死链：死链不占转存次数
+  });
+
   it("marks already-on-disk episodes and never searches or transfers (§6b#8)", async () => {
     const provider = new FakeResourceProviderV2({ results: {} });
     const storage = new Storage115Simulator({

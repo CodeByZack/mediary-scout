@@ -31,6 +31,13 @@ import type { AgentPhase, AgentToolEvent } from "./activity.js";
 /** Hard ceiling on transfer attempts per fast-path run. */
 const MAX_TRANSFER_ATTEMPTS = 3;
 
+/** Dead-link retries must NOT consume the transfer-attempt budget: a dead share
+ *  fails loud (分享已过期/已取消/不存在) at the share-check step WITHOUT any real
+ *  transfer action (no 秒传/复制), so it is a cheap probe. Cap the dead-link
+ *  scan separately so a candidate pool full of dead shares still gets scanned
+ *  for a live one (狂飙 45 候选只试 3 个死链就放弃的教训). */
+const MAX_DEAD_LINK_RETRIES = 10;
+
 /** Hard ceiling on ALIASES 兜底重搜 rounds per fast-path run. The primary search
  *  already ran; each fallback round is one more PanSou hit, so cap it hard (≤3)
  *  to keep a title that fails to recall from hammering the shared quota. */
@@ -415,11 +422,20 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   }
 
   // 3. Transfer → digest → finalize / diagnose, with limited retries for dead
-  //    links and off-target packs.
+  //    links and off-target packs. A dead link (nothing landed) is a CHEAP
+  //    fail-loud probe — it must NOT consume the transfer-attempt budget, so it
+  //    is counted separately (MAX_DEAD_LINK_RETRIES) and only a real materialized
+  //    transfer (attempted) counts toward MAX_TRANSFER_ATTEMPTS.
   const attempted = new Set<string>();
-  while (current !== null && attempted.size < MAX_TRANSFER_ATTEMPTS) {
-    attempted.add(current);
-    const transferDetail = `候选 ${current}(第 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} 次)`;
+  const tried = new Set<string>();
+  let deadRetries = 0;
+  while (
+    current !== null &&
+    attempted.size < MAX_TRANSFER_ATTEMPTS &&
+    deadRetries < MAX_DEAD_LINK_RETRIES
+  ) {
+    tried.add(current);
+    const transferDetail = `候选 ${current}(第 ${attempted.size + 1}/${MAX_TRANSFER_ATTEMPTS} 次转存)`;
     stepLog(sandbox, target.title, "转存", transferDetail);
     emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current });
     const transfer = await sandbox.transferCandidate({
@@ -444,16 +460,20 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       };
     }
 
-    // Dead link (nothing landed) — advance to the next candidate.
+    // Dead link (nothing landed) — a cheap probe, not a transfer attempt; advance
+    // to the next candidate until the dead-link scan cap or the pool is exhausted.
     if (transfer.staging.length === 0) {
-      const next = nextCandidate(grading, attempted);
-      const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}` : ",无下一候选"}`;
+      deadRetries += 1;
+      const next = nextCandidate(grading, tried);
+      const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",无下一候选"}`;
       stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
       emitStep(onProgress, "transferCandidate", "transfer", deadDetail, { candidateId: current });
       current = next;
       continue;
     }
 
+    // A real transfer happened — this is the countable attempt.
+    attempted.add(current);
     const digest = digestStaging({ files: transfer.staging, seasons, needCodes });
     const digestDetail = digest.passes
       ? `干净落地,覆盖 ${digest.coveredCodes.join(",") || "-"}`
@@ -567,7 +587,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     if (leftover.length > 0) {
       await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
     }
-    const next = nextCandidate(grading, attempted);
+    const next = nextCandidate(grading, tried);
     const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
     stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
     emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail);
@@ -578,11 +598,11 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   if ((await sandbox.inspectStaging()).length > 0) {
     await sandbox.discardStaging();
   }
-  const exhaustedDetail = `缺集(尝试 ${attempted.size} 个候选仍未覆盖)`;
+  const exhaustedDetail = `缺集(尝试 ${attempted.size} 次转存,扫过 ${tried.size} 个候选仍未覆盖)`;
   stepLog(sandbox, target.title, "结论", exhaustedDetail);
   emitStep(onProgress, "reportNoCoverage", "finalize", exhaustedDetail);
   return {
-    text: `fast path 未覆盖(尝试 ${attempted.size} 个候选)`,
+    text: `fast path 未覆盖(尝试 ${attempted.size} 次转存)`,
     steps: attempted.size,
     coverage: await sandbox.finish(),
     escalated,
@@ -788,11 +808,20 @@ export async function runMovieFastPathAcquisition(
   }
 
   // 3. Transfer → movie digest → flatten+mark / diagnose, with limited dead-link
-  //    retries (same transferUntilLanded ceiling as TV).
+  //    retries (same transferUntilLanded ceiling as TV). A dead link (nothing
+  //    landed) is a CHEAP fail-loud probe — counted separately, NOT as a transfer
+  //    attempt; only a real materialized transfer (attempted) counts toward
+  //    MAX_TRANSFER_ATTEMPTS.
   const attempted = new Set<string>();
-  while (current !== null && attempted.size < MAX_TRANSFER_ATTEMPTS) {
-    attempted.add(current);
-    const transferDetail = `候选 ${current}(第 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} 次)`;
+  const tried = new Set<string>();
+  let deadRetries = 0;
+  while (
+    current !== null &&
+    attempted.size < MAX_TRANSFER_ATTEMPTS &&
+    deadRetries < MAX_DEAD_LINK_RETRIES
+  ) {
+    tried.add(current);
+    const transferDetail = `候选 ${current}(第 ${attempted.size + 1}/${MAX_TRANSFER_ATTEMPTS} 次转存)`;
     stepLog(sandbox, target.title, "转存", transferDetail);
     emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current });
     const transfer = await sandbox.transferCandidate({
@@ -815,16 +844,20 @@ export async function runMovieFastPathAcquisition(
       };
     }
 
-    // Dead link (nothing landed) → advance to the next candidate.
+    // Dead link (nothing landed) → a cheap probe, not a transfer attempt; advance
+    // to the next candidate until the dead-link scan cap or the pool is exhausted.
     if (transfer.staging.length === 0) {
-      const next = nextCandidate(grading, attempted);
-      const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}` : ",无下一候选"}`;
+      deadRetries += 1;
+      const next = nextCandidate(grading, tried);
+      const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",无下一候选"}`;
       stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
       emitStep(onProgress, "transferCandidate", "transfer", deadDetail, { candidateId: current });
       current = next;
       continue;
     }
 
+    // A real transfer happened — this is the countable attempt.
+    attempted.add(current);
     const digest = digestMovieStaging(transfer.staging);
 
     // Nothing landed as a video (subtitle-only / stray) → clear the residue and
@@ -833,7 +866,7 @@ export async function runMovieFastPathAcquisition(
     // kept as if they were this film's).
     if (digest.videos.length === 0) {
       await clearMovieLanding(sandbox);
-      const next = nextCandidate(grading, attempted);
+      const next = nextCandidate(grading, tried);
       const noVideoDetail = `未落盘视频(仅字幕/杂项),清空后换候选 ${next ?? "无(终止)"}`;
       stepLog(sandbox, target.title, "digest 验证", noVideoDetail, "warn");
       emitStep(onProgress, "stagingDigest", "verify", noVideoDetail);
@@ -939,7 +972,7 @@ export async function runMovieFastPathAcquisition(
     }
     // retry_other → clear the bad landing's files and try the next candidate.
     await clearMovieLanding(sandbox);
-    const next = nextCandidate(grading, attempted);
+    const next = nextCandidate(grading, tried);
     const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
     stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
     emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail);
@@ -950,11 +983,11 @@ export async function runMovieFastPathAcquisition(
   // report unmet (a wrong film must NOT linger to be mis-read as obtained next
   // patrol).
   await clearMovieLanding(sandbox);
-  const exhaustedDetail = `缺集(尝试 ${attempted.size} 个候选仍未覆盖)`;
+  const exhaustedDetail = `缺集(尝试 ${attempted.size} 次转存,扫过 ${tried.size} 个候选仍未覆盖)`;
   stepLog(sandbox, target.title, "结论", exhaustedDetail);
   emitStep(onProgress, "reportNoCoverage", "finalize", exhaustedDetail);
   return {
-    text: `fast path 未覆盖(尝试 ${attempted.size} 个候选)`,
+    text: `fast path 未覆盖(尝试 ${attempted.size} 次转存)`,
     steps: attempted.size,
     coverage: await sandbox.finish(),
     escalated,
