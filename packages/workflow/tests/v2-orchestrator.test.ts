@@ -34,6 +34,18 @@ function searchThenReportModel() {
   });
 }
 
+/** A model that returns a single JSON text — the fast path's arbitration input. */
+function jsonModel(text: string) {
+  return new MockLanguageModelV3({
+    doGenerate: async () => ({
+      content: [{ type: "text" as const, text }],
+      finishReason: { unified: "stop" as const, raw: "stop" as const },
+      usage: USAGE,
+      warnings: [],
+    }),
+  });
+}
+
 describe("runAcquisitionV2 — composition root wiring real adapters + sandbox + task agent", () => {
   it("seeds a TV task with the missing-episode need and drives the loop", async () => {
     const searched: string[] = [];
@@ -84,7 +96,7 @@ describe("runAcquisitionV2 — composition root wiring real adapters + sandbox +
 });
 
 describe("runAcquisitionV2 — raw snapshot pre-warming integration", () => {
-  it("primes raw snapshot before building prompt, snapshot visible to agent", async () => {
+  it("primes raw snapshot before the fast path grades it (escalates on no unique A-grade)", async () => {
     const searches: string[] = [];
     const provider: ResourceProvider = {
       search: async ({ keyword }) => {
@@ -107,50 +119,23 @@ describe("runAcquisitionV2 — raw snapshot pre-warming integration", () => {
     };
     const executor = new FakeStorageExecutor({ directories: { staging: [], season: [] } });
 
-    // Model 调用 viewResourceSnapshot 工具查看预热候选
-    let viewCalled = false;
-    const model = new MockLanguageModelV3({
-      doGenerate: async ({ prompt }) => {
-        // 第一轮:检查 system prompt 包含预热计数指针
-        if (!viewCalled) {
-          const systemMsg = prompt.find((p) => p.role === "system");
-          expect(systemMsg?.content).toContain("2"); // prefetchedCandidateCount
-          expect(systemMsg?.content).toMatch(/RAW SNAPSHOT|活期文档/);
-          expect(systemMsg?.content).toContain("viewResourceSnapshot");
-
-          viewCalled = true;
-          return {
-            content: [{ type: "tool-call" as const, toolCallId: "c1", toolName: "viewResourceSnapshot", input: "{}" }],
-            finishReason: { unified: "tool-calls" as const, raw: "tool-calls" as const },
-            usage: USAGE,
-            warnings: [],
-          };
-        }
-        // 第二轮:agent 看到预热候选后,直接报告无覆盖(测试用)
-        return {
-          content: [{ type: "tool-call" as const, toolCallId: "c2", toolName: "reportNoCoverage", input: JSON.stringify({ reason: "test" }) }],
-          finishReason: { unified: "tool-calls" as const, raw: "tool-calls" as const },
-          usage: USAGE,
-          warnings: [],
-        };
-      },
-    });
-
+    // Two A-grades (S01 and 全集) → no unique top → the fast path escalates to the
+    // selection arbitrator; the model declines (candidateId null) → no coverage.
     const result = await runAcquisitionV2({
       provider,
       executor,
-      model,
+      model: jsonModel('{"candidateId":null,"reasoning":"两个候选都是全集类，无法唯一确定"}'),
       workflowRunId: "run-prime",
       target: { kind: "tv", title: "铁拳教育", aliases: [], seasons: [1], missingEpisodes: ["S01E01"], qualityPreference: "1080p" },
       stagingDirectoryId: "staging",
       targetSeasonDirectoryIds: { 1: "season" },
     });
 
-    // 预热搜索应该发生在 agent loop 之前
+    // 预热搜索应该发生在 fast path 分级之前
     expect(searches[0]).toBe("铁拳教育"); // 第一次搜索是预热
-    expect(viewCalled).toBe(true); // agent 确实调用了 viewResourceSnapshot
     // 预热的 snapshot 应该在 outcome 中
     expect(result.outcome.resourceSnapshots.some((s) => s.id === "snap_raw")).toBe(true);
+    expect(result.coverage.missing).toEqual(["S01E01"]);
   });
 
   it("gracefully degrades when pre-warming fails — workflow does not crash", async () => {
@@ -178,13 +163,13 @@ describe("runAcquisitionV2 — raw snapshot pre-warming integration", () => {
       targetSeasonDirectoryIds: { 1: "season" },
     });
 
-    // 工作流应该成功完成(虽然没有预热)
+    // 工作流应该成功完成(虽然没有预热),并诚实地报告未覆盖
     expect(result.coverage.missing).toEqual(["S01E01"]);
-    // agent 自己搜索了(callCount >= 2)
-    expect(callCount).toBeGreaterThanOrEqual(2);
+    // fast path 不做二次搜索:预热失败即无预搜快照,只消耗了那一次失败的预热调用。
+    expect(callCount).toBe(1);
   });
 
-  it("movie task also gets raw snapshot pre-warming", async () => {
+  it("movie task also gets raw snapshot pre-warming and runs the movie fast path", async () => {
     const searches: string[] = [];
     const provider: ResourceProvider = {
       search: async ({ keyword }) => {
@@ -201,38 +186,47 @@ describe("runAcquisitionV2 — raw snapshot pre-warming integration", () => {
         return emptySnapshot(keyword);
       },
     };
-    const executor = new FakeStorageExecutor({ directories: { staging: [], movie: [] } });
-
-    let promptChecked = false;
-    const model = new MockLanguageModelV3({
-      doGenerate: async ({ prompt }) => {
-        if (!promptChecked) {
-          const systemMsg = prompt.find((p) => p.role === "system");
-          expect(systemMsg?.content).toContain("1"); // prefetchedCandidateCount
-          expect(systemMsg?.content).toMatch(/RAW SNAPSHOT|活期文档/);
-          promptChecked = true;
-        }
-        return {
-          content: [{ type: "tool-call" as const, toolCallId: "c1", toolName: "reportNoCoverage", input: JSON.stringify({ reason: "test" }) }],
-          finishReason: { unified: "tool-calls" as const, raw: "tool-calls" as const },
-          usage: USAGE,
-          warnings: [],
-        };
+    // The movie fast path: m1 "流浪地球 4K" carries no year → B grade → no unique
+    // A → the movie selection arbitrator (the ONE LLM call of the fast path) picks
+    // m1 → transfer lands the film → flatten + canonical rename → mark MOVIE.
+    // (A movie's staging IS its movie dir, so both handles point at "movie".)
+    const executor = new FakeStorageExecutor({
+      directories: { staging: [], movie: [] },
+      transferOutcomes: {
+        m1: {
+          status: "succeeded",
+          providerMessage: "ok",
+          files: [
+            {
+              id: "f1",
+              storageDirectoryId: "movie",
+              name: "流浪地球.2019.4K.mkv",
+              sizeBytes: 2_000_000_000,
+              episodeCode: null,
+              providerFileId: "f1",
+            },
+          ],
+        },
       },
     });
 
-    await runAcquisitionV2({
+    const result = await runAcquisitionV2({
       provider,
       executor,
-      model,
+      model: jsonModel('{"candidateId":"m1","reasoning":"唯一候选"}'),
       workflowRunId: "run-movie-prime",
       target: { kind: "movie", title: "流浪地球", aliases: [], year: 2019, qualityPreference: "4K" },
-      stagingDirectoryId: "staging",
+      stagingDirectoryId: "movie",
       targetMovieDirectoryId: "movie",
     });
 
     expect(searches[0]).toBe("流浪地球"); // 预热
-    expect(promptChecked).toBe(true);
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual(["MOVIE"]);
+    // The film was flattened + canonical-renamed in the movie dir (no episode
+    // code → listVideoFiles still reports it, name is the canonical form).
+    const movieFiles = await executor.listVideoFiles("movie");
+    expect(movieFiles.map((f) => f.name)).toEqual(["流浪地球 (2019).mkv"]);
   });
 
   it("auditEvents surface from sandbox through orchestrator (病4)", async () => {
@@ -256,9 +250,10 @@ describe("runAcquisitionV2 — raw snapshot pre-warming integration", () => {
       targetSeasonDirectoryIds: { 1: "season1_dir" },
     });
 
-    // The agent searches "Show" which was pre-warmed, hitting dedup → search_dedup event.
-    // This proves audit events flow from sandbox → orchestrator → workflow → bridge.
-    expect(result.auditEvents.some((e) => e.type === "search_dedup")).toBe(true);
-    expect(result.auditEvents[0]?.message).toContain("重复搜索");
+    // The fast path grades the empty raw snapshot and reports no coverage in code
+    // (no agent search), recording the no_coverage_reported audit — proving audit
+    // events still flow sandbox → orchestrator → workflow → bridge.
+    expect(result.auditEvents.some((e) => e.type === "no_coverage_reported")).toBe(true);
+    expect(result.auditEvents[0]?.message).toContain("上报无覆盖");
   });
 });

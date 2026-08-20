@@ -296,6 +296,7 @@ If one pack covers multiple seasons, distribute its files in ONE plan with a mov
   return runAcquisitionAgent({
     sandbox,
     model,
+    title: target.title,
     system: buildTvAnimeSystemPrompt(promptOptions),
     prompt,
     ...(promptOptions.storageProvider === undefined ? {} : { storageProvider: promptOptions.storageProvider }),
@@ -315,6 +316,7 @@ Find the one correct film, transfer it, keep the directory clean, mark it presen
   return runAcquisitionAgent({
     sandbox,
     model,
+    title: target.title,
     system: buildMovieSystemPrompt(promptOptions),
     prompt,
     movie: true,

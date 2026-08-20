@@ -183,6 +183,9 @@ interface TmdbTvDetails {
   }>;
   genres: number[];
   origin_country: string[];
+  /** Chinese translated names from append_to_response=translations (tv → data.name).
+   *  Empty when the response carried no (parseable) translations — never a failure. */
+  translations: string[];
 }
 
 interface TmdbSeasonDetails {
@@ -203,6 +206,9 @@ interface TmdbMovieDetails {
   backdrop_path: string | null;
   genres: number[];
   origin_country: string[];
+  /** Chinese translated titles from append_to_response=translations (movie → data.title).
+   *  Empty when the response carried no (parseable) translations — never a failure. */
+  translations: string[];
 }
 
 export class TmdbMetadataProvider {
@@ -223,6 +229,9 @@ export class TmdbMetadataProvider {
     return parseTvDetails(
       await this.get(`tv/${tmdbId}`, {
         language: this.language,
+        // Chinese translated names ride the details payload so MediaTitle.aliases
+        // can carry the 译名 the resource sites use (search fallback + scoring).
+        append_to_response: "translations",
       }),
     );
   }
@@ -236,7 +245,13 @@ export class TmdbMetadataProvider {
   }
 
   async getMovieDetails(tmdbId: number): Promise<TmdbMovieDetails> {
-    return parseMovieDetails(await this.get(`movie/${tmdbId}`, { language: this.language }));
+    return parseMovieDetails(
+      await this.get(`movie/${tmdbId}`, {
+        language: this.language,
+        // Chinese translated titles (see getTvDetails — movies use data.title).
+        append_to_response: "translations",
+      }),
+    );
   }
 
   private async get(path: string, query: Record<string, string>): Promise<unknown> {
@@ -374,7 +389,7 @@ export async function prepareTrackingTarget(input: TvTrackingTargetInput): Promi
       title,
       originalTitle: normalizeTitle(details.original_name) || title,
       year: yearFromDate(details.first_air_date),
-      aliases: aliasList(title, details.original_name),
+      aliases: aliasList(title, details.original_name, details.translations),
       posterPath: details.poster_path,
       backdropPath: details.backdrop_path,
       overview: details.overview,
@@ -428,7 +443,7 @@ export async function prepareMovieTarget(input: {
       originalTitle: normalizeTitle(details.original_title) || title,
       year: yearFromDate(details.release_date),
       releaseDate: details.release_date || null,
-      aliases: aliasList(title, details.original_title),
+      aliases: aliasList(title, details.original_title, details.translations),
       posterPath: details.poster_path,
       backdropPath: details.backdrop_path,
       overview: details.overview,
@@ -492,7 +507,7 @@ export async function prepareSeriesTarget(input: {
       title,
       originalTitle: normalizeTitle(details.original_name) || title,
       year: yearFromDate(details.first_air_date),
-      aliases: aliasList(title, details.original_name),
+      aliases: aliasList(title, details.original_name, details.translations),
       posterPath: details.poster_path,
       backdropPath: details.backdrop_path,
       overview: details.overview,
@@ -558,6 +573,7 @@ function parseTvDetails(value: unknown): TmdbTvDetails {
     origin_country: Array.isArray(value["origin_country"])
       ? value["origin_country"].filter((country): country is string => typeof country === "string")
       : [],
+    translations: parseChineseTranslations(value, "tv"),
   };
 }
 
@@ -586,6 +602,7 @@ function parseMovieDetails(value: unknown): TmdbMovieDetails {
           .map((country) => country["iso_3166_1"])
           .filter((code): code is string => typeof code === "string")
       : [],
+    translations: parseChineseTranslations(value, "movie"),
   };
 }
 
@@ -807,16 +824,62 @@ function latestAiredEpisodeForSeason(
   );
 }
 
+/** Chinese translation language codes TMDB may tag a 译名 entry with. TMDB mostly
+ *  emits plain "zh" (+ iso_3166_1 CN/TW/HK/SG disambiguating), but some entries
+ *  carry the full "zh-TW"/"zh-HK" form — accept both so no 译名 is ever missed. */
+const ZH_TRANSLATION_LANGS = new Set(["zh", "zh-CN", "zh-TW", "zh-HK", "zh-SG"]);
+
+/** Extract Chinese translated names from a details response's
+ *  translations.translations[] (append_to_response=translations). Movie entries
+ *  carry the translated title in data.title; TV entries in data.name. Missing /
+ *  malformed payload → [] (silent degrade — a details response without
+ *  translations must keep the pre-translations behavior, never throw). */
+function parseChineseTranslations(value: Record<string, unknown>, mediaType: "tv" | "movie"): string[] {
+  const container = isRecord(value["translations"]) ? value["translations"] : null;
+  const entries = container && Array.isArray(container["translations"]) ? container["translations"] : [];
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (!isRecord(entry)) continue;
+    const lang = typeof entry["iso_639_1"] === "string" ? entry["iso_639_1"] : "";
+    if (!ZH_TRANSLATION_LANGS.has(lang)) continue;
+    const data = isRecord(entry["data"]) ? entry["data"] : {};
+    const name = mediaType === "tv" ? data["name"] : data["title"];
+    if (typeof name === "string" && name.trim()) {
+      names.push(name.trim());
+    }
+  }
+  return names;
+}
+
 function normalizeTitle(value: string): string {
   return value.trim();
 }
 
-function aliasList(title: string, originalTitle: string): string[] {
-  const normalizedOriginal = normalizeTitle(originalTitle);
-  if (!normalizedOriginal || normalizedOriginal === title) {
-    return [];
+/** The alias list carried on MediaTitle: the original title plus every Chinese
+ *  translated name, deduped and with anything identical to the main title /
+ *  original title dropped (those are already carried as their own fields).
+ *  Translations come from append_to_response=translations and are optional —
+ *  absent payloads yield the legacy [originalTitle] (or [] when it duplicates). */
+function aliasList(title: string, originalTitle: string, translations: string[] = []): string[] {
+  const titleNorm = normalizeTitle(title);
+  const originalNorm = normalizeTitle(originalTitle);
+  const seen = new Set<string>();
+  const aliases: string[] = [];
+  const push = (value: string, excluded: ReadonlySet<string>) => {
+    const normalized = normalizeTitle(value);
+    if (normalized && !excluded.has(normalized) && !seen.has(normalized)) {
+      seen.add(normalized);
+      aliases.push(normalized);
+    }
+  };
+  // The original title is the first alias — dropped only when it duplicates the
+  // main title (legacy behavior). Translations exclude BOTH title and original.
+  push(originalTitle, new Set([titleNorm]));
+  const translationExclusions = new Set([titleNorm, originalNorm]);
+  for (const name of translations) {
+    push(name, translationExclusions);
   }
-  return [normalizedOriginal];
+  return aliases;
 }
 
 function yearFromDate(value: string): number {

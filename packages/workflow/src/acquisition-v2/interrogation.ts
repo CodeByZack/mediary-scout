@@ -178,6 +178,8 @@ export async function runInterrogation(
     : INTERROGATION_QUESTIONS;
   for (const question of questions) {
     messages.push({ role: "user", content: question.prompt });
+    const modelId = (request.model as { modelId?: string }).modelId ?? "unknown";
+    console.log(`[AI] 问询 ${question.id} model=${modelId} 场景=${request.scenario.slice(0, 60)}`);
     const result = await generateText({
       model: request.model,
       system: request.systemPrompt,

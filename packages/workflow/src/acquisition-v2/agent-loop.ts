@@ -1,6 +1,6 @@
 import { generateText, stepCountIs, type LanguageModel, type ToolSet } from "ai";
 import { z } from "zod";
-import type { TaskSandbox } from "./sandbox.js";
+import type { SearchToolResult, TaskSandbox, TransferToolResult } from "./sandbox.js";
 import { readSkillSection, SKILL_SECTION_NAMES } from "./skill.js";
 import {
   DEFAULT_MAX_STEPS,
@@ -45,9 +45,15 @@ async function asEvidence(run: () => Promise<unknown>): Promise<unknown> {
  */
 function wrapTools(
   tools: ToolSet,
-  options: { onToolCall?: (toolName: string, args: Record<string, unknown>) => void; log: boolean },
+  options: {
+    onToolCall?: (toolName: string, args: Record<string, unknown>) => void;
+    log: boolean;
+    /** Always-on `[mediary-run]` step log for the key acquisition tools
+     *  (searchResources / transferCandidate / transferUntilLanded). */
+    stepLog?: (toolName: string, args: unknown, result: unknown) => void;
+  },
 ): ToolSet {
-  if (!options.onToolCall && !options.log) {
+  if (!options.onToolCall && !options.log && !options.stepLog) {
     return tools;
   }
   const wrapped: Record<string, unknown> = {};
@@ -74,6 +80,13 @@ function wrapTools(
         if (options.log) {
           console.log(`[agent] ← ${name}: ${JSON.stringify(result).slice(0, 400)}`);
         }
+        if (options.stepLog) {
+          try {
+            options.stepLog(name, args, result);
+          } catch {
+            // step logging is observability — never let it break the tool call
+          }
+        }
         return result;
       },
     };
@@ -96,11 +109,91 @@ export function buildSandboxToolSet(
      *  can land external subtitle urls (transferSubtitleUrl capability probe —
      *  today 115; any brand lights up by implementing the method). */
     subtitle?: boolean;
+    /** The task title — surfaced in the always-on `[mediary-run]` step logs. */
+    title?: string;
     onToolCall?: (toolName: string, args: Record<string, unknown>) => void;
     /** The run's drive brand — selects the brand-specific dead-links section. */
     storageProvider?: string;
   } = {},
 ): ToolSet {
+  /** Always-on stdout step log for the key acquisition tools — the fnOS app log
+   *  twin of fast-path.ts's stepLog, so an agent-path task shows the same
+   *  `[mediary-run][{runId}] {title} | {step}: {detail}` trace. Only title / id /
+   *  counts / conclusion are printed, never credentials or links. */
+  const stepLog = (toolName: string, args: unknown, result: unknown): void => {
+    const prefix = `[mediary-run][${sandbox.logRunId}] ${options.title ?? "agent"}`;
+    const emit = (step: string, detail: string, level: "log" | "warn" | "error" = "log") => {
+      const line = `${prefix} | ${step}: ${detail}`;
+      if (level === "warn") console.warn(line);
+      else if (level === "error") console.error(line);
+      else console.log(line);
+    };
+
+    if (toolName === "searchResources") {
+      const keyword = (args as { keyword?: string }).keyword ?? "";
+      const errorResult = result as { error?: string };
+      if (errorResult.error) {
+        emit("搜索", `关键词 "${keyword}" 失败:${errorResult.error}`, "error");
+        return;
+      }
+      const searchResult = result as SearchToolResult;
+      const count = searchResult.snapshot?.candidates?.length ?? 0;
+      const note = searchResult.refused
+        ? ` (已拒绝:${searchResult.refused})`
+        : searchResult.deduped
+          ? " (dedup 命中)"
+          : "";
+      emit("搜索", `关键词 "${keyword}" 命中 ${count} 条${note}`);
+      return;
+    }
+
+    if (toolName === "transferCandidate") {
+      const candidateId = (args as { candidateId?: string }).candidateId ?? "?";
+      const errorResult = result as { error?: string };
+      if (errorResult.error) {
+        emit("转存", `候选 ${candidateId} 失败:${errorResult.error}`, "error");
+        return;
+      }
+      const transfer = result as TransferToolResult;
+      if (transfer.systemicBlock) {
+        emit("转存", `候选 ${candidateId} 系统阻塞:${transfer.systemicBlock.reason}`, "error");
+      } else if (transfer.staging.length === 0) {
+        emit("转存", `候选 ${candidateId} 死链(未落盘)`, "warn");
+      } else {
+        emit("转存", `候选 ${candidateId} 落盘 ${transfer.staging.length} 文件`);
+      }
+      return;
+    }
+
+    if (toolName === "transferUntilLanded") {
+      const errorResult = result as { error?: string };
+      if (errorResult.error) {
+        emit("转存", `transferUntilLanded 失败:${errorResult.error}`, "error");
+        return;
+      }
+      const landed = result as {
+        landed: unknown[];
+        transferredCandidateId: string | null;
+        attempts: Array<{ candidateId: string; status: string }>;
+        systemicBlock?: { reason: string };
+      };
+      if (landed.systemicBlock) {
+        emit("转存", `系统阻塞:${landed.systemicBlock.reason}`, "error");
+      } else if (landed.transferredCandidateId) {
+        emit(
+          "转存",
+          `候选 ${landed.transferredCandidateId} 落盘(尝试 ${landed.attempts.length} 次,落盘 ${landed.landed.length} 文件)`,
+        );
+      } else {
+        emit(
+          "转存",
+          `未落盘(尝试 ${landed.attempts.length} 次:${landed.attempts.map((a) => a.candidateId).join(",")})`,
+          "warn",
+        );
+      }
+      return;
+    }
+  };
   const tools: Record<string, unknown> = {
     readSkill: {
       description:
@@ -236,6 +329,7 @@ export function buildSandboxToolSet(
   return wrapTools(toolSet, {
     ...(options.onToolCall ? { onToolCall: options.onToolCall } : {}),
     log: process.env.MEDIA_TRACK_AGENT_LOG === "1",
+    stepLog,
   });
 }
 
@@ -244,6 +338,8 @@ export interface AcquisitionAgentRequest {
   model: LanguageModel;
   system: string;
   prompt: string;
+  /** The task title — surfaced in the always-on `[mediary-run]` step logs. */
+  title?: string;
   /** Hard ceiling on tool-loop steps. The loop also ends earlier when the model
    *  stops calling tools, or when a stop fires (repetition / systemic block /
    *  successful reportNoCoverage — the terminal no-coverage declaration). */
@@ -283,6 +379,7 @@ export async function runAcquisitionAgent(
   const onProgress = request.onProgress;
   const tools = buildSandboxToolSet(request.sandbox, {
     movie: request.movie ?? false,
+    ...(request.title === undefined ? {} : { title: request.title }),
     ...(request.subtitle ? { subtitle: true } : {}),
     ...(request.storageProvider === undefined ? {} : { storageProvider: request.storageProvider }),
     ...(onProgress
@@ -293,6 +390,14 @@ export async function runAcquisitionAgent(
       : {}),
   });
   const maxSteps = request.maxSteps ?? DEFAULT_MAX_STEPS;
+  // The agent loop IS the AI call — mark it clearly in the run log: which model,
+  // which task, and how many steps the loop is allowed. The end marker prints the
+  // same run id so every AI round-trip has a symmetric entry/exit pair. The
+  // storage brand is carried over so the user can see which 网盘 the task runs on.
+  const modelId = (request.model as { modelId?: string }).modelId ?? "unknown";
+  const aiPrefix = `[mediary-run][${request.sandbox.logRunId}] ${request.title ?? "agent"}`;
+  const provider = request.storageProvider ?? "unknown";
+  console.log(`[AI] ${aiPrefix} | 开始 agent 循环 model=${modelId} 网盘=${provider} 上限=${maxSteps} 步`);
   const result = await generateText({
     model: request.model,
     system: request.system,
@@ -325,6 +430,7 @@ export async function runAcquisitionAgent(
       return system ? { system } : undefined;
     },
   });
+  console.log(`[AI] ${aiPrefix} | 结束 agent 循环 steps=${result.steps?.length ?? 0} finish=${result.finishReason}`);
   const steps = result.steps?.length ?? 0;
   if (process.env.MEDIA_TRACK_AGENT_LOG === "1") {
     const total = result.totalUsage?.totalTokens;

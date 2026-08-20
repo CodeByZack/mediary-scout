@@ -82,6 +82,10 @@ function stripQualitySubtitleTokens(keyword: string): { keyword: string; strippe
  */
 export interface TaskSandboxOptions {
   provider: ResourceProviderV2;
+  /** Run-scoped identifier for stdout step logs (`[mediary-run][{runId}] …`).
+   *  Wired by the orchestrator from the workflow run; tests omit it (falls back
+   *  to the staging dir id, see logRunId). */
+  workflowRunId?: string;
   /** Max distinct PanSou searches per task (the system's search budget). */
   searchBudget?: number;
   /** Scoped storage + the staging handle this task may transfer into. */
@@ -166,6 +170,8 @@ export class TaskSandbox {
   private readonly searchBudget: number;
   private readonly storage: StorageV2 | undefined;
   private readonly stagingDirectoryId: string | undefined;
+  /** Run-scoped id for stdout step logs (see logRunId). */
+  private readonly workflowRunId: string | undefined;
   /** TV: season number -> scoped Season directory (multi-season distribution). */
   private readonly seasonDirs: Map<number, string>;
   /** A movie task's one target directory (movies have no seasons). */
@@ -205,6 +211,7 @@ export class TaskSandbox {
 
   constructor(options: TaskSandboxOptions) {
     this.provider = options.provider;
+    this.workflowRunId = options.workflowRunId;
     this.subtitleFallback = options.subtitleFallback ?? false;
     // Movie 8+2: default to MOVIE_SEARCH_BUDGET (10) with a reserve at 8 when the
     // subtitle fallback is on; otherwise the normal hard-8 (no reserve zone).
@@ -223,6 +230,13 @@ export class TaskSandbox {
     this.canonicalTitle = options.canonicalTitle;
     this.canonicalYear = options.canonicalYear;
     this.subtitleProvider = options.subtitleProvider;
+  }
+
+  /** The run id surfaced in step logs (`[mediary-run][{id}] …`): the workflow run
+   *  id when wired by the orchestrator, else the staging dir id (unique per run),
+   *  else "-" (bare sandbox tests). */
+  get logRunId(): string {
+    return this.workflowRunId ?? this.stagingDirectoryId ?? "-";
   }
 
   /** Every scoped target directory (all seasons + the movie) — the union used for
@@ -741,31 +755,40 @@ export class TaskSandbox {
    *  `Title (Year).ext` with the .sc/.tc 简繁 infix preserved
    *  (`Title (Year).sc.ass`) — the same infix rule renameSubtitle teaches.
    *  Shapes are generated, not agent-submitted, so no guard failures are
-   *  possible here. */
+   *  possible here. Each rename is traced to stdout as 原名 → 新名 so the
+   *  run log shows the movie's 转存落盘 file and its final 网盘 name. */
   private async renameMovieMediaToCanonical(storage: StorageV2, directoryId: string): Promise<void> {
     const year = this.canonicalYear ?? "";
     const title = this.canonicalTitle!;
+    const runId = this.logRunId;
     for (const file of await storage.listTree({ directoryId })) {
       // All media files sit at the movie dir root after the lift — path is the
       // bare filename there; a basename split keeps this robust regardless.
       const sourceName = file.path.split("/").pop() ?? file.path;
+      const emitRename = (newName: string) => {
+        console.log(`[mediary-run][${runId}] ${title} | 改名: ${sourceName} → ${newName}`);
+      };
       if (file.isVideo) {
+        const newName = canonicalMovieFileName({ title, year, sourceName });
         await storage.renameFile({
           directoryId,
           fileId: file.id,
-          newName: canonicalMovieFileName({ title, year, sourceName }),
+          newName,
         });
+        emitRename(newName);
       } else if (file.isSubtitle) {
         const infix = /\.(sc|tc)(\.[A-Za-z0-9]+)$/i.exec(sourceName);
         // infix[1] is "sc"/"tc" WITHOUT the leading dot (the regex consumed it as
         // the separator) — rebuild with the dot so `Show.zh.sc.ass` →
         // `Title (Year).sc.ass`, not `Title (Year)sc.ass`.
         const suffix = infix ? `.${infix[1]}${infix[2]}` : (/\.[A-Za-z0-9]+$/.exec(sourceName)?.[0] ?? "");
+        const newName = `${title} (${year})${suffix}`;
         await storage.renameFile({
           directoryId,
           fileId: file.id,
-          newName: `${title} (${year})${suffix}`,
+          newName,
         });
+        emitRename(newName);
       }
     }
   }
@@ -913,6 +936,26 @@ export class TaskSandbox {
     return { document, candidateCount: total };
   }
 
+  /** Fast-path access: the primed raw snapshot's id (for snapshot-bound
+   *  transfers) and its candidates (id + title), or null when nothing primed.
+   *  Lets the fast-path orchestrator grade candidates in code without re-parsing
+   *  the viewResourceSnapshot document. */
+  rawSnapshotView(): {
+    snapshotId: string;
+    candidates: Array<{ id: string; title: string }>;
+  } | null {
+    if (!this.rawSnapshot) {
+      return null;
+    }
+    return {
+      snapshotId: this.rawSnapshot.id,
+      candidates: this.rawSnapshot.candidates.map((candidate) => ({
+        id: candidate.id,
+        title: candidate.title,
+      })),
+    };
+  }
+
   /** Pre-warm the assrt subtitle snapshot (system-initiated, like primeRawSnapshot).
    *  Stores candidates so viewSubtitleSnapshot can render them repeatedly for free.
    *  Soft-fails (empty snapshot) on any provider miss — never throws, so a flaky
@@ -952,6 +995,13 @@ export class TaskSandbox {
       document += `[${candidate.id}] ${candidate.title}${lang}${evidence ? ` (${evidence})` : ""}\n`;
     }
     return { document, candidateCount: candidates.length };
+  }
+
+  /** Read-only access to the raw pre-warmed subtitle candidates (the fast path's
+   *  deterministic picker consumes the STRUCTURED list, not the rendered doc).
+   *  Empty array when unprimed or soft-failed. */
+  subtitleCandidates(): AssrtCandidate[] {
+    return this.subtitleSnapshot ?? [];
   }
 
   /** Land a chosen subtitle package's files into staging via the 115 offline-task

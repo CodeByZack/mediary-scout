@@ -68,3 +68,6 @@ docs/images/devto-cover.*
 # fnOS fpk build artifacts (generated, not committed)
 deploy/fpk/app/server/
 deploy/fpk/dist/
+MOVIE_FAST_PATH_TODO.md
+FASTPATH_ALIAS_LOG_TODO.md
+FASTPATH_ALIAS_RESEARCH_TODO.md

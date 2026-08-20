@@ -63,7 +63,7 @@ describe("TmdbMetadataProvider", () => {
     });
 
     expect(requests).toEqual([
-      "https://api.themoviedb.org/3/tv/289271?language=zh-CN",
+      "https://api.themoviedb.org/3/tv/289271?language=zh-CN&append_to_response=translations",
       "https://api.themoviedb.org/3/tv/289271/season/1?language=zh-CN",
     ]);
     expect(target).toEqual({
@@ -155,6 +155,132 @@ describe("TmdbMetadataProvider", () => {
       latestAiredSource: "metadata",
     });
     expect(target.keyword).toBe("Show"); // quality preference must NOT pollute the keyword
+  });
+
+  it("merges TMDB Chinese translations into TV aliases (zh/zh-TW/zh-HK) deduped against the main title", async () => {
+    const provider = new TmdbMetadataProvider({
+      readToken: "token",
+      fetchJson: async (url) => {
+        if (url.includes("/tv/555?")) {
+          return {
+            id: 555,
+            name: "间谍过家家",
+            original_name: "SPY×FAMILY",
+            first_air_date: "2022-04-09",
+            number_of_episodes: 12,
+            overview: "",
+            last_episode_to_air: { season_number: 1, episode_number: 12 },
+            seasons: [{ season_number: 1, episode_count: 12 }],
+            translations: {
+              translations: [
+                // zh(CN) and zh-HK translate back to the SAME 中文名 as the main
+                // title → must be dropped (title is already its own field).
+                { iso_639_1: "zh", iso_3166_1: "CN", data: { name: "间谍过家家" } },
+                // tv translations carry the name in data.name.
+                { iso_639_1: "zh-TW", iso_3166_1: "TW", data: { name: "SPY×FAMILY 间谍家家酒" } },
+                { iso_639_1: "zh-HK", iso_3166_1: "HK", data: { name: "间谍过家家" } },
+                { iso_639_1: "zh-SG", iso_3166_1: "SG", data: { name: "间谍过家家" } },
+                // non-Chinese entries are ignored.
+                { iso_639_1: "ja", iso_3166_1: "JP", data: { name: "スパイファミリー" } },
+                { iso_639_1: "en", iso_3166_1: "US", data: { name: "SPY×FAMILY" } },
+              ],
+            },
+          };
+        }
+        if (url.includes("/tv/555/season/1?")) {
+          return { season_number: 1, episodes: [{ episode_number: 1, air_date: "2022-04-09" }] };
+        }
+        throw new Error(`Unexpected URL ${url}`);
+      },
+    });
+
+    const target = await prepareTrackingTarget({
+      tmdbId: 555,
+      mediaType: "tv",
+      seasonNumber: 1,
+      qualityPreference: "4K",
+      metadataProvider: provider,
+    });
+
+    // original_title + the zh-TW 译名 (data.name); zh/zh-HK/zh-SG duplicates of the
+    // main title and the en/ja entries are all excluded.
+    expect(target.title.aliases).toEqual(["SPY×FAMILY", "SPY×FAMILY 间谍家家酒"]);
+    expect(target.title.aliases).not.toContain("间谍过家家");
+  });
+
+  it("merges TMDB Chinese translations into movie aliases from data.title", async () => {
+    const provider = new TmdbMetadataProvider({
+      readToken: "token",
+      fetchJson: async (url) => {
+        if (url.includes("/movie/872585?")) {
+          return {
+            id: 872585,
+            title: "奥本海默",
+            original_title: "Oppenheimer",
+            release_date: "2023-07-21",
+            overview: "",
+            poster_path: null,
+            backdrop_path: null,
+            genres: [],
+            production_countries: [{ iso_3166_1: "US", name: "United States" }],
+            translations: {
+              translations: [
+                { iso_639_1: "zh", iso_3166_1: "CN", data: { title: "奥本海默" } },
+                // movie translations carry the title in data.title.
+                { iso_639_1: "zh-TW", iso_3166_1: "TW", data: { title: "奧本海默" } },
+                { iso_639_1: "zh-HK", iso_3166_1: "HK", data: { title: "奧本海默" } },
+                { iso_639_1: "en", iso_3166_1: "US", data: { title: "Oppenheimer" } },
+              ],
+            },
+          };
+        }
+        throw new Error(`Unexpected URL ${url}`);
+      },
+    });
+
+    const target = await prepareMovieTarget({ tmdbId: 872585, qualityPreference: "4K", metadataProvider: provider });
+
+    // original_title + the zh-TW/zh-HK 译名 (deduped); zh duplicate of the main
+    // title and the en entry (=== originalTitle) are dropped.
+    expect(target.title.aliases).toEqual(["Oppenheimer", "奧本海默"]);
+  });
+
+  it("degrades silently when translations are missing or malformed (legacy alias behavior)", async () => {
+    const provider = new TmdbMetadataProvider({
+      readToken: "token",
+      fetchJson: async (url) => {
+        if (url.includes("/tv/777?")) {
+          return {
+            id: 777,
+            name: "异人之下",
+            original_name: "I-Ren",
+            first_air_date: "2023-08-04",
+            number_of_episodes: 27,
+            overview: "",
+            last_episode_to_air: { season_number: 1, episode_number: 27 },
+            seasons: [{ season_number: 1, episode_count: 27 }],
+            // malformed: translations is a string, not an object
+            translations: "broken",
+          };
+        }
+        if (url.includes("/tv/777/season/1?")) {
+          return { season_number: 1, episodes: [{ episode_number: 1, air_date: "2023-08-04" }] };
+        }
+        throw new Error(`Unexpected URL ${url}`);
+      },
+    });
+
+    const target = await prepareTrackingTarget({
+      tmdbId: 777,
+      mediaType: "tv",
+      seasonNumber: 1,
+      qualityPreference: "4K",
+      metadataProvider: provider,
+    });
+
+    // No translations parsed → the legacy [originalTitle] alias only.
+    expect(target.title.aliases).toEqual(["I-Ren"]);
+    expect(target.title.title).toBe("异人之下");
   });
 });
 

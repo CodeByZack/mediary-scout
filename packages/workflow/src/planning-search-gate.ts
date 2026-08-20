@@ -41,8 +41,9 @@ export function normalizeSearchKeyword(keyword: string): string {
 /** Normalize for title-substring matching: lowercase + drop whitespace and the
  *  common separators that differ between a title and a search keyword, so
  *  "Citizen Vigilante 2026" contains "citizen vigilante" and "公民义警 电影"
- *  contains "公民义警". */
-function normalizeForTitleMatch(value: string): string {
+ *  contains "公民义警". Exported for the fast-path candidate grader (the same
+ *  title-vs-candidate comparison, done in code instead of the agent's prompt). */
+export function normalizeForTitleMatch(value: string): string {
   return value.toLowerCase().replace(/[\s·:：\-_.,，、。]/g, "");
 }
 
