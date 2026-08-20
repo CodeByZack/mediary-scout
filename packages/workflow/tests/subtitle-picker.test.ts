@@ -3,7 +3,12 @@ import { hasChineseSubtitle, matchesPreference, pickSubtitle } from "../src/acqu
 import type { AssrtCandidate } from "../src/subtitle-provider.js";
 
 function candidate(partial: Partial<AssrtCandidate> & { id: number; title: string }): AssrtCandidate {
-  return { lang: "", voteScore: undefined, releaseSite: undefined, uploadTime: undefined, ...partial };
+  const out: AssrtCandidate = { id: partial.id, title: partial.title, lang: partial.lang ?? "" };
+  // exactOptionalPropertyTypes: 可选属性只在确有值时赋值，绝不给 undefined。
+  if (partial.voteScore !== undefined) out.voteScore = partial.voteScore;
+  if (partial.releaseSite !== undefined) out.releaseSite = partial.releaseSite;
+  if (partial.uploadTime !== undefined) out.uploadTime = partial.uploadTime;
+  return out;
 }
 
 describe("subtitle-picker — deterministic 中字 package selection", () => {
