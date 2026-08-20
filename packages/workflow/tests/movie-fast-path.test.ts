@@ -11,6 +11,7 @@ import type { MediaTitle, ResourceSnapshot } from "../src/domain.js";
 import { FakeStorageExecutor } from "../src/fakes.js";
 import { runMovieAcquisitionV2 } from "../src/movie-workflow-v2.js";
 import type { ResourceProvider } from "../src/ports.js";
+import type { AssrtCandidate, AssrtSubtitleFile } from "../src/subtitle-provider.js";
 
 /** Let the trace sink's fire-and-forget append chain settle (same as
  *  agent-trace-sink.test.ts). */
@@ -56,6 +57,10 @@ interface SetupOptions {
   extraResults?: Record<string, Array<{ id: string; title: string }>>;
   /** Counts every provider.search call (primary prime + fallback rounds). */
   onSearch?: () => void;
+  /** Override the canonical title/year used for flatten renames (the fake is
+   *  hard-wired to 流浪地球 — foreign-title tests must pass their own). */
+  canonicalTitle?: string;
+  canonicalYear?: number;
 }
 
 /** Movie setup: staging === the movie dir (flatten-in-place, per §5), so BOTH
@@ -76,8 +81,8 @@ async function createMovieSetup(options: SetupOptions) {
     stagingDirectoryId: movieDir,
     targetMovieDirectoryId: movieDir,
     need: ["MOVIE"],
-    canonicalTitle: "流浪地球",
-    canonicalYear: 2019,
+    canonicalTitle: options.canonicalTitle ?? "流浪地球",
+    canonicalYear: options.canonicalYear ?? 2019,
     titleTerms: ["流浪地球"],
   });
   await sandbox.primeRawSnapshot("流浪地球");
@@ -714,5 +719,137 @@ describe("runMovieFastPathAcquisition — 步骤写入 agent_steps（Task D）",
       "reportNoCoverage",
     ]);
     expect(steps[2]!.activity).toBe("暂无资源(快照为空)");
+  });
+});
+/** A fake assrt provider spy (same shape as v2-sandbox-subtitle.test.ts). */
+type FakeAssrtProvider = {
+  search(keyword: string): Promise<AssrtCandidate[]>;
+  detail(id: number): Promise<AssrtSubtitleFile[]>;
+};
+
+function makeAssrtProvider(
+  searchResults: AssrtCandidate[],
+  detailByCandidate: Record<number, AssrtSubtitleFile[]>,
+  spy?: { searchCalls?: number; detailCalls?: number },
+): FakeAssrtProvider {
+  return {
+    search: async (_keyword: string) => {
+      spy?.searchCalls !== undefined && (spy.searchCalls += 1);
+      return searchResults;
+    },
+    detail: async (id: number) => {
+      spy?.detailCalls !== undefined && (spy.detailCalls += 1);
+      return detailByCandidate[id] ?? [];
+    },
+  };
+}
+
+describe("runMovieFastPathAcquisition — deterministic subtitle stage (zero LLM)", () => {
+  const foreignTarget: MovieTarget = {
+    title: "Dune",
+    aliases: ["沙丘"],
+    year: 2024,
+    qualityPreference: "4K",
+  };
+
+  it("0 assrt candidates → video lands alone, no crash", async () => {
+    const { sandbox, storage, movieDir } = await createMovieSetup({
+      candidates: [{ id: "c1", title: "Dune.2024.4K.中字" }],
+      packs: { c1: { files: [{ path: "Dune.2024.4K.mkv", sizeBytes: 2_000_000_000 }] } },
+      canonicalTitle: "Dune",
+      canonicalYear: 2024,
+    });
+    // Prime the snapshot as the orchestrator would (0 candidates).
+    const spy = { searchCalls: 0, detailCalls: 0 };
+    const assrt = makeAssrtProvider([], {}, spy);
+    await sandbox.primeSubtitleSnapshot("Dune", assrt);
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: foreignTarget,
+      subtitle: { provider: assrt, preferredLanguage: "简体中文" },
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toContain(
+      "Dune (2024).mkv",
+    );
+  });
+
+  it("lands the language-preference-matching assrt package, flatten renames video + subtitle together", async () => {
+    const { sandbox, storage, movieDir } = await createMovieSetup({
+      candidates: [{ id: "c1", title: "Dune.2024.4K.中字" }],
+      packs: { c1: { files: [{ path: "Dune.2024.4K.mkv", sizeBytes: 2_000_000_000 }] } },
+      canonicalTitle: "Dune",
+      canonicalYear: 2024,
+    });
+    const spy = { searchCalls: 0, detailCalls: 0 };
+    const assrt = makeAssrtProvider(
+      [
+        { id: 7001, title: "沙丘 双语", lang: "英 简", voteScore: 8, releaseSite: "YYeTs" },
+        { id: 7002, title: "Dune ENG", lang: "英", voteScore: 9, releaseSite: "随便组" },
+      ],
+      { 7001: [{ filename: "Dune.2024.zh.ass", url: "http://file0.assrt.net/onthefly/7001/-/1/a.ass?api=1" }] },
+      spy,
+    );
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: foreignTarget,
+      subtitle: { provider: assrt, preferredLanguage: "简体中文" },
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(spy.detailCalls).toBe(1); // only the picked package's detail() hit
+    const files = (await storage.listTree({ directoryId: movieDir })).map((f) => f.path);
+    expect(files).toContain("Dune (2024).mkv");
+    // flattenMovie auto-renames the subtitle to the canonical prefix too.
+    expect(files.some((f) => f.startsWith("Dune (2024)") && f.endsWith(".ass"))).toBe(true);
+  });
+
+  it("preferred package detail() yields nothing → video alone, soft target (no crash)", async () => {
+    const { sandbox, storage, movieDir } = await createMovieSetup({
+      candidates: [{ id: "c1", title: "Dune.2024.4K.中字" }],
+      packs: { c1: { files: [{ path: "Dune.2024.4K.mkv", sizeBytes: 2_000_000_000 }] } },
+      canonicalTitle: "Dune",
+      canonicalYear: 2024,
+    });
+    const assrt = makeAssrtProvider([{ id: 9001, title: "Dune zh", lang: "简" }], {}); // detail -> []
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: foreignTarget,
+      subtitle: { provider: assrt, preferredLanguage: "简体中文" },
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "Dune (2024).mkv",
+    ]);
+  });
+
+  it("国产片 even IF wired stays soft (orchestrator simply never wires it)", async () => {
+    const { sandbox, storage, movieDir } = await createMovieSetup({
+      candidates: [{ id: "c1", title: "流浪地球.2019.4K" }],
+      packs: { c1: { files: [{ path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 }] } },
+    });
+    const assrt = makeAssrtProvider(
+      [{ id: 1, title: "流浪地球 zh", lang: "简" }],
+      { 1: [{ filename: "sub.ass", url: "http://file0.assrt.net/onthefly/1/-/1/a.ass?api=1" }] },
+    );
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(),
+      target: movieTarget,
+      subtitle: { provider: assrt, preferredLanguage: "简体中文" },
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    const files = (await storage.listTree({ directoryId: movieDir })).map((f) => f.path);
+    expect(files).toContain("流浪地球 (2019).mkv");
   });
 });

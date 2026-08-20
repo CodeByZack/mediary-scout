@@ -7,19 +7,11 @@ import { CandidateRegistry } from "./candidate-registry.js";
 import type { DeadLinkStore } from "./dead-links.js";
 import { RealResourceProviderV2 } from "./real-provider-adapter.js";
 import { RealStorageV2 } from "./real-storage-adapter.js";
-import { budgetSoftThreshold } from "./agent-loop-guards.js";
 import { TaskSandbox } from "./sandbox.js";
 import { getStorageBrand } from "../storage-brands.js";
 import { AssrtSubtitleProvider, type AssrtProviderPort } from "../subtitle-provider.js";
 import type { SearchProfile } from "./search-profile.js";
-import {
-  needForMovie,
-  needForTvTarget,
-  runMovieTaskAgent,
-  runTvAnimeTaskAgent,
-  type MovieTarget,
-  type TvAnimeTarget,
-} from "./task-agents.js";
+import { needForMovie, needForTvTarget, type MovieTarget, type TvAnimeTarget } from "./task-agents.js";
 import { runFastPathAcquisition, runMovieFastPathAcquisition } from "./fast-path.js";
 
 /**
@@ -143,18 +135,16 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
     ...(request.searchProfile === undefined ? {} : { searchProfile: request.searchProfile }),
   });
 
-  // Pre-warm the raw snapshot (bare title) BEFORE building the system prompt, so the
-  // prefetchedCandidateCount pointer can be injected. If the provider fails (network
-  // error, etc.), gracefully degrade: no pointer, agent searches normally.
-  let prefetchedCandidateCount: number | undefined;
+  // Pre-warm the raw snapshot (bare title) BEFORE dispatch — the fast path grades
+  // this snapshot (zero-LLM), so a pre-warm is not a prompt pointer anymore, it
+  // IS the acquisition evidence. If the provider fails (network error, etc.),
+  // gracefully degrade: the fast path reports 暂无资源 rather than crashing.
   try {
     const rawKeyword = request.target.title; // bare title (中文名), no quality/subtitle/year
     await sandbox.primeRawSnapshot(rawKeyword);
-    prefetchedCandidateCount = sandbox.viewResourceSnapshot().candidateCount;
   } catch (error) {
-    // Provider unavailable → no pre-warm; agent will searchResources normally.
+    // Provider unavailable → no pre-warm; the fast path reports no snapshot.
     // Do NOT crash the workflow.
-    prefetchedCandidateCount = undefined;
   }
 
   // Pre-warm the assrt subtitle snapshot when all three gates pass: token
@@ -180,48 +170,28 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
     origins.length > 0 &&
     origins.every((c) => c !== "CN") &&
     typeof request.executor.transferSubtitleUrl === "function";
-  let subtitleCandidateCount: number | undefined;
   if (subtitleActive) {
     const subtitleProvider: AssrtProviderPort =
       request.assrtProvider ?? new AssrtSubtitleProvider({ token: request.assrtToken! });
     try {
+      // Pre-warm the assrt snapshot so the fast path's subtitle stage can read
+      // it later without an extra assrt hit.
       await sandbox.primeSubtitleSnapshot(request.target.title, subtitleProvider);
-      // Feed the prompt pointer line (the 活期文档 twin of prefetchedCandidateCount).
-      subtitleCandidateCount = sandbox.viewSubtitleSnapshot().candidateCount;
     } catch {
-      // assrt unavailable → empty snapshot; the subtitle tools still register
-      // (viewSubtitleSnapshot will show "no snapshot"), agent decides from there.
+      // assrt unavailable → empty snapshot; the fast-path subtitle stage will
+      // re-prime on its own (soft-fail), never blocking the video task.
     }
   }
 
-  const common = {
-    sandbox,
-    model: request.model,
-    ...(request.maxSteps === undefined ? {} : { maxSteps: request.maxSteps }),
-    ...(request.preferredLanguage === undefined ? {} : { preferredLanguage: request.preferredLanguage }),
-    ...(request.originCountries === undefined ? {} : { originCountries: request.originCountries }),
-    ...(request.searchHints === undefined ? {} : { searchHints: request.searchHints }),
-    ...(request.qualityGuidance === undefined ? {} : { qualityGuidance: request.qualityGuidance }),
-    ...(request.storageProvider === undefined ? {} : { storageProvider: request.storageProvider }),
-    ...(subtitleActive ? { subtitle: true } : {}),
-    ...(subtitleCandidateCount ? { subtitleCandidateCount } : {}),
-    ...(request.onProgress ? { onProgress: request.onProgress } : {}),
-    // Real 115 exposes its cumulative call count → drives the budget soft-warning
-    // in the agent loop; fakes/sim omit apiCallCount → no nudge.
-    ...(request.executor.apiCallCount ? { apiCallCount: () => request.executor.apiCallCount!() } : {}),
-    // Soft threshold derived from the configured HARD budget so they stay consistent
-    // even when MEDIA_TRACK_115_MAX_API_CALLS overrides the limit.
-    ...(request.executor.apiCallBudget
-      ? { budgetSoftAt: budgetSoftThreshold(request.executor.apiCallBudget()) }
-      : {}),
-    // Inject the prefetched candidate count into the prompt so the pointer renders.
-    ...(prefetchedCandidateCount === undefined ? {} : { prefetchedCandidateCount }),
-  };
-
   const isChineseNative = origins.includes("CN");
-  // A foreign film with a 中文 subtitle preference needs the LLM agent's subtitle
-  // judgment (assrt 选包 + 软兜底). The movie fast path is video-only; this single
-  // gate routes that whole order to the agent before the fast path is considered.
+  // The movie route is FULLY fast-path now (zero-LLM acquisition, including
+  // subtitles). A foreign film with a 中文 subtitle preference USED to escalate
+  // to the LLM movie agent for assrt 选包 + 软兜底; that agent loop is real but
+  // expensive — it burned a full model loop + up to 8+2 searches even when the
+  // drive had NO subtitle capability at all (夸克 executor lacks
+  // transferSubtitleUrl — the tools never even registered). The deterministic
+  // subtitle picker (subtitle-picker.ts) approximates the selection policy in
+  // code: language-preference match > ★ vote > 口碑组 > freshness.
   const prefersChineseSubtitles = (request.preferredLanguage ?? "").includes("中");
 
   const result =
@@ -237,18 +207,26 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
           // sinks, so the activity page shows fast-path steps in agent_steps.
           ...(request.onProgress ? { onProgress: request.onProgress } : {}),
         })
-      : prefersChineseSubtitles && !isChineseNative
-        ? // 中字/软兜底: a foreign film with a 中文 subtitle preference needs the LLM
-          // agent's subtitle judgment (assrt 选包 + 软兜底). The fast path is video-only;
-          // escalate the WHOLE order — never a deterministic subtitle selector.
-          await runMovieTaskAgent({ ...common, target: stripKind(request.target) })
-        : await runMovieFastPathAcquisition({
-            sandbox,
-            model: request.model,
-            target: stripKind(request.target),
-            ...(request.storageProvider === undefined ? {} : { storageProvider: request.storageProvider }),
-            ...(request.onProgress ? { onProgress: request.onProgress } : {}),
-          });
+      : await runMovieFastPathAcquisition({
+          sandbox,
+          model: request.model,
+          target: stripKind(request.target),
+          ...(request.storageProvider === undefined ? {} : { storageProvider: request.storageProvider }),
+          ...(request.onProgress ? { onProgress: request.onProgress } : {}),
+          // Subtitle stage gates: NON-CN title (isChineseNative false) AND the
+          // subtitle flow is actually active (assrt token + executor capability).
+          // Pass the assrt provider + language preference down so the fast path's
+          // POST-LANDING stage can prime/read/pick/land subtitles itself —
+          // deterministically, no LLM.
+          ...(!isChineseNative && subtitleActive
+            ? {
+                subtitle: {
+                  provider: request.assrtProvider ?? new AssrtSubtitleProvider({ token: request.assrtToken! }),
+                  preferredLanguage: request.preferredLanguage ?? "",
+                },
+              }
+            : {}),
+        });
 
   // The agent transferred candidates by id; the storage adapter recorded the
   // domain attempts and the provider adapter the domain snapshots. Assemble the

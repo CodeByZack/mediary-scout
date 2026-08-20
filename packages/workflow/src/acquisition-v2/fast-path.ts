@@ -16,6 +16,8 @@ import { digestMovieStaging, digestStaging } from "./staging-digest.js";
 import type { StagingDigest } from "./staging-digest.js";
 import type { MovieTarget, TvAnimeTarget } from "./task-agents.js";
 import type { AgentPhase, AgentToolEvent } from "./activity.js";
+import { pickSubtitle } from "./subtitle-picker.js";
+import type { AssrtProviderPort } from "../subtitle-provider.js";
 
 /**
  * The fast path (§6.5): the acquisition happy path runs entirely in CODE, with
@@ -850,9 +852,10 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
  *  ZERO LLM calls. Genuine ambiguity — no unique A-grade, or a landing that is not
  *  one clean film — escalates one judgment call at a time.
  *
- *  Scope is VIDEO ONLY: a 中字/软兜底 order (foreign film + 中文 subtitle preference)
- *  is routed to the LLM movie agent by the orchestrator BEFORE reaching here — this
- *  module never writes a deterministic subtitle selector.
+ *  Scope: video-first, with an OPTIONAL deterministic subtitle stage for NON-CN
+ *  films whose drive can land external subtitles (assrt 选包 via subtitle-picker.ts,
+ *  zero LLM). 国产片 or drives without subtitle capability get pure-video runs —
+ *  the 中字 preference degrades to best-effort, never blocks.
  */
 
 export interface MovieFastPathOptions {
@@ -864,6 +867,17 @@ export interface MovieFastPathOptions {
   storageProvider?: string;
   /** Live step trace for the activity page (Task D) — same contract as FastPathOptions. */
   onProgress?: (event: AgentToolEvent) => void;
+  /** Optional subtitle stage — ONLY wired by the orchestrator for NON-CN films
+   *  whose drive can actually land external subtitles (assrt token + executor
+   *  capability). When present, the fast path, AFTER the video lands, primes the
+   *  assrt snapshot, picks a package deterministically (subtitle-picker.ts), and
+   *  lands it — then flattenMovie auto-renames video + subtitles together.
+   *  Absent = pure-video fast path (国产片 natively Chinese-spoken — no 中字 to
+   *  hunt; or the drive cannot land subtitles — preference degrades to best-effort). */
+  subtitle?: {
+    provider: AssrtProviderPort;
+    preferredLanguage: string;
+  };
 }
 
 export interface MovieFastPathResult {
@@ -883,10 +897,82 @@ async function clearMovieLanding(sandbox: TaskSandbox): Promise<void> {
   }
 }
 
+/**
+ * Movie subtitle stage (zero-LLM): AFTER the video landed cleanly, land ONE
+ * assrt subtitle package picked deterministically, then let flattenMovie
+ * auto-rename video + subtitles together to `Title (Year).ext`.
+ *
+ * Soft target: any failure here (provider miss, no candidates, package with no
+ * usable files, landing errors) logs a warning and proceeds with the video
+ * ALONE — subtitles never block the film.
+ *
+ * Flow: primes the assrt snapshot via the sandbox (idempotent, soft-fails to an
+ * empty list) → picks the best package (subtitle-picker) → transferSubtitle
+ * lands its files into staging → flattenMovie (called by the caller AFTER this)
+ * lifts + renames them beside the video. The picked package's files carry
+ * .sc/.tc 简繁 infixes that flatten's canonical rename preserves.
+ */
+async function landSubtitlesForMovie(options: {
+  sandbox: TaskSandbox;
+  title: string;
+  subtitle: NonNullable<MovieFastPathOptions["subtitle"]>;
+  onProgress?: (event: AgentToolEvent) => void;
+}): Promise<void> {
+  const { sandbox, title, subtitle, onProgress } = options;
+  try {
+    // 1. Read the pre-warmed assrt snapshot. The orchestrator primes it BEFORE
+    //    dispatch (same gate: non-CN + capable drive), so read-only first — an
+    //    EMPTY list here is usually "already primed & empty", not "unprimed".
+    //    Only when nothing is primed at all (direct fast-path callers without
+    //    the orchestrator's pre-warm) do we prime ourselves — never double-hit
+    //    the shared assrt quota (20/min).
+    let candidates = sandbox.subtitleCandidates();
+    if (candidates.length === 0 && sandbox.viewSubtitleSnapshot().candidateCount === 0) {
+      // Unprimed OR primed-empty are indistinguishable from the read side;
+      // priming again is harmless (idempotent overwrite) and only happens when
+      // the orchestrator path was skipped. Cost: one assrt search.
+      await sandbox.primeSubtitleSnapshot(title, subtitle.provider);
+      candidates = sandbox.subtitleCandidates();
+    }
+    stepLog(sandbox, title, "字幕", `assrt 候选 ${candidates.length} 条`);
+    emitStep(onProgress, "viewSubtitleSnapshot", "pick", `assrt 候选 ${candidates.length} 条`);
+    if (candidates.length === 0) {
+      return; // no packages — video alone is fine
+    }
+
+    // 2. Deterministically pick ONE package.
+    const pick = pickSubtitle(candidates, {
+      preferredLanguage: subtitle.preferredLanguage,
+    });
+    if (!pick.picked) {
+      stepLog(sandbox, title, "字幕", pick.reason, "warn");
+      emitStep(onProgress, "viewSubtitleSnapshot", "pick", pick.reason);
+      return;
+    }
+    stepLog(sandbox, title, "字幕", pick.reason);
+    emitStep(onProgress, "viewSubtitleSnapshot", "pick", pick.reason);
+
+    // 3. Land its files into staging (soft-fail).
+    const landed = await sandbox.transferSubtitle({ candidateId: pick.picked.id });
+    if (landed.status === "succeeded") {
+      stepLog(sandbox, title, "字幕", `落地 ${landed.landedFilenames.length} 个字幕文件`);
+      emitStep(onProgress, "transferSubtitle", "pick", `落地 ${landed.landedFilenames.length} 个字幕文件`);
+    } else {
+      stepLog(sandbox, title, "字幕", `落地失败:${landed.error ?? "无文件落盘"}`, "warn");
+      emitStep(onProgress, "transferSubtitle", "pick", `落地失败:${landed.error ?? "无文件落盘"}`);
+    }
+  } catch (error) {
+    // Never block the video on a subtitle hiccup.
+    const message = error instanceof Error ? error.message : String(error);
+    stepLog(sandbox, title, "字幕", `阶段异常:${message}`, "warn");
+    emitStep(onProgress, "viewSubtitleSnapshot", "pick", `字幕阶段异常:${message}`);
+  }
+}
+
 export async function runMovieFastPathAcquisition(
   options: MovieFastPathOptions,
 ): Promise<MovieFastPathResult> {
-  const { sandbox, model, target, onProgress } = options;
+  const { sandbox, model, target, subtitle, onProgress } = options;
   logStorageProvider(sandbox, target.title, options.storageProvider);
 
   // 0. Landing-point check FIRST (movie has no episode codes): if the movie dir
@@ -1122,6 +1208,17 @@ export async function runMovieFastPathAcquisition(
 
     // One clean film → flatten + mark in code, zero LLM.
     if (digest.passes) {
+      // Subtitle stage (optional, non-CN + capable drive only): land the
+      // deterministically-picked assrt package BEFORE flatten, so flattenMovie
+      // lifts + renames video AND subtitles together to `Title (Year).ext`.
+      if (subtitle) {
+        await landSubtitlesForMovie({
+          sandbox,
+          title: target.title,
+          subtitle,
+          ...(onProgress ? { onProgress } : {}),
+        });
+      }
       try {
         const finalized = await finalizeMovieLanding({ sandbox, digest });
         const organizeDetail = `flatten+标记 ${finalized.marked.join(",") || "-"}`;
@@ -1162,6 +1259,16 @@ export async function runMovieFastPathAcquisition(
       year: target.year,
     });
     if (diagnosis.action === "accept") {
+      // Same subtitle stage as the clean-pass: land subtitles before flatten so
+      // video + subtitles get renamed together.
+      if (subtitle) {
+        await landSubtitlesForMovie({
+          sandbox,
+          title: target.title,
+          subtitle,
+          ...(onProgress ? { onProgress } : {}),
+        });
+      }
       try {
         await finalizeMovieLanding({ sandbox, digest });
       } catch (error) {

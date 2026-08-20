@@ -997,6 +997,13 @@ export class TaskSandbox {
     return { document, candidateCount: candidates.length };
   }
 
+  /** Read-only access to the raw pre-warmed subtitle candidates (the fast path's
+   *  deterministic picker consumes the STRUCTURED list, not the rendered doc).
+   *  Empty array when unprimed or soft-failed. */
+  subtitleCandidates(): AssrtCandidate[] {
+    return this.subtitleSnapshot ?? [];
+  }
+
   /** Land a chosen subtitle package's files into staging via the 115 offline-task
    *  path (transferSubtitleUrl). Resolves the package's filelist via detail(),
    *  submits each file's url, returns the filenames that actually landed. The
