@@ -42,7 +42,7 @@ function sequentialModel(texts: string[]) {
   let i = 0;
   return new MockLanguageModelV3({
     doGenerate: async () => ({
-      content: [{ type: "text" as const, text: texts[i++] ?? texts[texts.length - 1] }],
+      content: [{ type: "text" as const, text: texts[i++] ?? texts[texts.length - 1]! }],
       finishReason: { unified: "stop" as const, raw: "stop" as const },
       usage: USAGE,
       warnings: [],
@@ -108,7 +108,7 @@ async function createSetup(options: SetupOptions) {
     titleTerms: options.title ? [options.title] : ["狂飙"],
   });
   await sandbox.primeRawSnapshot("狂飙");
-  return { sandbox, storage, seasonDirIds, s1: seasonDirIds[1] };
+  return { sandbox, storage, seasonDirIds, s1: seasonDirIds[1]! };
 }
 
 describe("runFastPathAcquisition — the zero-LLM happy path", () => {
@@ -253,7 +253,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
         },
       },
     });
-    const s3 = seasonDirIds[3];
+    const s3 = seasonDirIds[3]!;
 
     const result = await runFastPathAcquisition({
       sandbox,
