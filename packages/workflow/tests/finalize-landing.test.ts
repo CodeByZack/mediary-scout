@@ -27,6 +27,23 @@ async function createSandbox(need = ["S01E01", "S01E02"]) {
   return { sandbox, storage, stagingDirectoryId, s1, s2 };
 }
 
+/** S03-task sandbox: season dir is 3 (not 1/2) — mirrors the 末日地堡 S03 case. */
+async function createSandboxWithSeason3(need = ["S03E08"]) {
+  const provider = new FakeResourceProviderV2({ results: {} });
+  const storage = new Storage115Simulator({ packs: {} });
+  const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
+  const s3 = await storage.createDirectory({ name: "Season 3", parentId: "root" });
+  const sandbox = new TaskSandbox({
+    provider,
+    storage,
+    stagingDirectoryId,
+    targetSeasonDirectoryIds: { 3: s3 },
+    need,
+    canonicalTitle: "末日地堡",
+  });
+  return { sandbox, storage, stagingDirectoryId, s2: s3 };
+}
+
 async function landFile(storage: Storage115Simulator, stagingDirectoryId: string, filename: string) {
   const [id] = (await storage.transferSubtitleUrl({
     url: "http://x/file",
@@ -122,6 +139,33 @@ describe("finalizeLanding", () => {
 
     // A full pack lands episodes past the aired cursor; all must survive finish().
     expect(result.marked).toEqual(["S01E01", "S01E02", "S01E03"]);
+  });
+
+  it("bugfix 2026-08-21: S03 pure-numeric file (08.mkv) is renamed/移动/标记 with the TARGET season", async () => {
+    // 真实线上(13:38 run):S03 任务 digest 已能把 `08.mkv` 解析成 S03E08(digest
+    // 带 seasons=[3] 调用),但 finalizeLanding 此前内部解析裸文件名时**不带
+    // seasons** → 默认宽松模式返回 S01E08 → season 1 ∉ {3} → rename 跳过 →
+    // 移动 0 / 标记空 → staging wipe 把 08.mkv 清掉,finish 却用 digest 的
+    // coveredCodes 写「入库(obtained=S03E08)」→ 假入库。修复:sandbox 各步骤
+    // 解析全部透传目标 seasons。
+    const { sandbox, storage, stagingDirectoryId, s2: s3 } = await createSandboxWithSeason3();
+    await landFile(storage, stagingDirectoryId, "08.mkv");
+
+    const digest = digestStaging({
+      files: await sandbox.inspectStaging(),
+      seasons: [3],
+      needCodes: ["S03E08"],
+    });
+    expect(digest.passes).toBe(true);
+
+    const result = await finalizeLanding({ sandbox, digest, canonicalTitle: "末日地堡", seasons: [3] });
+
+    expect(result.renamed).toEqual(["末日地堡.S03E08.mkv"]);
+    expect(result.marked).toEqual(["S03E08"]);
+    expect(result.movedSeasons[3]).toBe(1);
+    const season3 = await storage.listTree({ directoryId: s3 });
+    expect(season3.map((f) => f.path)).toEqual(["末日地堡.S03E08.mkv"]);
+    expect((await sandbox.finish()).coverageMet).toBe(true);
   });
 
   it("leaves out-of-scope files unrenamed/未标记 but wipes them as residue", async () => {

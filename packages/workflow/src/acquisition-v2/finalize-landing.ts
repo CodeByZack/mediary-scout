@@ -77,7 +77,7 @@ export function buildSeasonMoves(
 
   for (const video of digest.videos) {
     if (junkNames.has(fileBaseName(video.path))) continue;
-    const code = overridesTable[fileBaseName(video.path)] ?? episodeCodeFromFileName(fileBaseName(video.path));
+    const code = overridesTable[fileBaseName(video.path)] ?? episodeCodeFromFileName(fileBaseName(video.path), seasons);
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
@@ -85,7 +85,7 @@ export function buildSeasonMoves(
   }
   for (const subtitle of digest.subtitles) {
     if (junkNames.has(fileBaseName(subtitle.path))) continue;
-    const code = overridesTable[fileBaseName(subtitle.path)] ?? episodeCodeFromFileName(fileBaseName(subtitle.path));
+    const code = overridesTable[fileBaseName(subtitle.path)] ?? episodeCodeFromFileName(fileBaseName(subtitle.path), seasons);
     if (code) {
       const season = seasonFromEpisodeCode(code);
       if (season !== null && seasonSet.has(season)) {
@@ -116,7 +116,7 @@ export async function finalizeLanding(
   for (const video of digest.videos) {
     const base = fileBaseName(video.path);
     if (junkNames.has(base)) continue;
-    const code = overridesTable[base] ?? episodeCodeFromFileName(base);
+    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons);
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
@@ -167,7 +167,7 @@ export async function finalizeLanding(
   const renamedToCodes = renamed
     .map((name) => {
       const base = fileBaseName(name);
-      const code = episodeCodeFromFileName(base);
+      const code = episodeCodeFromFileName(base, seasons);
       return code ?? null;
     })
     .filter((code): code is string => code !== null);
