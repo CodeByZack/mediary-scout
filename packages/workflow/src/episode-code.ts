@@ -29,8 +29,12 @@ function isPlausibleEpisodeNumber(n: number): boolean {
  *   - 传且为多季(seasons.length>1) → 无季规则(E01/第N话/1×01/纯数字)全部禁用,
  *     季不明 → 交仲裁,绝不瞎猜。
  *
- * 无季规则的解析结果一律记 S01(与老 `第N集` 行为一致),调用方(digest 的
- * outOfSeasonCodes / finalize 的 seasonSet)负责把季不匹配的过滤掉。
+ * 无季规则的解析结果记为目标季(单季任务取 seasons[0],与老 `第N集` 行为
+ * 一致时是 S01;seasons 不传时也记 S01)。2026-08-21 放开:单季任务(如 S03
+ * 整季包 `01.mkv`~`08.mkv`)直接按目标季解析,不再死守 S01 —— 整个流程从
+ * 搜索/选候选已锁定目标季,文件名解析沿用同一上下文。多季仍禁用,交仲裁。
+ * 调用方(digest 的 outOfSeasonCodes / finalize 的 seasonSet)负责把季不匹配
+ * 的过滤掉。
  */
 export function episodeCodeFromFileName(name: string, seasons?: number[]): string | null {
   // 0. 标准 SxxExx — 自带季信息,始终可解析(与 seasons 上下文无关)。
@@ -49,12 +53,18 @@ export function episodeCodeFromFileName(name: string, seasons?: number[]): strin
     return `S${looseMatch[1].padStart(2, "0")}E${looseMatch[2].padStart(2, "0")}`;
   }
 
+  // 单季上下文(seasons 不传或恰为单季):无季规则可用,目标季 = seasons[0](默认为 1)。
+  // 2026-08-21 放开:此前 E01/第N集/纯数字一律记 S01,纯数字更是只在目标季为 S01
+  // 时才启用;现在单季任务直接用目标季解析(S03 任务里 `01.mkv` → S03E01),因为整个
+  // 流程(搜索/选候选)已锁定目标季,文件名解析沿用同一上下文。多季(seasons.length>1)
+  // 仍禁用无季规则 —— 季不明 → 交仲裁,绝不瞎猜。
   const singleSeason = seasons === undefined || seasons.length === 1;
+  const seasonLabel = seasons !== undefined && seasons.length === 1 ? String(seasons[0]).padStart(2, "0") : "01";
   if (singleSeason) {
-    // 2. `E01` / `EP01` / `Ep.01` — 无季信息 → S01E01(单季任务可信)。
+    // 2. `E01` / `EP01` / `Ep.01` — 无季信息 → 目标季(如 S03E01,单季任务可信)。
     const epOnlyMatch = /(?:^|[^A-Za-z0-9])[Ee][Pp]?\.?\s*(\d{1,4})(?:$|[^0-9])/.exec(name);
     if (epOnlyMatch?.[1] && isPlausibleEpisodeNumber(Number(epOnlyMatch[1]))) {
-      return `S01E${epOnlyMatch[1].padStart(2, "0")}`;
+      return `S${seasonLabel}E${epOnlyMatch[1].padStart(2, "0")}`;
     }
 
     // 3. `1×01` / `1x01`(Plex 兼容:季×集)。
@@ -67,23 +77,22 @@ export function episodeCodeFromFileName(name: string, seasons?: number[]): strin
     //    单季上下文才启用;数字上限放开到 4 位(1000+ 集长篇动漫,与第N集一致)。
     const chineseMatch = /第\s*(\d{1,4})\s*(?:集|话|話)/.exec(name);
     if (chineseMatch?.[1] && Number(chineseMatch[1]) <= 9999) {
-      return `S01E${chineseMatch[1].padStart(2, "0")}`;
+      return `S${seasonLabel}E${chineseMatch[1].padStart(2, "0")}`;
     }
   }
 
   // 5. 纯数字 `01.mp4`(动漫 fansub / 国内整季包最常见)— 只在整个文件名就是
-  //    一个数字(去掉扩展名)时启用,且只在单季为 S01 的任务里(seasons 不传
-  //    或恰为 [1])。多季不猜季;夹着标题的数字("Show 01")歧义大,交仲裁。
-  const seasonOneOnly =
-    seasons === undefined || (seasons.length === 1 && seasons[0] === 1);
-  if (seasonOneOnly) {
+  //    一个数字(去掉扩展名)时启用,且只在**单季**任务里(seasons 不传或为单季,
+  //    不限于 S01——2026-08-21 放开,单季任务直接用目标季)。多季不猜季;夹着
+  //    标题的数字("Show 01")歧义大,交仲裁。
+  if (singleSeason) {
     const base = name.replace(/\.[A-Za-z0-9]+$/, "");
     const digits = base.match(/^(\d{1,3})$/);
     if (digits?.[1]) {
       const n = Number(digits[1]);
       // 排除年份(1900–2099)、分辨率、超大 CRC/体积数字。
       if (isPlausibleEpisodeNumber(n) && !(n >= 1900 && n <= 2099)) {
-        return `S01E${digits[1].padStart(2, "0")}`;
+        return `S${seasonLabel}E${digits[1].padStart(2, "0")}`;
       }
     }
   }
