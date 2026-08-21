@@ -215,6 +215,13 @@ async function tryEpisodeMapping(options: {
     return "failed";
   }
 
+  // 校验通过的部分映射先交出去:无论重建 digest 是否整体通过,这些映射都是
+  // 可信的(AI 确认 + 代码校验过),诊断仲裁 accept 时 finalizeLanding 需要
+  // 它们才能让映射的文件 rename/归位。2026-08-21 bugfix:此前只有 "passed"
+  // 分支回调 onMapping,部分映射(valid 但重建仍脏)走 accept 时 overrides 为
+  // undefined,AI 确认过的文件全部被 staging wipe 清掉(假入库)。
+  options.onMapping?.(clean);
+
   // 重建 digest:overrides 把映射喂回代码解析。
   const re = options.ram(clean);
   options.onDigest(re);
@@ -222,7 +229,6 @@ async function tryEpisodeMapping(options: {
     const mapDetail = `集数映射 ${Object.entries(clean).length} 个文件 → ${Object.values(clean).join(",")},重建 digest 通过`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "log");
     emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail);
-    options.onMapping?.(clean);
     return "passed";
   }
   if (re.episodeCodes.length > 0 && !re.isDirtyPack) {
@@ -761,7 +767,18 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     });
     if (diagnosis.action === "accept") {
       try {
-        await finalizeLanding({ sandbox, digest: landingDigest, canonicalTitle: target.title, seasons });
+        // 2026-08-21 bugfix: 必须把 AI 集数映射的 overrides 传给 finalizeLanding ——
+        // 否则纯数字/日漫 fansub 文件名(如 `08.mkv`)在诊断仲裁 accept 后重新用裸
+        // 文件名解析时依然解析不出(S03 任务纯数字规则本就禁猜),文件不 rename/
+        // 不归位/不 mark,最后被 staging wipe 当垃圾清掉 → 日志写"入库"实际没入库。
+        // 与上方 mappingEscalated === "passed" 分支保持一致。
+        await finalizeLanding({
+          sandbox,
+          digest: landingDigest,
+          canonicalTitle: target.title,
+          seasons,
+          ...(mappingTable ? { overrides: mappingTable } : {}),
+        });
       } catch (error) {
         try {
           await sandbox.discardStaging();

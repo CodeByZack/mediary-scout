@@ -90,6 +90,8 @@ describe("episodeCodeFromFileName — 2026-08-19 补齐的命名规则 (§3)", (
     expect(episodeCodeFromFileName("Show.E01.mkv", [1])).toBe("S01E01");
     expect(episodeCodeFromFileName("Show.EP12.mkv", [1])).toBe("S01E12");
     expect(episodeCodeFromFileName("Show.Ep.03.mkv", [1])).toBe("S01E03");
+    // 2026-08-21 放开:单季(S03)任务里 E 编号落到目标季
+    expect(episodeCodeFromFileName("Show.E08.mkv", [3])).toBe("S03E08");
   });
 
   it("parses 1×01 / 1x01 (Plex-style season×episode)", () => {
@@ -102,11 +104,16 @@ describe("episodeCodeFromFileName — 2026-08-19 补齐的命名规则 (§3)", (
   it("parses 第N话 (anime wording)", () => {
     expect(episodeCodeFromFileName("海贼王 第5话.mkv", [1])).toBe("S01E05");
     expect(episodeCodeFromFileName("名侦探柯南 第1050话.mkv", [1])).toBe("S01E1050");
+    // 2026-08-21 放开:单季(S03)任务里中文集数落到目标季
+    expect(episodeCodeFromFileName("末日地堡 第8集.mkv", [3])).toBe("S03E08");
   });
 
-  it("parses a pure-numeric filename (anime fansub 01.mp4) in single-season S01 only", () => {
+  it("parses a pure-numeric filename (anime fansub 01.mp4) in ANY single-season task", () => {
     expect(episodeCodeFromFileName("01.mp4", [1])).toBe("S01E01");
     expect(episodeCodeFromFileName("39.mp4", [1])).toBe("S01E39");
+    // 2026-08-21 放开:单季任务直接用目标季,不再死守 S01
+    expect(episodeCodeFromFileName("08.mkv", [3])).toBe("S03E08");
+    expect(episodeCodeFromFileName("01.mkv", [3])).toBe("S03E01");
   });
 
   it("does NOT parse pure numbers in a multi-season context (season unknown → arbitrator)", () => {

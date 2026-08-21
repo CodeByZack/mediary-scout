@@ -37,6 +37,19 @@ function throwModel() {
   });
 }
 
+/** Model returning a scripted sequence of texts, one per doGenerate call. */
+function sequentialModel(texts: string[]) {
+  let i = 0;
+  return new MockLanguageModelV3({
+    doGenerate: async () => ({
+      content: [{ type: "text" as const, text: texts[i++] ?? texts[texts.length - 1]! }],
+      finishReason: { unified: "stop" as const, raw: "stop" as const },
+      usage: USAGE,
+      warnings: [],
+    }),
+  });
+}
+
 const target: TvAnimeTarget = {
   title: "狂飙",
   aliases: [],
@@ -60,6 +73,10 @@ interface SetupOptions {
   packs: Record<string, { files: Array<{ path: string; sizeBytes: number }> }>;
   failureMessages?: Record<string, string>;
   need?: string[];
+  /** Target seasons (default [1]); drives which season dirs exist. */
+  seasons?: number[];
+  /** Title for the canonical name (default 狂飙). */
+  title?: string;
   /** Additional keyword → candidates for the alias 兜底重搜 rounds. */
   extraResults?: Record<string, Array<{ id: string; title: string }>>;
   /** Counts every provider.search call (primary prime + fallback rounds). */
@@ -76,18 +93,22 @@ async function createSetup(options: SetupOptions) {
     ...(options.failureMessages ? { failureMessages: options.failureMessages } : {}),
   });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
-  const s1 = await storage.createDirectory({ name: "Season 1", parentId: "root" });
+  const seasons = options.seasons ?? [1];
+  const seasonDirIds: Record<number, string> = {};
+  for (const s of seasons) {
+    seasonDirIds[s] = await storage.createDirectory({ name: `Season ${s}`, parentId: "root" });
+  }
   const sandbox = new TaskSandbox({
     provider,
     storage,
     stagingDirectoryId,
-    targetSeasonDirectoryIds: { 1: s1 },
+    targetSeasonDirectoryIds: seasonDirIds,
     need: options.need ?? ["S01E01"],
-    canonicalTitle: "狂飙",
-    titleTerms: ["狂飙"],
+    canonicalTitle: options.title ?? "狂飙",
+    titleTerms: options.title ? [options.title] : ["狂飙"],
   });
   await sandbox.primeRawSnapshot("狂飙");
-  return { sandbox, storage, s1 };
+  return { sandbox, storage, seasonDirIds, s1: seasonDirIds[1]! };
 }
 
 describe("runFastPathAcquisition — the zero-LLM happy path", () => {
@@ -209,6 +230,49 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     // Only the real episode was renamed + moved; the sample stays out of the season.
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
+    ]);
+  });
+
+  it("bugfix 2026-08-21: diagnostic accept on an AI-mapped fansub pack keeps the mapped episode (S03)", async () => {
+    // 末日地堡 S03 缺 S08:包是 fansub 风格 `末日地堡 - 08.mkv`(文件名夹标题,
+    // 纯数字规则不适用,代码解析不出),AI 集数映射确认 08.mkv → S03E08,
+    // 01.mkv 也无法解析(留在 unmapped) → 仍脏 → 诊断仲裁 accept。修复前
+    // accept 分支的 finalizeLanding 漏传 overrides,08.mkv 会随 staging wipe
+    // 被清掉(假入库);修复后 08.mkv 必须 rename+归位入库,仅 01.mkv 被丢弃。
+    const { sandbox, storage, seasonDirIds } = await createSetup({
+      candidates: [{ id: "c1", title: "末日地堡 第三季 [8集] 全" }],
+      seasons: [3],
+      need: ["S03E08"],
+      title: "末日地堡",
+      packs: {
+        c1: {
+          files: [
+            { path: "末日地堡 - 01.mkv", sizeBytes: 1_000_000_000 },
+            { path: "末日地堡 - 08.mkv", sizeBytes: 1_000_000_000 },
+          ],
+        },
+      },
+    });
+    const s3 = seasonDirIds[3]!;
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      // 第一次:集数映射只给 08.mkv → S03E08(01.mkv 留 unmapped → 仍脏 → 回落诊断)。
+      // 第二次:诊断仲裁 accept。
+      model: sequentialModel([
+        '{"mapping":{"末日地堡 - 08.mkv":"S03E08"},"unmapped":["末日地堡 - 01.mkv"],"reasoning":"编号 08 是第 8 集"}',
+        '{"action":"accept","reasoning":"核心集数 S03E08 已存在,额外 01.mkv 不影响"}',
+      ]),
+      target: { ...target, title: "末日地堡", seasons: [3], missingEpisodes: ["S03E08"] },
+      isChineseNative: false,
+    });
+
+    expect(result.escalated).toBe(true);
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toContain("S03E08");
+    // 修复后 08.mkv 被 rename 成 末日地堡.S03E08.mkv 并归位到 Season 3;01.mkv 留在 staging 被 wipe。
+    expect((await storage.listTree({ directoryId: s3 })).map((f) => f.path)).toEqual([
+      "末日地堡.S03E08.mkv",
     ]);
   });
 
