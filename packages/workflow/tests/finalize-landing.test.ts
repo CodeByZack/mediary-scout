@@ -27,6 +27,23 @@ async function createSandbox(need = ["S01E01", "S01E02"]) {
   return { sandbox, storage, stagingDirectoryId, s1, s2 };
 }
 
+/** S03-task sandbox: season dir is 3 (not 1/2) — mirrors the 末日地堡 S03 case. */
+async function createSandboxWithSeason3(need = ["S03E08"]) {
+  const provider = new FakeResourceProviderV2({ results: {} });
+  const storage = new Storage115Simulator({ packs: {} });
+  const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
+  const s3 = await storage.createDirectory({ name: "Season 3", parentId: "root" });
+  const sandbox = new TaskSandbox({
+    provider,
+    storage,
+    stagingDirectoryId,
+    targetSeasonDirectoryIds: { 3: s3 },
+    need,
+    canonicalTitle: "末日地堡",
+  });
+  return { sandbox, storage, stagingDirectoryId, s2: s3 };
+}
+
 async function landFile(storage: Storage115Simulator, stagingDirectoryId: string, filename: string) {
   const [id] = (await storage.transferSubtitleUrl({
     url: "http://x/file",
@@ -122,6 +139,88 @@ describe("finalizeLanding", () => {
 
     // A full pack lands episodes past the aired cursor; all must survive finish().
     expect(result.marked).toEqual(["S01E01", "S01E02", "S01E03"]);
+  });
+
+  it("bugfix 2026-08-21: S03 pure-numeric file (08.mkv) is renamed/移动/标记 with the TARGET season", async () => {
+    // 真实线上(13:38 run):S03 任务 digest 已能把 `08.mkv` 解析成 S03E08(digest
+    // 带 seasons=[3] 调用),但 finalizeLanding 此前内部解析裸文件名时**不带
+    // seasons** → 默认宽松模式返回 S01E08 → season 1 ∉ {3} → rename 跳过 →
+    // 移动 0 / 标记空 → staging wipe 把 08.mkv 清掉,finish 却用 digest 的
+    // coveredCodes 写「入库(obtained=S03E08)」→ 假入库。修复:sandbox 各步骤
+    // 解析全部透传目标 seasons。
+    const { sandbox, storage, stagingDirectoryId, s2: s3 } = await createSandboxWithSeason3();
+    await landFile(storage, stagingDirectoryId, "08.mkv");
+
+    const digest = digestStaging({
+      files: await sandbox.inspectStaging(),
+      seasons: [3],
+      needCodes: ["S03E08"],
+    });
+    expect(digest.passes).toBe(true);
+
+    const result = await finalizeLanding({ sandbox, digest, canonicalTitle: "末日地堡", seasons: [3] });
+
+    expect(result.renamed).toEqual(["末日地堡.S03E08.mkv"]);
+    expect(result.marked).toEqual(["S03E08"]);
+    expect(result.movedSeasons[3]).toBe(1);
+    const season3 = await storage.listTree({ directoryId: s3 });
+    expect(season3.map((f) => f.path)).toEqual(["末日地堡.S03E08.mkv"]);
+    expect((await sandbox.finish()).coverageMet).toBe(true);
+  });
+
+  it("已在库的集跳过 rename/归位 —— 整包候选不再重复入库(夸克 (1) 防护)", async () => {
+    // 真实线上(run c642f1f3):Season 03 已有 canonical E01-E07,整季包候选把
+    // 8 集全带下来,finalize 原样全量归位 → 夸克对同名移动自动加 `(1)` 后缀 →
+    // 7 个 `末日地堡.S03E0X(1).mkv` 重复文件。修复:skipCodes(落点检查时目标
+    // 目录里已解析出的集)命中的视频/字幕跳过 rename 与 归位,副本随 wipe 丢弃。
+    const { sandbox, storage, stagingDirectoryId, s2: s3 } = await createSandboxWithSeason3();
+    for (const n of ["01", "02", "03", "04", "05", "06", "07"]) {
+      await landFile(storage, s3, `末日地堡.S03E${n}.mkv`);
+    }
+    // 整季包与线上候选 6 同构:E01-E07 是 Silo 原名,E04/E08 是纯数字。
+    await landFile(storage, stagingDirectoryId, "Silo.2023.S03E01.2160p.mkv");
+    await landFile(storage, stagingDirectoryId, "Silo.2023.S03E02.2160p.mkv");
+    await landFile(storage, stagingDirectoryId, "Silo.2023.S03E03.2160p.mkv");
+    await landFile(storage, stagingDirectoryId, "04.mp4");
+    await landFile(storage, stagingDirectoryId, "Silo.2023.S03E05.2160p.mkv");
+    await landFile(storage, stagingDirectoryId, "Silo.2023.S03E06.2160p.mkv");
+    await landFile(storage, stagingDirectoryId, "Silo.2023.S03E07.2160p.mkv");
+    await landFile(storage, stagingDirectoryId, "08.mp4");
+
+    const digest = digestStaging({
+      files: await sandbox.inspectStaging(),
+      seasons: [3],
+      needCodes: ["S03E08"],
+    });
+    expect(digest.passes).toBe(true);
+
+    const result = await finalizeLanding({
+      sandbox,
+      digest,
+      canonicalTitle: "末日地堡",
+      seasons: [3],
+      skipCodes: ["S03E01", "S03E02", "S03E03", "S03E04", "S03E05", "S03E06", "S03E07"],
+    });
+
+    // 只 E08 改名/归位/标记;E01-E07 跳过并随 wipe 丢弃 —— Season 3 无重复。
+    expect(result.renamed).toEqual(["末日地堡.S03E08.mp4"]);
+    expect([...result.skippedOnDisk].sort()).toEqual([
+      "S03E01", "S03E02", "S03E03", "S03E04", "S03E05", "S03E06", "S03E07",
+    ]);
+    expect(result.marked).toEqual(["S03E08"]);
+    // 真实移动数(不是 moveToSeason 返回的季目录全量 reread)。
+    expect(result.movedCount).toBe(1);
+    const season3 = await storage.listTree({ directoryId: s3 });
+    expect(season3.map((f) => f.path).sort()).toEqual([
+      "末日地堡.S03E01.mkv",
+      "末日地堡.S03E02.mkv",
+      "末日地堡.S03E03.mkv",
+      "末日地堡.S03E04.mkv",
+      "末日地堡.S03E05.mkv",
+      "末日地堡.S03E06.mkv",
+      "末日地堡.S03E07.mkv",
+      "末日地堡.S03E08.mp4",
+    ]);
   });
 
   it("leaves out-of-scope files unrenamed/未标记 but wipes them as residue", async () => {
