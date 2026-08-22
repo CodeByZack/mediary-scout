@@ -26,6 +26,11 @@ export interface FinalizeLandingOptions {
    *  裸文件名重新解析(AI 映射的文件名原规则解析不出)会跳过这些文件,导致
    *  renamed 空 → 空洞校验把 mark 也挡掉,映射的成果完全落不了地。 */
   overrides?: Record<string, string>;
+  /** 目标季目录里已存在的集代码(如 S03E01)。整包候选常把已入库的集再带一遍,
+   *  原样 rename/归位会和季目录已有文件重名 —— 夸克对同名移动自动加 `(1)` 后缀
+   *  (2026-08-21 线上:Season 03 已有 E01-E07,整包归位后出现 7 个 `(1)` 重复)。
+   *  命中这些代码的视频/字幕跳过 rename 与 归位,staging 副本随 wipe 一并丢弃。 */
+  skipCodes?: string[];
 }
 
 export interface FinalizeLandingResult {
@@ -37,6 +42,10 @@ export interface FinalizeLandingResult {
   marked: string[];
   /** Files removed by the staging wipe. */
   discarded: string[];
+  /** 实际归位(移动)的文件数 —— moveToSeason 返回的是季目录全量 reread,不能当移动数。 */
+  movedCount: number;
+  /** 已在库而跳过 rename/归位的集代码(staging 副本被 wipe,不产生 `(1)` 重复)。 */
+  skippedOnDisk: string[];
 }
 
 /** Season number of an episode code ("S01E13" → 1), or null. */
@@ -59,16 +68,19 @@ function stepLog(sandbox: TaskSandbox, title: string, step: string, detail: stri
 /** Group every in-scope video (and its subtitles) into per-season move batches.
  *  Videos move by their parsed episode code's season; a subtitle rides with its
  *  video when it parses to the same season, else stays in staging.
- *  `overrides`(AI 集数映射)优先于裸文件名解析。 */
+ *  `overrides`(AI 集数映射)优先于裸文件名解析。`skipCodes`(已在库的集)整体
+ *  跳过 —— 整包候选重放已入库的集会撞夸克同名 `(1)` 重复。 */
 export function buildSeasonMoves(
   digest: StagingDigest,
   seasons: number[],
   overrides?: Record<string, string>,
+  skipCodes?: string[],
 ): Array<{ season: number; fileIds: string[] }> {
   const seasonSet = new Set(seasons);
   const junkNames = new Set(digest.junkSignals);
   const bySeason = new Map<number, string[]>();
   const overridesTable = overrides ?? {};
+  const skipSet = new Set(skipCodes ?? []);
   const push = (season: number, fileId: string) => {
     const list = bySeason.get(season) ?? [];
     list.push(fileId);
@@ -81,6 +93,7 @@ export function buildSeasonMoves(
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
+    if (skipSet.has(code)) continue;
     push(season, video.id);
   }
   for (const subtitle of digest.subtitles) {
@@ -88,7 +101,7 @@ export function buildSeasonMoves(
     const code = overridesTable[fileBaseName(subtitle.path)] ?? episodeCodeFromFileName(fileBaseName(subtitle.path), seasons);
     if (code) {
       const season = seasonFromEpisodeCode(code);
-      if (season !== null && seasonSet.has(season)) {
+      if (season !== null && seasonSet.has(season) && !skipSet.has(code)) {
         push(season, subtitle.id);
       }
     }
@@ -101,9 +114,10 @@ export function buildSeasonMoves(
 export async function finalizeLanding(
   options: FinalizeLandingOptions,
 ): Promise<FinalizeLandingResult> {
-  const { sandbox, digest, canonicalTitle, seasons, overrides } = options;
+  const { sandbox, digest, canonicalTitle, seasons, overrides, skipCodes } = options;
   const seasonSet = new Set(seasons);
   const overridesTable = overrides ?? {};
+  const skipSet = new Set(skipCodes ?? []);
 
   // 1. Rename every in-scope video to `Title.SxxExx.ext`. canonicalEpisodeFileName
   //    carries the extension over so the file stays playable. Junk files (sample/
@@ -112,6 +126,7 @@ export async function finalizeLanding(
   //    文件名由仲裁给出 code),否则用裸文件名解析。
   const renames: Array<{ fileId: string; newName: string }> = [];
   const renamed: string[] = [];
+  const skippedOnDisk: string[] = [];
   const junkNames = new Set(digest.junkSignals);
   for (const video of digest.videos) {
     const base = fileBaseName(video.path);
@@ -120,6 +135,11 @@ export async function finalizeLanding(
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
+    if (skipSet.has(code)) {
+      // 已在库的集:再改名/归位只会撞出 `(1)` 重复 —— 跳过,wipe 时丢弃副本。
+      skippedOnDisk.push(code);
+      continue;
+    }
     const newName = canonicalEpisodeFileName({ title: canonicalTitle, episodeCode: code, sourceName: base });
     renames.push({ fileId: video.id, newName });
   }
@@ -144,7 +164,9 @@ export async function finalizeLanding(
   // 2. 归位 into season directories (subtitles ride with their videos).
   //    overrides 同样优先 —— 否则 fansub 名(如 `[NC-Raws] 狂飙 - 01.mkv`)虽然
   //    rename 成功为 `狂飙.S01E01.mkv`,归位又按裸名解析会跳过,文件留在 staging 被清。
-  const moves = buildSeasonMoves(digest, seasons, overridesTable);
+  const moves = buildSeasonMoves(digest, seasons, overridesTable, skipCodes);
+  // moveToSeason 的返回是「移动后整目录 reread」不是移动清单 —— 真实移动数从这里算。
+  const movedCount = moves.reduce((sum, move) => sum + move.fileIds.length, 0);
   const movedSeasons: Record<number, number> = {};
   if (moves.length > 0) {
     const result = await sandbox.moveToSeason({ moves });
@@ -186,7 +208,7 @@ export async function finalizeLanding(
   // 4. Wipe staging (leftovers: out-of-scope episodes, dup packs, residue).
   const discarded = (await sandbox.discardStaging()).removed;
 
-  return { renamed, movedSeasons, marked, discarded };
+  return { renamed, movedSeasons, marked, discarded, skippedOnDisk, movedCount };
 }
 
 /**

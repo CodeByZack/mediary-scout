@@ -391,10 +391,17 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   //    — never re-searched or re-transferred.
   let needCodes = [...target.missingEpisodes];
   const alreadyPresent = new Set<string>();
+  // Every parseable code already sitting in the target dir — not just the missing
+  // ones. finalize skips these when organizing a full pack: re-moving them hits
+  // the drive's same-name auto-`(1)` duplication (live 2026-08-21 Quark bug:
+  // Season 03 held E01-E07, a full-season pack re-landed all 8 → seven `(1)` dups).
+  const onDiskCodes = new Set<string>();
   const onDisk = await sandbox.inspectTargetDir();
   for (const file of onDisk) {
-    const code = episodeCodeFromFileName(fileBaseName(file.path));
-    if (code && needCodes.includes(code)) {
+    const code = episodeCodeFromFileName(fileBaseName(file.path), seasons);
+    if (!code) continue;
+    onDiskCodes.add(code);
+    if (needCodes.includes(code)) {
       alreadyPresent.add(code);
     }
   }
@@ -404,7 +411,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   const landingDetail =
     alreadyPresent.size > 0
       ? `已在库 ${alreadyPresent.size} 集(${[...alreadyPresent].join(",")}),仍需 ${needCodes.length} 集`
-      : `目标目录无已落盘集,仍需 ${needCodes.length} 集`;
+      : `目标缺集未在库(${needCodes.join(",") || "-"}),开始获取`;
   emitStep(onProgress, "inspectTargetDir", "search", landingDetail);
   if (alreadyPresent.size > 0) {
     await sandbox.markObtained({ codes: [...alreadyPresent] });
@@ -632,8 +639,18 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     // Clean landing → finalize (rename/归位/mark/wipe) in code, zero LLM.
     if (digest.passes) {
       try {
-        const finalized = await finalizeLanding({ sandbox, digest, canonicalTitle: target.title, seasons });
-        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${Object.values(finalized.movedSeasons).reduce((sum, n) => sum + n, 0)} 文件 / 清理 ${finalized.discarded.length} 文件`;
+        const finalized = await finalizeLanding({
+          sandbox,
+          digest,
+          canonicalTitle: target.title,
+          seasons,
+          skipCodes: [...onDiskCodes],
+        });
+        const skipNote =
+          finalized.skippedOnDisk.length > 0
+            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集(${finalized.skippedOnDisk.sort().join(",")})`
+            : "";
+        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
         emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
       } catch (error) {
@@ -704,9 +721,14 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
           digest: landingDigest,
           canonicalTitle: target.title,
           seasons,
+          skipCodes: [...onDiskCodes],
           ...(mappingTable ? { overrides: mappingTable } : {}),
         });
-        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${Object.values(finalized.movedSeasons).reduce((sum, n) => sum + n, 0)} 文件 / 清理 ${finalized.discarded.length} 文件`;
+        const skipNote =
+          finalized.skippedOnDisk.length > 0
+            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集(${finalized.skippedOnDisk.sort().join(",")})`
+            : "";
+        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
         emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
       } catch (error) {
