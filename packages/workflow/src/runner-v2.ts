@@ -10,9 +10,16 @@ import type {
 } from "./domain.js";
 import { runTvAcquisitionV2 } from "./acquisition-v2/run-tv-v2.js";
 import type { BridgedV2Result } from "./acquisition-v2/workflow-v2-bridge.js";
-import { makeProgressSink } from "./acquisition-v2/progress-sink.js";
-import { makeAgentTraceSink, combineToolEventSinks } from "./acquisition-v2/agent-trace-sink.js";
 import { runMovieAcquisitionV2 } from "./movie-workflow-v2.js";
+// ★ ⑦落库与 run 观测管道已收口到 consumption/stages/persist.ts（同一实现，出口
+// 名保留）；本文件过渡期仅剩"巡检宿主 + 旧 API 薄包装"，步骤⑥ 删除。
+import {
+  persistMovieRun,
+  persistSeriesSeasons,
+  persistSingleSeason,
+  progressAndTraceSink,
+  resolveNow,
+} from "./consumption/stages/persist.js";
 import type { ResourceProvider, StorageExecutor } from "./ports.js";
 import type { WorkflowRepository } from "./repository.js";
 
@@ -59,10 +66,6 @@ interface TvV2Common {
   now?: () => string;
 }
 
-function resolveNow(input: { now?: () => string }): () => string {
-  return input.now ?? (() => new Date().toISOString());
-}
-
 function passthrough(input: TvV2Common): {
   searchBudget?: number;
   maxSteps?: number;
@@ -79,62 +82,6 @@ function passthrough(input: TvV2Common): {
     ...(input.storageProvider === undefined ? {} : { storageProvider: input.storageProvider }),
     ...(input.assrtToken === undefined ? {} : { assrtToken: input.assrtToken }),
   };
-}
-
-/** The run's onProgress: live activity progress (for the activity page) AND the
- *  durable per-step trace (for post-mortem复盘), combined + isolated so one can't
- *  break the other. `apiCallCount` surfaces the 115 budget burn per step (real 115
- *  only; fakes omit it). */
-function progressAndTraceSink(input: {
-  repository: WorkflowRepository;
-  workflowRunId: string;
-  neededHint: number;
-  storage: StorageExecutor;
-}): ReturnType<typeof combineToolEventSinks> {
-  return combineToolEventSinks(
-    makeProgressSink({
-      repository: input.repository,
-      workflowRunId: input.workflowRunId,
-      neededHint: input.neededHint,
-    }),
-    makeAgentTraceSink({
-      repository: input.repository,
-      workflowRunId: input.workflowRunId,
-      apiCallCount: () => input.storage.apiCallCount?.(),
-    }),
-  );
-}
-
-async function persistSingleSeason(input: {
-  kind: WorkflowKind;
-  title: MediaTitle;
-  bridged: BridgedV2Result;
-  workflowRun: WorkflowRunMetadata;
-  repository: WorkflowRepository;
-  accountId?: string;
-  connectedStorageId?: string | null;
-}): Promise<void> {
-  const seasonResult = input.bridged.seasons[0]!;
-  await input.repository.saveWorkflowRunSnapshot({
-    ...(input.accountId ? { accountId: input.accountId } : {}),
-    ...(input.connectedStorageId != null ? { connectedStorageId: input.connectedStorageId } : {}),
-    title: input.title,
-    season: seasonResult.season,
-    workflowRun: {
-      id: input.workflowRun.id,
-      kind: input.kind,
-      status: input.bridged.status,
-      trackedSeasonId: seasonResult.season.id,
-      startedAt: input.workflowRun.startedAt,
-      finishedAt: input.workflowRun.finishedAt,
-      auditEvents: input.bridged.auditEvents,
-    },
-    episodes: seasonResult.episodes,
-    resourceSnapshots: input.bridged.resourceSnapshots,
-    decisions: input.bridged.decisions,
-    transferAttempts: input.bridged.transferAttempts,
-    notifications: input.bridged.notifications,
-  });
 }
 
 export async function runType2InitializationV2AndPersist(
@@ -268,43 +215,19 @@ export async function runSeriesInitializationV2AndPersist(
 
   // Stamp completion AFTER the run; one finishedAt shared across all season
   // records (the title-level run finished once).
+  // ⑦：逐季落库循环收口在 consumption/stages/persist.ts.persistSeriesSeasons。
   const finishedAt = now();
-  // One record per season under `${runId}_s${n}`, mirroring the old series
-  // persistence: resource evidence + notifications ride on the first season
-  // only (title-level), not duplicated across N season records.
-  for (const [index, seasonResult] of bridged.seasons.entries()) {
-    const seasonRunId = `${input.workflowRun.id}_s${seasonResult.season.seasonNumber}`;
-    await input.repository.saveWorkflowRunSnapshot({
-      ...(input.accountId ? { accountId: input.accountId } : {}),
-      ...(input.connectedStorageId != null ? { connectedStorageId: input.connectedStorageId } : {}),
-      title: input.title,
-      season: seasonResult.season,
-      workflowRun: {
-        id: seasonRunId,
-        kind: "type1_package_init",
-        status: bridged.status,
-        trackedSeasonId: seasonResult.season.id,
-        startedAt: input.workflowRun.startedAt,
-        finishedAt,
-        auditEvents: index === 0 ? bridged.auditEvents : [],
-      },
-      episodes: seasonResult.episodes,
-      resourceSnapshots: index === 0 ? bridged.resourceSnapshots : [],
-      decisions: index === 0 ? bridged.decisions : [],
-      transferAttempts:
-        index === 0
-          ? bridged.transferAttempts.map((attempt) => ({ ...attempt, workflowRunId: seasonRunId }))
-          : [],
-      notifications:
-        index === 0
-          ? bridged.notifications.map((notification) => ({
-              ...notification,
-              id: notification.id.replace(input.workflowRun.id, seasonRunId),
-              workflowRunId: seasonRunId,
-            }))
-          : [],
-    });
-  }
+  await persistSeriesSeasons({
+    title: input.title,
+    bridged,
+    workflowRun: input.workflowRun,
+    finishedAt,
+    repository: input.repository,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(input.connectedStorageId != null
+      ? { connectedStorageId: input.connectedStorageId }
+      : {}),
+  });
   return bridged;
 }
 
@@ -356,25 +279,17 @@ export async function runMovieAcquisitionV2AndPersist(input: {
     ...(input.assrtToken === undefined ? {} : { assrtToken: input.assrtToken }),
   });
 
-  await input.repository.saveWorkflowRunSnapshot({
-    ...(input.accountId ? { accountId: input.accountId } : {}),
-    ...(input.connectedStorageId != null ? { connectedStorageId: input.connectedStorageId } : {}),
+  // ⑦：movie 落库收口在 consumption/stages/persist.ts.persistMovieRun。
+  await persistMovieRun({
     title: input.title,
-    season: result.season,
-    workflowRun: {
-      id: input.workflowRun.id,
-      kind: "movie_init",
-      status: result.status,
-      trackedSeasonId: result.season.id,
-      startedAt: input.workflowRun.startedAt,
-      finishedAt: now(),
-      auditEvents: result.auditEvents,
-    },
-    episodes: result.episodes,
-    resourceSnapshots: result.resourceSnapshots,
-    decisions: result.decisions,
-    transferAttempts: result.transferAttempts,
-    notifications: result.notifications,
+    result,
+    workflowRun: input.workflowRun,
+    finishedAt: now(),
+    repository: input.repository,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(input.connectedStorageId != null
+      ? { connectedStorageId: input.connectedStorageId }
+      : {}),
   });
   return result;
 }

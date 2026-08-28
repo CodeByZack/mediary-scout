@@ -188,6 +188,15 @@
 - 注释语义保留：④ 是全链路唯一真实搜索/转存/LLM token 消耗点，③判空 no-op 不进 ④
 - 验证：tsc exit 0；vitest 12 文件 68 用例全绿（v2-workflow / v2-run-tv / v2-orchestrator / orchestrator-subtitle / v2-subtitle / v2-bridge / v2-acceptance / v2-acceptance-multiseason + 队列回归 worker / v2-full-chain / v2-series-queue / type3-worker）
 
+### 17. 步骤④——stages/persist.ts：⑦落库收口，pipeline 转真组合
+
+**提交**: （本次）`refactor(consumption): 步骤④ 落库阶段收口，pipeline 转真组合`
+
+- 新增 `consumption/stages/persist.ts`：⑦写-only 的四种落库形态全部自 runner-v2 逐字迁入 —— `persistSingleSeason`（type2/type3 单季）、`persistSeriesSeasons`（type1 逐季 _sN，证据/通知只挂第一条）、`persistSeriesLockRun`（type1 claimed 锁 run 收尾，步骤① 暂居 pipeline 的尾段归位）、`persistMovieRun`（movie 单记录）；`progressAndTraceSink`（活动页进度+agent_steps trace 合并写路径）与 `resolveNow`（finishedAt 跑后盖章语义）同步迁入
+- `pipeline.ts`：type2/type1/movie 分支从"转发 runner 包装"升级为**真实 ①–⑦ 组合**（runTvAcquisitionV2/runMovieAcquisitionV2 + persist.*，neededHint/priorObtained/seasons 形状逐一对位）；type3 分支暂留转发（runType3MonitoringV2AndPersist 仍是巡检唯一实现点，步骤⑥ 巡检直调时收口，避免双份对账漂移）
+- `runner-v2.ts` 瘦身：本地 persistSingleSeason/progressAndTraceSink/resolveNow 删除、series/movie 内联落库段替换为 persist.ts 调用 —— 过渡期仅剩"巡检宿主 + 旧 API 薄包装"（v2-runner-persist 测试面不动），步骤⑥ 物理删除
+- 验证：tsc exit 0；vitest 13 文件 97 用例全绿（v2-runner-persist / worker / v2-series-queue / v2-full-chain / movie-command-worker / type3-worker / handle-workflow-failure / run-retry-transitions / cancel-queued / agent-trace-integration / v2-bridge / v2-movie-workflow / notification-report）
+
 ---
 
 ## 注意事项
