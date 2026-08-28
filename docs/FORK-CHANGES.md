@@ -197,6 +197,18 @@
 - `runner-v2.ts` 瘦身：本地 persistSingleSeason/progressAndTraceSink/resolveNow 删除、series/movie 内联落库段替换为 persist.ts 调用 —— 过渡期仅剩"巡检宿主 + 旧 API 薄包装"（v2-runner-persist 测试面不动），步骤⑥ 物理删除
 - 验证：tsc exit 0；vitest 13 文件 97 用例全绿（v2-runner-persist / worker / v2-series-queue / v2-full-chain / movie-command-worker / type3-worker / handle-workflow-failure / run-retry-transitions / cancel-queued / agent-trace-integration / v2-bridge / v2-movie-workflow / notification-report）
 
+### 18. 步骤⑤——fast-path 拆分：consumption/fast-path/{budgets,steps,landing,tv,movie}.ts + LandingVerdict
+
+**提交**: （本次）`refactor(consumption): 步骤⑤ fast-path 拆分为五模块并落地 LandingVerdict`
+
+- 1375 行单体 `acquisition-v2/fast-path.ts` 按 design §5/§7 拆分（装配脚本行切片搬运，逐字等价；原文件退居 15 行兼容壳 re-export，orchestrator/测试引用面零改动）：
+  - `budgets.ts`：三常量（3/10/3 及血泪注释逐字保留）+ design §5 的 `Budgets`/`DEFAULT_BUDGETS`（业务循环保留直读常量，同源值，行为零变化）
+  - `steps.ts`：stepLog/emitStep/logStorageProvider（`[mediary-run]` 文案唯一出处）+ FastPathOptions/Result + nextCandidate/concludeUncovered/fileBaseName/gradeDistribution
+  - `landing.ts`：tryEpisodeMapping(§2.2)/computeKnownEpisodeRange/aliasesFallbackReSearch(§E primary 快照恢复) + 从主循环抽出的 **LandingVerdict 七值状态机** `closeOutTvLanding`（systemic/dead/clean/mapped_clean/accept/retry_other/abandon；15 个 return 点行级手术，日志与沙盒调用顺序逐字不变；死链不占转存预算的语义由"dead 分支不触 attempted.add + deadRetries 随判定带出"原样承载）
+  - `tv.ts`：runFastPathAcquisition（落点检查→评分→兜底重搜→唯一A/选片仲裁→循环驱动 closeOutTvLanding→耗尽尾段）
+  - `movie.ts`：runMovieFastPathAcquisition + clearMovieLanding + landSubtitlesForMovie（字幕软目标语义逐字保留）
+- 验证：tsc exit 0；vitest 16 文件 160 用例全绿（fast-path 27 / movie-fast-path / repetition-stop 预算 / staging-digest / finalize-landing / episode-code / keyword-references-title / v2-orchestrator / orchestrator-subtitle / v2-subtitle + e2e full-chain/worker/series/type3/acceptance×2）
+
 ---
 
 ## 注意事项
