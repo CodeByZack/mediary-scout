@@ -150,6 +150,27 @@
 
 ---
 
+## 任务消费流水线重构（consumption pipeline，纯等价重构）
+
+> 设计蓝图：`/vol1/1000/docs/mediary-scout-consumption-refactor-design.md`（§2 七阶段主干 / §3 ConsumptionContext / §7 文件布局）。
+> 目标：把「认领→落库」从 4 层参数透传（workflow-runtime → worker → runner-v2 → workflow-v2 → orchestrator）收敛为
+> 一次性 `ConsumptionContext` + 七阶段 `consumeClaimedRun(ctx)`。**纯等价重构：外部行为、日志文案、通知口径、失败语义零变化。**
+> 器件（TaskSandbox/candidate-grader/三仲裁/staging-digest/finalize-landing/subtitle-picker/episode-code/SQLite schema）一律不动。
+> 与设计的 4 处已对齐偏差：A 认领循环留在 workflow 包（apps/web 只备料）；B movie「落点已有视频」检查留在 ④（前移会省一次真实搜索=行为变化）；
+> C pipeline 不吞异常、调用方分派 failure 语义（队列 handleWorkflowRunFailure / 巡检自 catch）；D 过渡期三个 runQueued* 名字保留为表驱动薄包装。
+
+### 14. 步骤①——consumption/context.ts + pipeline.ts 转发骨架，三个队列入口接线
+
+**提交**: （本次）`refactor(consumption): 步骤① 消费上下文与七阶段纯转发骨架`
+
+- 新增 `packages/workflow/src/consumption/context.ts`：ConsumptionContext（kind/title/claimed/patrol + 消费依赖 + 注入能力 + 运行上下文，design §3 分组）、ClaimedRun（保留完整 snapshot——type1 锁 run 收尾需 WorkflowRun 全展开，设计稿的扁平 episodes/titleRef 由此导出，有损重建被等价原则否决）、PatrolRun（步骤⑥巡检直调时启用）、`buildConsumptionContext`（resolveWorkerDeps 合并后的依赖一次性装袋；type1 的 seasonScopes 派生自 series_init_queued 审计事件）；`storageParentForTitle`/`requireCategoryParent` 自 worker.ts 逐字迁入（= ①目录阶段的父级选择 + fail-loud）
+- 新增 `packages/workflow/src/consumption/pipeline.ts`：`consumeClaimedRun(ctx)` 七阶段主干入口（①prepareDirectories ②withStagingCleanup ③computeNeed ④runAcquisition ⑤reconcileNeed ⑥readLandedSize ⑦persistOutcome）。当前形态=按 kind 纯转发到现有 runner-v2 实现（其内部已按 ①–⑦ 顺序执行），步骤②–⑤ 逐阶段替换转发；type1 分支已吸收原 worker 尾段「claimed 锁 run 收尾落库」（逐字搬迁）；异常一律上抛由调用方分派（偏差 C），队列侧 catch 语义原封不动
+- `worker.ts`：runQueuedType2Workflow / runQueuedSeriesInitialization / runQueuedMovieAcquisition 三个认领入口的 try 体 → buildConsumptionContext + consumeClaimedRun；认领、resolveWorkerDeps、catch/handleWorkflowRunFailure 原位不动；两个私有 helper 迁出、失效 import 清理；type3 巡检与 patrolMovie 暂不切（步骤⑥按决策 1 直调 pipeline）
+- `index.ts`：新增 consumption 两模块出口
+- 验证：`./node_modules/.bin/tsc -p tsconfig.workflow-check.json` exit 0；vitest 9 个链路测试文件（worker / type3-worker / handle-workflow-failure / run-retry-transitions / v2-series-queue / v2-full-chain / v2-runner-persist / cancel-queued / movie-command-worker）= 9 files / 50 tests 全绿
+
+---
+
 ## 注意事项
 
 - `.gitignore`：追加 `*_TODO.md`、`deploy/fpk/app/server/`、`deploy/fpk/dist/`

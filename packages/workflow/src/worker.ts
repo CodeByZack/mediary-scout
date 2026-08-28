@@ -1,9 +1,7 @@
 import type { LanguageModel } from "ai";
 import type {
-  AcquisitionSeasonScope,
   EpisodeState,
   MediaTitle,
-  MediaType,
   NotificationEvent,
   NotificationReport,
   TrackedSeason,
@@ -27,10 +25,14 @@ import { isPan123AuthError } from "./pan123-client.js";
 import { isQuarkAuthError } from "./quark-cookie-client.js";
 import {
   runMovieAcquisitionV2AndPersist,
-  runSeriesInitializationV2AndPersist,
-  runType2InitializationV2AndPersist,
   runType3MonitoringV2AndPersist,
 } from "./runner-v2.js";
+import {
+  buildConsumptionContext,
+  requireCategoryParent,
+  storageParentForTitle,
+} from "./consumption/context.js";
+import { consumeClaimedRun } from "./consumption/pipeline.js";
 import { syncSeasonAgainstMetadata } from "./season-sync.js";
 import { isTianyiAuthError } from "./tianyi-client.js";
 
@@ -62,22 +64,6 @@ async function maybeFreezeOnBrandAuthError(input: {
       `[media-track] onAuthErrorFreeze failed for ${connectedStorageId}: ${String(freezeError)}`,
     );
   }
-}
-
-/**
- * Pick the 115 landing parent for a title. Anime lands under its own parent
- * (when configured) so the 动漫 library shelf is a physically separate tree,
- * never intermixed with TV shows; everything else uses the default parent.
- */
-function storageParentForTitle(
-  title: { type: MediaType },
-  storageParentDirectoryId: string | undefined,
-  animeStorageParentDirectoryId: string | undefined,
-): string | undefined {
-  if (title.type === "anime" && animeStorageParentDirectoryId !== undefined) {
-    return animeStorageParentDirectoryId;
-  }
-  return storageParentDirectoryId;
 }
 
 /**
@@ -321,48 +307,32 @@ export async function runQueuedType2Workflow(input: {
   );
 
   try {
-    const result = await runType2InitializationV2AndPersist({
-      title: claimed.title,
-      season: claimed.season,
-      categoryParentId: requireCategoryParent(
-        storageParentForTitle(
-          claimed.title,
-          deps.storageParentDirectoryId,
-          deps.animeStorageParentDirectoryId,
-        ),
-      ),
-      resourceProvider: deps.resourceProvider,
-      storage: deps.storage,
-      model: deps.model,
-      repository: input.repository,
-      accountId: claimed.accountId,
-      connectedStorageId: claimed.connectedStorageId,
-      ...(deps.preferredLanguage === undefined
-        ? {}
-        : { preferredLanguage: deps.preferredLanguage }),
-      ...(deps.qualityPreference === undefined
-        ? {}
-        : { qualityPreference: deps.qualityPreference }),
-      ...(deps.storageProvider === undefined
-        ? {}
-        : { storageProvider: deps.storageProvider }),
-      ...(deps.assrtToken === undefined
-        ? {}
-        : { assrtToken: deps.assrtToken }),
-      // finishedAt is stamped post-run inside the persist step (see runner-v2),
-      // so it reflects actual completion, not the claim time.
-      workflowRun: {
-        id: claimed.workflowRun.id,
-        startedAt: claimed.workflowRun.startedAt,
-        finishedAt: null,
+    const ctx = buildConsumptionContext({
+      kind: "type2_init",
+      claimed,
+      deps: {
+        repository: input.repository,
+        resourceProvider: deps.resourceProvider,
+        storage: deps.storage,
+        model: deps.model,
+        storageProvider: deps.storageProvider,
+        preferredLanguage: deps.preferredLanguage,
+        qualityPreference: deps.qualityPreference,
+        assrtToken: deps.assrtToken,
+        tvParentDirectoryId: deps.storageParentDirectoryId,
+        animeParentDirectoryId: deps.animeStorageParentDirectoryId,
+        moviesParentDirectoryId: deps.moviesParentDirectoryId,
       },
       now,
     });
+    // ★ 任务消费流水线（design §2）：①–⑦ 全部在 consumeClaimedRun 内执行；
+    // finishedAt 由 ⑦ 在跑后盖章（runner-v2 语义原样保留）。
+    const consumed = await consumeClaimedRun(ctx);
 
     return {
       status: "ran",
       workflowRunId: claimed.workflowRun.id,
-      workflowStatus: result.status,
+      workflowStatus: consumed.workflowStatus,
     };
   } catch (error) {
     const handled = await handleWorkflowRunFailure({
@@ -785,20 +755,6 @@ function staleStartedBefore(
   return new Date(nowMs - timeoutMs).toISOString();
 }
 
-/**
- * The V2 directory lifecycle must verify-or-create the library category parent
- * (Movies/TV/Anime); a missing parent is a misconfiguration, not a silent
- * account-root fallback (fail loud — see acquisition-hard-details).
- */
-function requireCategoryParent(parent: string | undefined): string {
-  if (parent === undefined || parent === "") {
-    throw new Error(
-      "MEDIA_TRACK_CATEGORY_PARENT_REQUIRED: a library category parent (Movies/TV/Anime) is required for directory verify-or-create",
-    );
-  }
-  return parent;
-}
-
 export async function runQueuedMovieAcquisition(input: {
   repository: WorkflowRepository;
   resourceProvider: ResourceProvider;
@@ -828,39 +784,32 @@ export async function runQueuedMovieAcquisition(input: {
   );
 
   try {
-    const result = await runMovieAcquisitionV2AndPersist({
-      title: claimed.title,
-      categoryParentId:
-        deps.moviesParentDirectoryId ?? input.moviesParentDirectoryId,
-      resourceProvider: deps.resourceProvider,
-      storage: deps.storage,
-      model: deps.model,
-      repository: input.repository,
-      accountId: claimed.accountId,
-      connectedStorageId: claimed.connectedStorageId,
-      ...(deps.preferredLanguage === undefined
-        ? {}
-        : { preferredLanguage: deps.preferredLanguage }),
-      ...(deps.qualityPreference === undefined
-        ? {}
-        : { qualityPreference: deps.qualityPreference }),
-      ...(deps.storageProvider === undefined
-        ? {}
-        : { storageProvider: deps.storageProvider }),
-      ...(deps.assrtToken === undefined
-        ? {}
-        : { assrtToken: deps.assrtToken }),
-      workflowRun: {
-        id: claimed.workflowRun.id,
-        startedAt: claimed.workflowRun.startedAt,
-        finishedAt: null,
+    const ctx = buildConsumptionContext({
+      kind: "movie_init",
+      claimed,
+      deps: {
+        repository: input.repository,
+        resourceProvider: deps.resourceProvider,
+        storage: deps.storage,
+        model: deps.model,
+        storageProvider: deps.storageProvider,
+        preferredLanguage: deps.preferredLanguage,
+        qualityPreference: deps.qualityPreference,
+        assrtToken: deps.assrtToken,
+        tvParentDirectoryId: deps.storageParentDirectoryId,
+        animeParentDirectoryId: deps.animeStorageParentDirectoryId,
+        // 今天语义：账号级缺失时回落全局 movies 父目录。
+        moviesParentDirectoryId:
+          deps.moviesParentDirectoryId ?? input.moviesParentDirectoryId,
       },
       now,
     });
+    // ★ 任务消费流水线：movie 的 ①–⑦（含单季落库口径）在 consumeClaimedRun 内。
+    const consumed = await consumeClaimedRun(ctx);
     return {
       status: "ran",
       workflowRunId: claimed.workflowRun.id,
-      workflowStatus: result.status,
+      workflowStatus: consumed.workflowStatus,
     };
   } catch (error) {
     const handled = await handleWorkflowRunFailure({
@@ -909,81 +858,32 @@ export async function runQueuedSeriesInitialization(input: {
     input,
   );
 
-  const queuedEvent = claimed.workflowRun.auditEvents.find(
-    (event) => event.type === "series_init_queued",
-  );
-  const seasons = (queuedEvent?.data?.["seasons"] ??
-    []) as AcquisitionSeasonScope[];
-
   try {
-    if (seasons.length === 0) {
-      throw new Error(
-        "Queued series initialization run is missing its season metadata",
-      );
-    }
-    const result = await runSeriesInitializationV2AndPersist({
-      title: claimed.title,
-      seasons,
-      categoryParentId: requireCategoryParent(
-        storageParentForTitle(
-          claimed.title,
-          deps.storageParentDirectoryId,
-          deps.animeStorageParentDirectoryId,
-        ),
-      ),
-      seasonQualityRecord: claimed.season.qualityPreference,
-      resourceProvider: deps.resourceProvider,
-      storage: deps.storage,
-      model: deps.model,
-      repository: input.repository,
-      accountId: claimed.accountId,
-      connectedStorageId: claimed.connectedStorageId,
-      ...(deps.preferredLanguage === undefined
-        ? {}
-        : { preferredLanguage: deps.preferredLanguage }),
-      ...(deps.qualityPreference === undefined
-        ? {}
-        : { qualityPreference: deps.qualityPreference }),
-      ...(deps.storageProvider === undefined
-        ? {}
-        : { storageProvider: deps.storageProvider }),
-      ...(deps.assrtToken === undefined
-        ? {}
-        : { assrtToken: deps.assrtToken }),
-      workflowRun: {
-        id: claimed.workflowRun.id,
-        startedAt: claimed.workflowRun.startedAt,
-        finishedAt: null,
+    const ctx = buildConsumptionContext({
+      kind: "type1_package_init",
+      claimed,
+      deps: {
+        repository: input.repository,
+        resourceProvider: deps.resourceProvider,
+        storage: deps.storage,
+        model: deps.model,
+        storageProvider: deps.storageProvider,
+        preferredLanguage: deps.preferredLanguage,
+        qualityPreference: deps.qualityPreference,
+        assrtToken: deps.assrtToken,
+        tvParentDirectoryId: deps.storageParentDirectoryId,
+        animeParentDirectoryId: deps.animeStorageParentDirectoryId,
+        moviesParentDirectoryId: deps.moviesParentDirectoryId,
       },
       now,
     });
-    // Finalize the claimed lock run itself; it doubles as season 1's summary
-    // record (same tracked season and episode state as the persisted _s1 run).
-    const firstSeason = result.seasons[0];
-    await input.repository.saveWorkflowRunSnapshot({
-      accountId: claimed.accountId,
-      connectedStorageId: claimed.connectedStorageId,
-      title: claimed.title,
-      season: firstSeason?.season ?? claimed.season,
-      workflowRun: {
-        ...claimed.workflowRun,
-        status: result.status,
-        finishedAt: now(),
-        auditEvents: [
-          ...claimed.workflowRun.auditEvents,
-          ...result.auditEvents,
-        ],
-      },
-      episodes: firstSeason?.episodes ?? [],
-      resourceSnapshots: [],
-      decisions: [],
-      transferAttempts: [],
-      notifications: [],
-    });
+    // ★ 任务消费流水线：逐季落库（_sN）与 claimed 锁 run 收尾（season 1 摘要
+    // 记录）都在 pipeline 的 type1 分支内完成；season 元数据缺失的抛错语义不变。
+    const consumed = await consumeClaimedRun(ctx);
     return {
       status: "ran",
       workflowRunId: claimed.workflowRun.id,
-      workflowStatus: result.status,
+      workflowStatus: consumed.workflowStatus,
     };
   } catch (error) {
     const handled = await handleWorkflowRunFailure({
