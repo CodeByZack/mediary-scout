@@ -169,6 +169,16 @@
 - `index.ts`：新增 consumption 两模块出口
 - 验证：`./node_modules/.bin/tsc -p tsconfig.workflow-check.json` exit 0；vitest 9 个链路测试文件（worker / type3-worker / handle-workflow-failure / run-retry-transitions / v2-series-queue / v2-full-chain / v2-runner-persist / cancel-queued / movie-command-worker）= 9 files / 50 tests 全绿
 
+### 15. 步骤②——stages/directories.ts + stages/need.ts：①②③⑤⑥ 阶段收口
+
+**提交**: （本次）`refactor(consumption): 步骤② 目录/清理/需求对账阶段收口 stages/*`
+
+- 新增 `consumption/stages/directories.ts`：①`prepareDirectories`、②`withStagingCleanupStage`（335 文件泄漏兜底）、⑥`readLandedSizeStage`（best-effort 体积）——薄收口，器件 directory-lifecycle.ts / landed-size.ts 不动
+- 新增 `consumption/stages/need.ts`：③`computeNeed` → `NeedSnapshot{missing,obtained,providerAhead}`、⑤`reconcileNeed`（prior ∪ agent 标记，不重扫网盘）、no-op 零 API 早退的产物形状 `noOpWorkflowStageResult`/`assembleNoOpWorkflowResult`（原 EMPTY_OUTCOME 收编）
+- `acquisition-v2/workflow-v2.ts` 改调 stages 收口点（同一实现换门牌）：7a/7b 段与早退分支逐字等价；本地 EMPTY_OUTCOME 删除
+- 行为零变化——只是把装配段升格为按七阶段命名的文件，调用链仍经 workflow-v2（type1/type3/movie 转发路径同样受益）
+- 验证：tsc exit 0；vitest 11 文件 63 用例全绿（v2-workflow / v2-sync-need / v2-directory-lifecycle / v2-sandbox-cleanup / landed-size / staging-cleanup + 队列回归 worker / v2-full-chain / v2-series-queue / type3-worker）
+
 ---
 
 ## 注意事项
