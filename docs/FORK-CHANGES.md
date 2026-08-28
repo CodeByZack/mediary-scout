@@ -179,6 +179,15 @@
 - 行为零变化——只是把装配段升格为按七阶段命名的文件，调用链仍经 workflow-v2（type1/type3/movie 转发路径同样受益）
 - 验证：tsc exit 0；vitest 11 文件 63 用例全绿（v2-workflow / v2-sync-need / v2-directory-lifecycle / v2-sandbox-cleanup / landed-size / staging-cleanup + 队列回归 worker / v2-full-chain / v2-series-queue / type3-worker）
 
+### 16. 步骤③——stages/acquire.ts：④装配段收口（唯一烧配额阶段）
+
+**提交**: （本次）`refactor(consumption): 步骤③ ④装配段收口 stages/acquire.ts`
+
+- 新增 `consumption/stages/acquire.ts`：`runAcquisitionCoreStage` = 原 workflow-v2.ts 闭包里的 orchestrator 装配调用（spread 长链逐字搬迁）+ ⑤对账 + ⑥体积 + 结果组装，连段顺序即语义不变；`RunAcquisitionV2WorkflowRequest`/`RunAcquisitionV2WorkflowResult`/`V2WorkflowSeason` 类型随迁（workflow-v2 re-export 保出口名，bridge/测试零改动）
+- `acquisition-v2/workflow-v2.ts` 变成纯阶段组合（①→②→③→no-op早退→④⑤⑥连段），~60 行；orchestrator 本体（TaskSandbox/预搜/字幕三闸门/tv 分发）作为器件不动
+- 注释语义保留：④ 是全链路唯一真实搜索/转存/LLM token 消耗点，③判空 no-op 不进 ④
+- 验证：tsc exit 0；vitest 12 文件 68 用例全绿（v2-workflow / v2-run-tv / v2-orchestrator / orchestrator-subtitle / v2-subtitle / v2-bridge / v2-acceptance / v2-acceptance-multiseason + 队列回归 worker / v2-full-chain / v2-series-queue / type3-worker）
+
 ---
 
 ## 注意事项
