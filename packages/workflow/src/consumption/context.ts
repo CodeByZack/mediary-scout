@@ -40,7 +40,7 @@ export interface PatrolRun {
   startedAt: string;
   /** 巡检侧同步过 aired/total 的当季记录。 */
   season: TrackedSeason;
-  /** 当季全部集状态（runType3MonitoringV2AndPersist 据此算 priorObtained 与 neededHint）。 */
+  /** 当季全部集状态（pipeline type3 分支据此算 priorObtained 与 neededHint）。 */
   episodes: EpisodeState[];
   accountId: string;
   connectedStorageId: string | null;
@@ -134,6 +134,37 @@ export function buildConsumptionContext(input: {
     qualityPreference: input.deps.qualityPreference,
     assrtToken: input.deps.assrtToken,
     connectedStorageId: input.claimed.connectedStorageId,
+    ...(input.now === undefined ? {} : { now: input.now }),
+  };
+}
+
+/**
+ * 巡检直调消费上下文（决策 1 · 步骤⑥）：type3 巡检保留"不入队、直接
+ * running"的预建 run 形态，认领侧信息装 PatrolRun；movie 巡检因 ⑦ 需要
+ * 完整快照字段而走 buildConsumptionContext + 合成 claimed。
+ */
+export function buildPatrolConsumptionContext(input: {
+  title: MediaTitle;
+  patrol: PatrolRun;
+  deps: ConsumptionDeps;
+  now?: () => string;
+}): ConsumptionContext {
+  return {
+    kind: "type3_monitor",
+    title: input.title,
+    patrol: input.patrol,
+    repository: input.deps.repository,
+    resourceProvider: input.deps.resourceProvider,
+    model: input.deps.model,
+    storage: input.deps.storage,
+    storageProvider: input.deps.storageProvider,
+    tvParentDirectoryId: input.deps.tvParentDirectoryId,
+    animeParentDirectoryId: input.deps.animeParentDirectoryId,
+    moviesParentDirectoryId: input.deps.moviesParentDirectoryId,
+    preferredLanguage: input.deps.preferredLanguage,
+    qualityPreference: input.deps.qualityPreference,
+    assrtToken: input.deps.assrtToken,
+    connectedStorageId: input.patrol.connectedStorageId,
     ...(input.now === undefined ? {} : { now: input.now }),
   };
 }

@@ -2,7 +2,6 @@ import type { MovieWorkflowResult, WorkflowStatus } from "../domain.js";
 import type { BridgedV2Result } from "../acquisition-v2/workflow-v2-bridge.js";
 import { runTvAcquisitionV2 } from "../acquisition-v2/run-tv-v2.js";
 import { runMovieAcquisitionV2 } from "../movie-workflow-v2.js";
-import { runType3MonitoringV2AndPersist } from "../runner-v2.js";
 import type { ClaimedRun, ConsumptionContext, PatrolRun } from "./context.js";
 import { requireCategoryParent, resolveTvCategoryParent } from "./context.js";
 import {
@@ -27,8 +26,8 @@ import {
  *
  * 阶段实现位置：①②⑥ → stages/directories.ts；③⑤ → stages/need.ts；④ 装配 →
  * stages/acquire.ts（TV 连段）+ orchestrator/movie-workflow-v2（器件宿主）；
- * ⑦ → stages/persist.ts。type2/type1/movie 分支已是真组合（不再转发 runner）；
- * type3 分支仍转发 runType3MonitoringV2AndPersist —— 步骤⑥ 巡检直调时一并收口。
+ * ⑦ → stages/persist.ts。四个 kind 分支全部真组合 —— runner-v2 已整体退场
+ * （步骤⑥）：kind 差异只在认领优先级表与 ⑦ 落库口径两处收口。
  *
  * 异常语义（对齐讨论 · 出入 C）：pipeline 不吞任何阶段异常、也不调
  * handleWorkflowRunFailure —— 由调用方分派：队列认领侧套现有 failure handler
@@ -220,25 +219,55 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
     }
 
     case "type3_monitor": {
-      // 决策 1：type3 巡检直调本入口。步骤④ 先保转发（runType3MonitoringV2AndPersist
-      // 仍是巡检的唯一实现点，避免双份对账/neededHint 漂移）；步骤⑥ 巡检侧构造
-      // PatrolRun ctx 后，这里与队列 type2 形态对齐（persistSingleSeason kind 换成
-      // type3_monitor + priorObtained/neededHint 从 patrol.episodes 计算）。
+      // 决策 1：type3 巡检直调本入口（步骤⑥收口）。原 runner 包装的
+      // priorObtained（DB obtained 标记为实有、不重扫网盘）与 neededHint
+      // （aired 未 obtained 计数）语义逐字接管。
       const patrol = requirePatrol(ctx);
-      const bridged = await runType3MonitoringV2AndPersist({
+      const now = resolveNow(ctx);
+      const bridged = await runTvAcquisitionV2({
         title: ctx.title,
-        season: patrol.season,
-        episodes: patrol.episodes,
+        mode: "type3",
+        seasons: [
+          {
+            seasonNumber: patrol.season.seasonNumber,
+            totalEpisodes: patrol.season.totalEpisodes,
+            latestAiredEpisode: patrol.season.latestAiredEpisode,
+            qualityPreference: patrol.season.qualityPreference,
+            status: patrol.season.status,
+          },
+        ],
         categoryParentId: resolveTvCategoryParent(ctx),
         resourceProvider: ctx.resourceProvider,
         storage: ctx.storage,
+        deadLinkStore: ctx.repository,
         model: ctx.model,
-        repository: ctx.repository,
-        accountId: patrol.accountId,
-        connectedStorageId: patrol.connectedStorageId,
+        workflowRunId: patrol.runId,
+        // 实有 = the DB obtained marks; the need is aired − these (NOT a 115 scan).
+        priorObtained: patrol.episodes
+          .filter((episode) => episode.obtained)
+          .map((episode) => episode.episodeCode),
+        now,
+        onProgress: progressAndTraceSink({
+          repository: ctx.repository,
+          workflowRunId: patrol.runId,
+          neededHint: patrol.episodes.filter(
+            (episode) => episode.airStatus === "aired" && !episode.obtained,
+          ).length,
+          storage: ctx.storage,
+        }),
         ...capabilitySpread(ctx),
-        workflowRun: { id: patrol.runId, startedAt: patrol.startedAt, finishedAt: null },
-        ...(ctx.now === undefined ? {} : { now: ctx.now }),
+      });
+      // ⑦ type3：单季记录（finishedAt 在跑后盖章；account/drive 归属拷自巡检侧）。
+      await persistSingleSeason({
+        kind: "type3_monitor",
+        title: ctx.title,
+        bridged,
+        workflowRun: { id: patrol.runId, startedAt: patrol.startedAt, finishedAt: now() },
+        repository: ctx.repository,
+        ...(patrol.accountId ? { accountId: patrol.accountId } : {}),
+        ...(patrol.connectedStorageId != null
+          ? { connectedStorageId: patrol.connectedStorageId }
+          : {}),
       });
       return { workflowStatus: bridged.status, result: bridged };
     }

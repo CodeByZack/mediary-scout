@@ -209,6 +209,18 @@
   - `movie.ts`：runMovieFastPathAcquisition + clearMovieLanding + landSubtitlesForMovie（字幕软目标语义逐字保留）
 - 验证：tsc exit 0；vitest 16 文件 160 用例全绿（fast-path 27 / movie-fast-path / repetition-stop 预算 / staging-digest / finalize-landing / episode-code / keyword-references-title / v2-orchestrator / orchestrator-subtitle / v2-subtitle + e2e full-chain/worker/series/type3/acceptance×2）
 
+### 19. 步骤⑥——收敛：runner-v2 整体退场、三 clone 合一、巡检直调 pipeline、fast-path 壳删除
+
+**提交**: （本次）`refactor(consumption): 步骤⑥ 收敛——runner-v2 退场与巡检直调落地`
+
+- `runner-v2.ts`（17KB、4 个 `*AndPersist` 包装）删除：type3 巡检语义（priorObtained= DB obtained 标记、neededHint= aired∧¬obtained 计数、单季落库）逐字接管进 `consumption/pipeline.ts` 新 type3 真组合分支；movie/type2/type1 早已在 ④ 收口。
+- `worker.ts` 三份同构认领 clone → 统一 `runQueuedConsumption(kind, input)`（kind 由 `QUEUE_CONSUMPTION_ORDER = [type2_init, type1_package_init, movie_init]` 优先级表驱动）+ `runNextQueuedConsumption` 单认领循环；三个 `runQueued*` 公共导出保留为一行转发（类型签名逐字不变，偏差 D 收尾）。
+- 决策 1 落地：`runScheduledType3Monitoring` 改 `buildPatrolConsumptionContext`（context.ts 新增）→ `consumeClaimedRun`；`patrolMovie` 改合成 `PersistedWorkflowRunSnapshot`（movie 消费只读 runId/归属/title/season，证据数组由 ⑦ 重建）→ 同一入口。巡检自带 catch 原样（不重试/保留 episode 态/写 failed，偏差 C）。
+- `acquisition-v2/fast-path.ts` 兼容壳删除：orchestrator 与 fast-path/movie-fast-path 测试改指 `consumption/fast-path/{tv,movie}.js`；index.ts 摘除 runner-v2 导出行。
+- apps/web `runNextQueuedWorkflow` 三段式 → 单次 `runNextQueuedConsumption`（逐字段等价：父级字段各 kind 互不读取；resourceProvider 单 tick 装配 3→1 次，纯减量；`runNextQueuedWorkflow` 导出名不变，两个 web 测试仅 mock 该外壳、零改动）。
+- 测试改线：v2-runner-persist.test.ts / agent-trace-integration.test.ts 由 runner 包装入口改为合成快照 + 直调 pipeline（断言与记录形状全保留）。
+- 验证：`tsc -p tsconfig.workflow-check.json` exit 0；tests 目录单包 tsc 仅余基线同款 `yaml` 缺依赖噪音（main 亦如此，借用树环境限制）；vitest 19 文件 168 用例全绿（含 worker/type3-worker/movie-command-worker/v2-series-queue/v2-full-chain/acceptance×2 端到端）。apps/web 整包 tsc 在本借用树不可行（react/next 依赖缺失，基线同状）。
+
 ---
 
 ## 注意事项

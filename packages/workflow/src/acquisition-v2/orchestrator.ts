@@ -12,7 +12,8 @@ import { getStorageBrand } from "../storage-brands.js";
 import { AssrtSubtitleProvider, type AssrtProviderPort } from "../subtitle-provider.js";
 import type { SearchProfile } from "./search-profile.js";
 import { needForMovie, needForTvTarget, type MovieTarget, type TvAnimeTarget } from "./task-agents.js";
-import { runFastPathAcquisition, runMovieFastPathAcquisition } from "./fast-path.js";
+import { runFastPathAcquisition } from "../consumption/fast-path/tv.js";
+import { runMovieFastPathAcquisition } from "../consumption/fast-path/movie.js";
 
 /**
  * Phase 6 — the composition root. Given the real provider + executor, a model,
