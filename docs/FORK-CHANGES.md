@@ -221,6 +221,27 @@
 - 测试改线：v2-runner-persist.test.ts / agent-trace-integration.test.ts 由 runner 包装入口改为合成快照 + 直调 pipeline（断言与记录形状全保留）。
 - 验证：`tsc -p tsconfig.workflow-check.json` exit 0；tests 目录单包 tsc 仅余基线同款 `yaml` 缺依赖噪音（main 亦如此，借用树环境限制）；vitest 19 文件 168 用例全绿（含 worker/type3-worker/movie-command-worker/v2-series-queue/v2-full-chain/acceptance×2 端到端）。apps/web 整包 tsc 在本借用树不可行（react/next 依赖缺失，基线同状）。
 
+### 20. 步骤⑦——历史事故语义自查（重构收官验证）
+
+**提交**: （本次）`test(consumption): 步骤⑦ 历史事故语义自查通过`
+
+纯等价重构的最终防线是"事故回归全绿"。本轮（步骤⑥/⑦合计，NAS 轻量口径）33 个测试文件 323 用例全绿：
+
+| 历史事故 | 回归位 | 关键断言 | 结果 |
+|---|---|---|---|
+| S03 假入库（PR #18） | episode-code.test.ts（22） | 单季任务 `01.mkv`→S03E01、多季禁无季规则 | ✅ |
+| 夸克 `(1)` 重复归位（PR #19） | finalize-landing.test.ts | skipCodes 透传、已就位文件不重复动 | ✅ |
+| 死链狂飙 45 候选 | fast-path.test.ts + budgets.ts 红线 | 死链计数 10 上限、dead 分支不触 attempted.add（不占 3 转存预算） | ✅ |
+| 335 文件 staging 泄漏 | staging-cleanup.test.ts | 成败必清理挂 run 生命周期 | ✅ |
+| 仲裁解析失败 | arbitrator.test.ts | 三升级点纯单次调用 + 保守降级（放弃不硬转） | ✅ |
+| no-op 零搜索 | v2-workflow.test.ts | need 为空直接结束、一次搜索都不发 | ✅ |
+| 日志/通知合同 | agent-trace-integration + notification-report + keyword-references-title | `[mediary-run][runId]` 步骤文案、通知 trigger 口径逐字不变 | ✅ |
+| 失败语义（偏差 C） | handle-workflow-failure + worker + type3-worker | pipeline 不吞异常；队列退避重入队、巡检不重试写 failed，两口径各自 catch | ✅ |
+
+预算红线复核：`MAX_TRANSFER_ATTEMPTS=3 / MAX_DEAD_LINK_RETRIES=10 / MAX_FALLBACK_SEARCHES=3` 唯一定义在 `consumption/fast-path/budgets.ts`；全仓 `attempted.add` 仅两处（TV 转存点 landing.ts:330、movie 转存点 movie.ts:360），死链路径零消耗——与重构前一致。
+
+环境噪音备案：借用树缺 apps/web 运行时依赖（react/next）与 `yaml` 包，apps/web 整包 tsc、两个 web 测试与 runtime-config.test 在本机不可跑；三者与 main 基线同状，非本次重构引入。
+
 ---
 
 ## 注意事项
