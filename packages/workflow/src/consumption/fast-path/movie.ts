@@ -20,6 +20,7 @@ import {
 import {
   concludeUncovered,
   emitStep,
+  evidenceDigestLine,
   logStorageProvider,
   nextCandidate,
   stepLog,
@@ -254,6 +255,7 @@ export async function runMovieFastPathAcquisition(
   for (const candidate of grading.ranked) gradeCounts[candidate.grade] += 1;
   const gradingDetail = `(年份判据 ${target.year ?? "未知"}) A ${gradeCounts.A} / B ${gradeCounts.B} / C ${gradeCounts.C} / D ${gradeCounts.D}`;
   stepLog(sandbox, target.title, "评分", gradingDetail);
+  stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
   emitStep(onProgress, "gradeCandidates", "search", gradingDetail);
 
   // 2. Pick the first candidate: a unique A-grade (title + year match) transfers

@@ -77,3 +77,55 @@ export function stepArgsText(step: ActivityStepView): string | null {
   }
   return null;
 }
+
+/** 结构化明细(§23 UI 证据流):候选评级池的「全量行」与 digestFiles 的逐文件行。
+ *  stepArgsText 是一行摘要(列表模式),本函数供组件渲染展开态——两者同源,
+ *  组件在有结构化行时跳过一行摘要,不重复展示。数据在写入侧已预算化
+ *  (§21 L2:标题≤100、判因≤2×70),渲染侧不再截断计数。 */
+export interface StepEvidenceRow {
+  title: string;
+  grade: string | null;
+  reasons: string[];
+}
+
+export type StepDetailView =
+  | { kind: "candidates"; keyword: string | null; rows: StepEvidenceRow[] }
+  | { kind: "files"; rows: string[] }
+  | null;
+
+export function stepDetailView(step: ActivityStepView): StepDetailView {
+  const args = step.args;
+  if (!args || typeof args !== "object" || args._truncated === true) {
+    return null;
+  }
+  const evidence = Array.isArray(args.candidates)
+    ? args.candidates
+    : Array.isArray(args.pool)
+      ? args.pool
+      : null;
+  if (evidence && evidence.length > 0) {
+    const keyword =
+      typeof args.keyword === "string" && args.keyword.trim() ? args.keyword.trim() : null;
+    const rows = evidence.map((item) => {
+      const record = (item ?? {}) as Record<string, unknown>;
+      const rawReasons: unknown[] = Array.isArray(record.reasons) ? record.reasons : [];
+      const reasons = rawReasons.filter(
+        (reason): reason is string => typeof reason === "string" && reason.length > 0,
+      );
+      return {
+        title: typeof record.title === "string" ? record.title : "?",
+        grade: typeof record.grade === "string" ? record.grade : null,
+        reasons,
+      };
+    });
+    return { kind: "candidates", keyword, rows };
+  }
+  const files = args.files;
+  if (Array.isArray(files) && files.length > 0) {
+    const rows = files.filter((row): row is string => typeof row === "string");
+    if (rows.length > 0) {
+      return { kind: "files", rows };
+    }
+  }
+  return null;
+}

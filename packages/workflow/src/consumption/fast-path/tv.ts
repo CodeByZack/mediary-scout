@@ -13,6 +13,7 @@ import {
   emitStep,
   fileBaseName,
   candidateTitleEvidence,
+  evidenceDigestLine,
   gradeDistribution,
   gradedCandidateEvidence,
   logStorageProvider,
@@ -143,6 +144,9 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
           : "无唯一 A 且无别名,直接进入选片"
     }`,
   );
+  if (grading.ranked.length > 0) {
+    stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
+  }
   emitStep(
     onProgress,
     "gradingDecision",
@@ -205,6 +209,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   for (const candidate of grading.ranked) gradeCounts[candidate.grade] += 1;
   const gradingDetail = `A ${gradeCounts.A} / B ${gradeCounts.B} / C ${gradeCounts.C} / D ${gradeCounts.D}`;
   stepLog(sandbox, target.title, "评分", gradingDetail);
+  stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
   emitStep(onProgress, "gradeCandidates", "search", gradingDetail, {
     candidates: gradedCandidateEvidence(grading),
     uniqueTopGrade: grading.uniqueTopGrade,

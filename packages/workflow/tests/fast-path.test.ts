@@ -817,6 +817,30 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     ]);
     expect(searches.length).toBe(2); // 合并纯内存:primary 1 + 兜底 1,零额外搜索
   });
+
+  it("简繁折叠进全链:简体标题命中繁体候选 → 唯一 A 盲转(零仲裁)", async () => {
+    const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
+      results: {
+        狂飙: [{ id: "c1", title: "狂飆.S01E01.1080p.中字" }], // 繁体候选,折叠后=简体标题
+      },
+      packs: { c1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
+      aliases: [],
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: textModel('{"candidateId":"never","reasoning":"不应被调用"}'),
+      target: aliasTarget,
+      isChineseNative: false,
+    });
+
+    expect(result.escalated).toBe(false); // 折叠后是 A 级唯一 → 盲转,不劳 AI
+    expect(result.coverage.coverageMet).toBe(true);
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+    ]);
+    expect(searches.length).toBe(1); // 折叠不引入额外搜索
+  });
 });
 
 describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () => {

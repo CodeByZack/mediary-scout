@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActivityStepView } from "./activity-view";
-import { stepArgsText } from "./step-args-text";
+import { stepArgsText, stepDetailView } from "./step-args-text";
 
 const step = (args: Record<string, unknown>): ActivityStepView =>
   ({ args } as unknown) as ActivityStepView;
@@ -39,5 +39,38 @@ describe("stepArgsText — 活动页 args 一行摘要", () => {
   it("L4 files:前 2 行解析原文", () => {
     const text = stepArgsText(step({ files: ["01.mp4 → S01E01 ⚠(裸数字,按目标季解释)", "02.mp4 → S01E02 ⚠(裸数字,按目标季解释)", "03.mp4 → S01E03 ⚠(裸数字,按目标季解释)"] }));
     expect(text).toBe("解析: 01.mp4 → S01E01 ⚠(裸数字,按目标季解释) ｜ 02.mp4 → S01E02 ⚠(裸数字,按目标季解释)");
+  });
+});
+
+describe("stepDetailView — 结构化证据行(§23)", () => {
+  it("candidates 全量行:标题/评级/判因/keyword,不截条", () => {
+    const d = stepDetailView(
+      step({
+        keyword: "龍之家族",
+        candidates: [
+          { id: "a", title: "龙之家族 4K 更至10集 最新", grade: "D", reasons: ["标题不匹配目标"] },
+          { id: "b", title: "沧元图", grade: "D" },
+        ],
+      }),
+    );
+    if (d === null || d.kind !== "candidates") throw new Error("期望 candidates 视图");
+    expect(d.keyword).toBe("龍之家族");
+    expect(d.rows.length).toBe(2);
+    expect(d.rows[0]).toEqual({
+      title: "龙之家族 4K 更至10集 最新",
+      grade: "D",
+      reasons: ["标题不匹配目标"],
+    });
+    expect(d.rows[1]?.reasons).toEqual([]);
+  });
+
+  it("files 行直出;_truncated/无关 args → null(组件回退一行摘要)", () => {
+    expect(stepDetailView(step({ files: ["01.mp4 → S01E01", "x.mkv → 解析失败"] }))).toEqual({
+      kind: "files",
+      rows: ["01.mp4 → S01E01", "x.mkv → 解析失败"],
+    });
+    expect(stepDetailView(step({ _truncated: true, candidates: [{ title: "x" }] }))).toBeNull();
+    expect(stepDetailView(step({ renames: [{ newName: "A.mkv" }] }))).toBeNull();
+    expect(stepDetailView(step({}))).toBeNull();
   });
 });

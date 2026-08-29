@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { gradeCandidates } from "../src/acquisition-v2/candidate-grader.js";
 import {
   candidateTitleEvidence,
+  evidenceDigestLine,
   gradedCandidateEvidence,
   landingParseRows,
 } from "../src/consumption/fast-path/steps.js";
@@ -55,5 +56,22 @@ describe("证据 payload 预算闸(agent-trace-sink MAX_ARGS_JSON=2000 之下)",
       [1],
     );
     expect(rows).toEqual(["狂飙.S01E01.mkv → S01E01", "狂飙.S01E02.mkv → S01E02"]);
+  });
+});
+
+describe("evidenceDigestLine — stdout 命中摘要行", () => {
+  it("前 3 条「标题[评级]」+ 24 字截断 + 溢出 ＋N", () => {
+    const line = evidenceDigestLine(fakeGrading(4));
+    expect((line.match(/[B]/g) ?? []).length).toBe(3);
+    expect(line.endsWith("＋1")).toBe(true);
+    expect(line.includes("「超长标题")).toBe(true);
+    for (const m of line.matchAll(/「(.+?)」/g)) {
+      expect(m[1].length).toBeLessThanOrEqual(24);
+    }
+  });
+  it("不足 3 条:全列出,不带溢出尾巴", () => {
+    const line = evidenceDigestLine(fakeGrading(2));
+    expect((line.match(/[B]/g) ?? []).length).toBe(2);
+    expect(line.includes("＋")).toBe(false);
   });
 });

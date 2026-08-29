@@ -12,7 +12,11 @@ import type {
   RetryRefusalReason,
 } from "../lib/activity-view";
 import { seasonLabelText } from "../lib/activity-season-label";
-import { stepArgsText } from "../lib/step-args-text";
+import {
+  stepArgsText,
+  stepDetailView,
+  type StepDetailView as StepEvidenceView,
+} from "../lib/step-args-text";
 import { isDemoModeClient } from "../lib/demo-mode";
 import { demoCompletedItems, demoInProgressActivityItems } from "../lib/demo-session";
 import { useDemoAcquisitions, useDemoInProgress } from "../lib/use-demo-session";
@@ -149,6 +153,7 @@ export function StepList({ steps }: { steps: ActivityStepView[] }) {
   return (
     <div className="act-step-list">
       {steps.map((step) => {
+        const detail = stepDetailView(step);
         const argsText = stepArgsText(step);
         return (
           <div className="act-step" key={step.ordinal}>
@@ -160,11 +165,50 @@ export function StepList({ steps }: { steps: ActivityStepView[] }) {
                 <span className="act-step-at">{new Date(step.at).toLocaleString("zh-CN")}</span>
               </div>
               {step.failReason ? <div className="act-step-fail">{step.failReason}</div> : null}
-              {argsText ? <div className="act-step-args">{argsText}</div> : null}
+              {detail ? (
+                <StepEvidence detail={detail} />
+              ) : argsText ? (
+                <div className="act-step-args">{argsText}</div>
+              ) : null}
             </div>
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** §23:候选证据/逐文件解析的结构化展开行(数据源 stepDetailView,纯函数可测)。 */
+function StepEvidence({ detail }: { detail: NonNullable<StepEvidenceView> }) {
+  if (detail.kind === "files") {
+    return (
+      <ul className="act-step-evidence">
+        {detail.rows.map((row, index) => (
+          <li className="act-ev-file" key={index}>
+            {row}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  return (
+    <div className="act-step-evidence">
+      {detail.keyword ? <div className="act-ev-keyword">关键词「{detail.keyword}」</div> : null}
+      {detail.rows.map((row, index) => (
+        <div className="act-ev-row" key={index}>
+          {row.grade ? (
+            <span className={`act-ev-grade act-ev-${row.grade.toLowerCase()}`}>{row.grade}</span>
+          ) : null}
+          <span className="act-ev-title" title={row.title}>
+            {row.title}
+          </span>
+          {row.reasons.length > 0 ? (
+            <span className="act-ev-reason" title={row.reasons.join("；")}>
+              {row.reasons.join("；")}
+            </span>
+          ) : null}
+        </div>
+      ))}
     </div>
   );
 }

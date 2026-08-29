@@ -1,3 +1,5 @@
+import { foldToSimplified } from "./t2s-table.js";
+
 /**
  * Deterministic guardrails for the planning agents' searchResources tool.
  *
@@ -42,9 +44,13 @@ export function normalizeSearchKeyword(keyword: string): string {
  *  common separators that differ between a title and a search keyword, so
  *  "Citizen Vigilante 2026" contains "citizen vigilante" and "公民义警 电影"
  *  contains "公民义警". Exported for the fast-path candidate grader (the same
- *  title-vs-candidate comparison, done in code instead of the agent's prompt). */
+ *  title-vs-candidate comparison, done in code instead of the agent's prompt).
+ *
+ *  末步叠一层「繁→简」单字折叠(t2s-table,vendored):PanSou 服务器自己会简繁
+ *  折叠——繁体别名搜得回简体资源,评分器若逐字比对对不上,就会出现「命中 4 条
+ *  全判 D」(龙族案现场)。折叠只发生在比对层:搜索词、别名顺序、阈值全不动。 */
 export function normalizeForTitleMatch(value: string): string {
-  return value.toLowerCase().replace(/[\s·:：\-_.,，、。]/g, "");
+  return foldToSimplified(value.toLowerCase().replace(/[\s·:：\-_.,，、。]/g, ""));
 }
 
 /**

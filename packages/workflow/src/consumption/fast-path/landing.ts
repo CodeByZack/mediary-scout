@@ -11,6 +11,7 @@ import { MAX_DEAD_LINK_RETRIES, MAX_FALLBACK_SEARCHES } from "./budgets.js";
 import {
   concludeUncovered,
   emitStep,
+  evidenceDigestLine,
   gradeDistribution,
   gradedCandidateEvidence,
   landingParseRows,
@@ -236,6 +237,9 @@ export async function aliasesFallbackReSearch(input: {
         : gradeDistribution(currentGrading)
     }`;
     stepLog(sandbox, title, "兜底评分", gradeDetail);
+    if (currentGrading.ranked.length > 0) {
+      stepLog(sandbox, title, "兜底命中", evidenceDigestLine(currentGrading));
+    }
     emitStep(onProgress, "gradeCandidates", "search", gradeDetail, {
       keyword: alias,
       candidates: gradedCandidateEvidence(currentGrading),

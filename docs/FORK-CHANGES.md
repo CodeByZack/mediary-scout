@@ -273,6 +273,16 @@
 - 测试：+「§E 合并池(母狮案)」「alternative_titles 简体排序」两用例；狂飙/movie twin 恢复用例在合并语义下原样通过（断言注释措辞同步）。22 文件 189 用例全绿、tsc exit 0。
 - 遗留（观察项）：评分器无简繁折叠（「龍族前傳」命中的简体候选会被判低）——① 让简体词先进池后，多数场景已绕开；仍见误判再单独评估 opencc 级别方案。
 
+### 23. 评分器简繁折叠 + stdout 命中摘要 + 活动页结构化证据行（龙族案收尾）
+
+**提交**: （本次）`feat(consumption+web): 简繁折叠字表+stdout命中摘要+活动页结构化证据`
+
+- **③ 简繁折叠（vendored，零运行时依赖）**：`packages/workflow/src/t2s-table.ts` 内嵌 opencc-js@1.4.2 TSCharacters 词典的「单字→单字」映射（2966 条，源文件 ~7KB；词组条目依赖上下文，标题匹配不需要）。折叠点在 `normalizeForTitleMatch` 末步（planning-search-gate.ts，grader 的标题↔别名/关键词比对全走它）：繁体别名（龍之家族）自此能认出简体资源标题（龙之家族 4K 更至10集），修「搜索命中 4 条却全判 D」。搜索词序、别名内容、提示词、评分阈值一概不动——折叠只发生在比对层。opencc-js 仅作生成工具临时安装、已从 package.json/lock 移除。**附记（再生成）**：临时 `npm i opencc-js@1.4.2` → 读 `dist/esm-lib/dict/TSCharacters.js`（`export default "t s|t s|…"`）→ 取单字符对拼 T/S 双串重写 t2s-table.ts。
+- **stdout 命中摘要**：`evidenceDigestLine`（steps.ts）把评级池前 3 条「标题[评级]」+「＋N」打成一行；新增「兜底命中」（每轮兜底评分后）与「评分摘要」（tv primary/合并后、movie 评分后）stepLog——fnOS 日志不再只有分布数，池子里是什么一眼可见（仅标题+评级，无链接，红线安全）。
+- **活动页结构化证据行**：`stepDetailView`（step-args-text.ts 新纯函数）从 candidates/pool/files payload 提取全量行（写入侧已预算化，渲染侧不再截条）；activity-feed.tsx StepList 有结构化行时渲染 `StepEvidence`（评级徽章 A绿/B蓝/C橙/D灰 + 标题 + 判因，files 逐行），否则回退原一行摘要。globals.css 新增 `.act-step-evidence` 系样式。
+- 测试：+7（折叠单元×2、繁简全链盲转×1、摘要行×2、stepDetailView×2），并入 candidate-grader.test.ts 回归清单 → 23 文件 **217 用例全绿**；tsc workflow-check 0、TSX 语法过、opencc-js 不残留。
+- §22 观察项「仍见误判再评估」→ 本条即落地（龙族/母狮两案 payload 为完整案卷）。
+
 
 ---
 

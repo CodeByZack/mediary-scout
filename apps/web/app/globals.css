@@ -3066,6 +3066,72 @@ select.setting-control {
   white-space: nowrap;
 }
 
+/* §23 步骤证据结构化展开(候选评级池 / 逐文件解析),与 .act-step-args 一行摘要互斥使用。 */
+.act-step-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.act-ev-keyword {
+  opacity: 0.8;
+}
+.act-ev-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.act-ev-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act-ev-reason {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  opacity: 0.72;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act-ev-grade {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+}
+.act-ev-a {
+  background: #2e7d32;
+}
+.act-ev-b {
+  background: #1565c0;
+}
+.act-ev-c {
+  background: #ef6c00;
+}
+.act-ev-d {
+  background: #757575;
+}
+.act-ev-file {
+  font-size: 11px;
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .act-steps-empty {
   margin: 0;
   font-size: 12px;

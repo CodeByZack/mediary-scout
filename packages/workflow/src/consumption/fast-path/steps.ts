@@ -205,3 +205,19 @@ export function gradeDistribution(grading: ReturnType<typeof gradeCandidates>): 
   }
   return `A ${counts.A} / B ${counts.B} / C ${counts.C} / D ${counts.D}`;
 }
+
+/** stdout 命中摘要(fnOS 日志可见层):前几条候选「标题[评级]」,标题截 24 字,
+ *  溢出以「＋N」收尾。与分布行互补——分布行只报数,这行报「池子里到底是什么」。
+ *  只含标题与评级,无任何链接,stdout 红线安全。 */
+export function evidenceDigestLine(
+  grading: ReturnType<typeof gradeCandidates>,
+  maxItems = 3,
+): string {
+  const items = grading.ranked.slice(0, maxItems).map((candidate) => {
+    const shown =
+      candidate.title.length > 24 ? candidate.title.slice(0, 23) + "…" : candidate.title;
+    return `「${shown}」[${candidate.grade}]`;
+  });
+  const rest = grading.ranked.length - items.length;
+  return items.join(" ") + (rest > 0 ? ` ＋${rest}` : "");
+}
