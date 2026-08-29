@@ -47,7 +47,6 @@ docs/blog/
 
 # OhMyOpenCode runtime session artifacts
 .omo/
-apps/desktop/dist-app/
 .playwright-cli/
 .superpowers/
 .wrangler/

@@ -47,7 +47,7 @@ deploy/fpk/
    - `apps/web/.next/standalone/` 整体 → `app/server/`
    - `apps/web/.next/static/` → `app/server/apps/web/.next/static/`
    - `apps/web/public/` → `app/server/apps/web/public/`
-3. 从 `apps/desktop/build/icon.png` 生成 4 个图标（Pillow，缺则 ffmpeg 兜底）
+3. 图标为已入库的静态资源（`deploy/fpk/ICON*.PNG`、`app/ui/images/*.png`），打包不再重新生成
 4. `fnpack build` 产出 `deploy/fpk/dist/mediary-scout-<ARCH>.fpk` 并打印大小
    （ARCH 默认按构建机探测：aarch64 → `arm`，x86_64 → `x86`；可用 `ARCH=x86` 覆盖）
 
