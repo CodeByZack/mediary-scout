@@ -256,6 +256,10 @@
 - 结账行：run 终局三出口（入库/仲裁放弃/候选耗尽）输出 转存 x/3 · 死链 x/10 · PanSou 搜索次数 · AI 升级有无。
 - aliasesFallbackReSearch 返回值扩展 {rounds, restored}（内部接口，无外部消费方）。
 - 测试同步：fast-path.test.ts Task D 两处精确序列断言纳入新事件 + 3 条新 payload 断言；19 文件 155 用例全绿、单包 tsc exit 0。
+- 预算闸：agent-trace-sink 对 args JSON >2000 字符整体硬截为 `_truncated`——证据列表自带 1800 预算(标题≤100、判因≤2×70、id 尾 24、文件行≤48+「…另有 N 条未列」)，保证 UI 拿到的是数据而非「参数过长已省略」。
+- 结账行进 agent_steps：新增 runCheckout(finalize) 事件（入库/仲裁放弃/候选耗尽三出口），活动页展开即见总开销。
+- 活动页渲染：stepArgsText 自 components/activity-feed.tsx 抽为纯函数 apps/web/lib/step-args-text.ts（可单测，旧六类输出逐字不变），新增「证据: 「标题」[评级]…等 N 条」「词「kw」· 证据: …」「解析: 01.mp4 → S01E01 ⚠(裸数字,按目标季解释) ｜ …」三类摘要行。
+- 测试：新增 consumption-evidence.test.ts(预算闸 4 用例) + apps/web/lib/step-args-text.test.ts(渲染 4 用例)；fast-path d1 序列同步 runCheckout；21 文件 163 用例全绿、tsc exit 0。
 - 后续批次（未在本提交）：movie 路径同等对齐；apps/web 活动页「候选证据」面板（链接/提取码从 resource_snapshots 现取现显，只走 DB 证据流）。
 
 ---

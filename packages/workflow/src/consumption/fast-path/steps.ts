@@ -120,18 +120,57 @@ export function fileBaseName(path: string): string {
   return path.split("/").pop() ?? path;
 }
 
-/** L2 证据 payload:紧凑评级列表,供活动页展开(≤30 条;标题≤120 字;判因≤3 条)。 */
+/** agent-trace-sink 对 args JSON >2000 字符整体硬截(_truncated)——证据列表必须自带预算,否则 UI 只会看到「参数过长已省略」。 */
+const EVIDENCE_BUDGET = 1800;
+
+function pushWithinBudget<T>(out: T[], rows: T[], budget = EVIDENCE_BUDGET): T[] {
+  let size = 2;
+  for (const row of rows) {
+    const cost = JSON.stringify(row).length + 1;
+    if (size + cost > budget) break;
+    out.push(row);
+    size += cost;
+  }
+  return out;
+}
+
+function shortCandidateId(id: string): string {
+  return id.length > 28 ? "…" + id.slice(-24) : id;
+}
+
+interface EvidenceCandidate {
+  id: string;
+  title: string;
+  grade: string;
+  reasons: string[];
+  seasons?: number[];
+  quality?: string;
+}
+
+/** L2 证据 payload(预算化):紧凑评级列表,供活动页展开。 */
 export function gradedCandidateEvidence(
   grading: ReturnType<typeof gradeCandidates>,
-): Array<Record<string, unknown>> {
-  return grading.ranked.slice(0, 30).map((candidate) => ({
-    id: candidate.id,
-    title: candidate.title.slice(0, 120),
+): EvidenceCandidate[] {
+  const rows = grading.ranked.map((candidate) => ({
+    id: shortCandidateId(candidate.id),
+    title: candidate.title.slice(0, 100),
     grade: candidate.grade,
-    reasons: candidate.reasons.slice(0, 3),
+    reasons: candidate.reasons.slice(0, 2).map((reason) => reason.slice(0, 70)),
     ...(candidate.seasonNumbers.length > 0 ? { seasons: candidate.seasonNumbers } : {}),
     ...(candidate.quality !== null ? { quality: candidate.quality } : {}),
   }));
+  return pushWithinBudget([], rows);
+}
+
+/** 预搜快照版:只有标题的证据(同样预算化)。 */
+export function candidateTitleEvidence(
+  candidates: Array<{ id: string; title: string }>,
+): Array<{ id: string; title: string }> {
+  const rows = candidates.map((candidate) => ({
+    id: shortCandidateId(candidate.id),
+    title: candidate.title.slice(0, 100),
+  }));
+  return pushWithinBudget([], rows);
 }
 
 const VIDEO_EXT = /\.(mkv|mp4|avi|ts|webm|mov|m4v|wmv|flv|iso)$/i;
@@ -141,16 +180,21 @@ export function landingParseRows(
   files: Array<{ path: string }>,
   seasons: number[],
 ): string[] {
-  return files
+  const rows = files
     .filter((file) => VIDEO_EXT.test(file.path))
-    .slice(0, 40)
     .map((file) => {
       const base = fileBaseName(file.path);
       const code = episodeCodeFromFileName(base, seasons);
       const bare = /^\d{1,3}$/.test(base.replace(/\.[^.]+$/i, ""));
-      if (!code) return base + " → 解析失败";
-      return base + " → " + code + (bare ? " ⚠(裸数字,按目标季解释)" : "");
+      const shown = base.length > 48 ? base.slice(0, 45) + "…" : base;
+      if (!code) return shown + " → 解析失败";
+      return shown + " → " + code + (bare ? " ⚠(裸数字,按目标季解释)" : "");
     });
+  const kept = pushWithinBudget<string>([], rows, 1850);
+  if (kept.length < rows.length) {
+    kept.push(`…另有 ${rows.length - kept.length} 条未列`);
+  }
+  return kept;
 }
 
 /** A/B/C/D 分布,兜底评分日志用(与主流程 stepLog 的「A x / B y / C z / D w」同款)。 */

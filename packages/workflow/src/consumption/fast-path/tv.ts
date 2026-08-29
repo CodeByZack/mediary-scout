@@ -7,6 +7,7 @@ import {
   concludeUncovered,
   emitStep,
   fileBaseName,
+  candidateTitleEvidence,
   gradeDistribution,
   gradedCandidateEvidence,
   logStorageProvider,
@@ -115,10 +116,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     raw.candidates.length === 0 ? "候选 0 条(快照为空)" : `候选 ${raw.candidates.length} 条`;
   stepLog(sandbox, target.title, "预搜快照", snapshotDetail, raw.candidates.length === 0 ? "warn" : "log");
   emitStep(onProgress, "viewResourceSnapshot", "search", snapshotDetail, {
-    candidates: raw.candidates.slice(0, 30).map((candidate) => ({
-      id: candidate.id,
-      title: candidate.title.slice(0, 120),
-    })),
+    candidates: candidateTitleEvidence(raw.candidates),
   });
 
   let grading = gradeCandidates(raw.candidates, {
@@ -236,14 +234,11 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
         reasoning: arbitration.reasoning ?? null,
         selected: null,
       });
-      stepLog(
-        sandbox,
-        target.title,
-        "结账",
-        `转存 0/${MAX_TRANSFER_ATTEMPTS} · 死链探测 0/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${
-          1 + fallbackRounds
-        } 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:有(选片仲裁,放弃)`,
-      );
+      const declineCheckout = `转存 0/${MAX_TRANSFER_ATTEMPTS} · 死链探测 0/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${
+        1 + fallbackRounds
+      } 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:有(选片仲裁,放弃)`;
+      stepLog(sandbox, target.title, "结账", declineCheckout);
+      emitStep(onProgress, "runCheckout", "finalize", declineCheckout);
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return concludeUncovered(sandbox, {
         text: `仲裁放弃:${arbitration.reasoning || "无可用候选"}`,
@@ -318,13 +313,11 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       transfer,
     });
     if (closed.done) {
-      stepLog(
-        sandbox,
-        target.title,
-        "结账",
+      const checkoutDetail =
         `转存 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} · 死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · ` +
-          `PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`,
-      );
+        `PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
+      stepLog(sandbox, target.title, "结账", checkoutDetail);
+      emitStep(onProgress, "runCheckout", "finalize", checkoutDetail);
       return closed.done;
     }
     escalated = closed.escalated;
@@ -339,13 +332,11 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   const exhaustedDetail = `缺集(尝试 ${attempted.size} 次转存,扫过 ${tried.size} 个候选仍未覆盖)`;
   stepLog(sandbox, target.title, "结论", exhaustedDetail);
   emitStep(onProgress, "reportNoCoverage", "finalize", exhaustedDetail);
-  stepLog(
-    sandbox,
-    target.title,
-    "结账",
+  const exhaustedCheckout =
     `转存 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} · 死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · ` +
-      `PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`,
-  );
+    `PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
+  stepLog(sandbox, target.title, "结账", exhaustedCheckout);
+  emitStep(onProgress, "runCheckout", "finalize", exhaustedCheckout);
   return {
     text: `fast path 未覆盖(尝试 ${attempted.size} 次转存)`,
     steps: attempted.size,

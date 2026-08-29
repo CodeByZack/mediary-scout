@@ -12,6 +12,7 @@ import type {
   RetryRefusalReason,
 } from "../lib/activity-view";
 import { seasonLabelText } from "../lib/activity-season-label";
+import { stepArgsText } from "../lib/step-args-text";
 import { isDemoModeClient } from "../lib/demo-mode";
 import { demoCompletedItems, demoInProgressActivityItems } from "../lib/demo-session";
 import { useDemoAcquisitions, useDemoInProgress } from "../lib/use-demo-session";
@@ -124,54 +125,6 @@ export function ExpandChevron({ open }: { open: boolean }) {
   );
 }
 
-/** Extract a short display line from a step's raw tool args. Returns null when
- *  nothing user-meaningful exists (ids/paths only) — the UI then omits the args
- *  row instead of dumping the whole JSON. Rename steps are prioritized: the raw
- *  args carry `renames:[{fileId,newName}]` where fileId is an internal id, so we
- *  surface the canonical target names ("改名 …"). */
-export function stepArgsText(step: ActivityStepView): string | null {
-  const args = step.args;
-  if (!args || typeof args !== "object") {
-    return null;
-  }
-  if (args._truncated === true) {
-    return "参数过长已省略";
-  }
-  const renames = args.renames;
-  if (Array.isArray(renames) && renames.length > 0) {
-    const names = renames
-      .map((rename) => {
-        const newName = (rename as { newName?: unknown } | null)?.newName;
-        return typeof newName === "string" && newName.trim() ? newName.trim() : null;
-      })
-      .filter((name): name is string => name !== null);
-    if (names.length > 0) {
-      const shown = names.slice(0, 3).join("、");
-      return names.length > 3 ? `改名 ${shown} 等 ${names.length} 个` : `改名 ${shown}`;
-    }
-  }
-  const moves = args.moves;
-  if (Array.isArray(moves) && moves.length > 0) {
-    const parts = moves.map((move) => {
-      const season = (move as { season?: unknown } | null)?.season;
-      return typeof season === "number" ? `第 ${season} 季` : "影片目录";
-    });
-    return `分发到 ${parts.join("、")}`;
-  }
-  const codes = args.codes;
-  if (Array.isArray(codes) && codes.length > 0) {
-    return `已标记 ${codes.length} 集`;
-  }
-  const keyword = args.keyword;
-  if (typeof keyword === "string" && keyword.trim()) {
-    return `关键词: ${keyword.trim()}`;
-  }
-  const fileIds = args.fileIds;
-  if (Array.isArray(fileIds) && fileIds.length > 0) {
-    return `${fileIds.length} 个文件`;
-  }
-  return null;
-}
 
 export function StepStatusIcon({ status }: { status: ActivityStepView["stepStatus"] }) {
   if (status === "running") {

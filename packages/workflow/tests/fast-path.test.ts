@@ -823,6 +823,7 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
       "digestFiles",
       "finalizeLanding",
       "finish",
+      "runCheckout",
     ]);
     expect(steps.map((s) => s.phase)).toEqual([
       "search",
@@ -835,12 +836,15 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
       "verify",
       "organize",
       "finalize",
+      "finalize",
     ]);
     // 序号连续;activity = stepLog 的 detail;转存带 candidateId 参数
-    expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(steps[1]!.activity).toBe("候选 1 条");
     expect(steps[5]!.args.candidateId).toBe("c1");
     expect(steps[9]!.activity).toContain("入库");
+    expect(steps[10]!.activity).toContain("转存 1/3");
+    expect(steps[10]!.activity).toContain("PanSou 搜索 1 次(primary 1 + 兜底 0)");
     // 可观测性增强(L1/L2/L4):决策与证据 payload 随事件走 agent_steps
     expect(steps[2]!.args.uniqueTopGrade).toBe(true);
     expect((steps[2]!.args.candidates as unknown[]).length).toBe(1);
