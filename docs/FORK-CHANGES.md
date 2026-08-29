@@ -1,6 +1,7 @@
-# FORK-CHANGES — 本仓库 fork 后的改动记录
+# FORK-CHANGES — 项目变更记录（fork 起步 → 独立维护）
 
-> 记录自 fork 上游 `fancydirty/mediary-scout`（main）以来，本分支（`feat/canonical-video-rename`）做出的全部改动。
+> 记录自 fork 上游 `fancydirty/mediary-scout`（main）以来的全部改动。
+> **2026-08-29 起本仓库独立维护（§25），不再计划与上游同步；本文件即项目的完整开发史。**
 > 维护方式：每次改动后在此追加条目；与 TODO 文档不同，这是长期保留的变更日志。
 
 ## 改动一览
@@ -20,6 +21,13 @@
 | 2026-08-12 | fix | fpk 打包清理 sharp musl 变体，产物 22M → 15M |
 | 2026-08-12 | fix | fpk cmd/wizard 脚本加可执行位，修复 fnOS 安装报"无法设置目录权限" |
 | 2026-08-12 | feat | fpk 打包支持测试版（FPK_MODE=test / workflow mode 参数）：独立 appname/端口/数据目录，反复试装不影响正式版 |
+| 2026-08-16前后 | feat | fpk fake 运行模式(PR #14)、PanSou 零结果兼容(#16) |
+| 2026-08-18~19 | feat | **fast path 落地(PR #17)**:评分/摘要/集数解析/映射仲裁/finalize 全链路,TVMovie 双分支 |
+| 2026-08-21 | fix | PR #18:单季任务按目标季解析集数(修 S03 纯数字假入库) |
+| 2026-08-22 | fix | PR #19:finalizeLanding 透传目标 seasons + skipCodes(修整包候选重复归位) |
+| 2026-08-29 | feat | **PR #20 任务消费流水线重构**(七步主干+可观测性+预算闸+UI 证据+别名简体化/合并证据池/简繁折叠,§19-23);v1.0.0 重发布 |
+| 2026-08-29 | chore | 移除桌面版(Electron)与其发布流水线(§24) |
+| 2026-08-29 | chore | **仓库精简与上游断开**(§25):死文件/死依赖/过时文档清理,README 双版重写,站内链接指向自有仓库 |
 
 ---
 
@@ -293,10 +301,38 @@
 - 背景：正式 v1.0.0 已重发布至 main 合并点 `f669334`（含消费流水线重构、可观测性 §21、预算/UI 消费 §19-20 后续、别名简体化与合并证据池 §22、简繁折叠与证据可见性 §23），Release 仅挂双架构 fpk。
 
 
+### 25. 仓库精简与上游断开（用户拍板：不再合并上游，独立发展）
+
+**提交**: （本次）`chore/repo-trim` → main
+
+**删除的死文件（77 个，全部经引用扫描=零后移除）**
+- 旧外置 agent 技能体系：根 `SKILL.md`、`references/`（9 篇 clawd-media-track 手册）、`skills/mediary-scout/`——fast path 落地后无生产调用方；`acquisition-v2/skill.ts` 是独立内嵌常量，不受影响。
+- Python 调研层：`tests/*.py`（5）、`scripts/{database,pan115_client,pansou_client,tmdb_client}.py`、`requirements.txt`——CI 不跑、能力已全部 TS 化。
+- `scripts/` 一次性调研探针约 40 个（probe-115-* ×11、magnet-* ×5、`*-e2e`、`*-inquiry`、`quality-*`、`interrogate-*`、scheduler、send-test-notification 等）及 `_lib/`，**仅保留 `deploy.sh`（升级自检链在用）与 `sqlite-backup.sh`（备份文档推荐）**。
+- `scripts/pg-backup.sh`（Postgres 已在 PR #13 移除）。
+- `apps/web/components/request-series-button.tsx`（死组件，仅存注释提名，注释已同步）；`public/brands/` 五个从未支持品牌的图标（baidu/aliyun/dropbox/googledrive/onedrive）。
+- 过时文档 9+ 篇：`docs/research/`（3）、`architecture-deep-dive.md`、`workflow-product-architecture.md`（两篇合计 20+ 处 Postgres 时代描述）、`HANDOFF-robustness-audit-2026-07-21.md`、`release-notes-0.3.0.md`、`bootstrap-working-notes.md`、`openclaw-type3-example.md`、`seo/SEO-STATE.md`、`pansou-self-host.md`（桌面端专属；compose 在用的 `deploy/pansou.channels.env` 保留）。
+- 依赖死重：package.json 的 `playwright`、`yaml`（全库零使用）与 allowScripts 三条 electron 残留；`.gitignore` 清掉 python 缓存/playwright/重复 TODO 等失效条目。
+
+**修复**
+- **Dockerfile 失效 COPY**：`COPY scripts/reset-password.mjs` 引用的文件在 01b50d7（SQLite-only 迁移）已删除——docker 镜像构建自此一直是坏的，本次删除该 COPY 块。`docs/deploy.md` 的站主忘记密码流程随之重写（清 `accounts.password_hash` 为空串 → /login 就地设密码）。
+- 站内上游链接全部指向 `CodeByZack/mediary-scout`：设置页 GitHub nameplate、demo 横幅回链、**检查更新轮询**（`deployment-update-server.ts` 的 api.github commits/main）、pansou 配置表单教程（改指 PanSou 上游项目本体）。
+
+**README 双版重写（中英）**
+- 部署主线改为 **fnOS fpk 优先 + Docker**；删除桌面版（DMG/EXE）、官网/在线 demo、LINUX DO 徽章、star-history、"致谢与上游"的上游段（技术出处致谢保留）；架构图从"沙盒 agent"更新为**消费流水线 + ≤3 次单点仲裁**的真实形态；中文版补齐 123/天翼两品牌的落后内容。
+- `docs/deploy.md` 开头对比表同步改 fpk+Docker 双形态，「作者」措辞中性化。
+- `site/` 目录**保留**（用户计划后续改造成自己的发布页）；vitest/CI 对其的既有接线不动。
+
+**查证与遗留**
+- LICENSE 为 **0BSD**、版权行 "Mediary Scout contributors"——独立无法律负担，文件不动。
+- `workers/tmdb-proxy/` 查实是活的（CI typecheck + web 运行时默认调用），保留；其默认域名 `tmdb-proxy.mediaryscout.app` 仍为上游托管，用户计划日后自备代理与文档（`TMDB_PROXY_BASE_URL` 可覆盖）。
+- `isDesktop`/`MEDIA_TRACK_DESKTOP` 代码路径（workflow-runtime → settings → pansou-config-form 小分支）桌面版移除后永假但无害，留作后续小清。
+
+**验证**：workflow tsc（workflow-check）0 错；受影响单测（deployment-update ×2 + 消费回归清单）全绿；全库 grep 无 `fancydirty` 残留（本文件历史记录除外）、无对已删路径的引用；CI 全绿后合并。
+
 ---
 
 ## 注意事项
 
 - `.gitignore`：追加 `*_TODO.md`、`deploy/fpk/app/server/`、`deploy/fpk/dist/`
-- `apps/desktop/build/icon.png.bak`：原始图标备份（本地保留，不入库）
 - `deploy/fpk/`：fpk 打包目录（骨架入库，构建产物 dist/server 已被 ignore）

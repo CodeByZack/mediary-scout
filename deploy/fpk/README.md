@@ -23,7 +23,6 @@ deploy/fpk/
 ├── wizard/
 │   ├── install         # 安装向导（信息提示）
 │   └── uninstall       # 卸载向导（是否删除数据）
-├── gen-icons.py        # 图标生成脚本（Pillow）
 ├── build-fpk.sh        # 一键构建 + 打包脚本
 └── README.md
 ```

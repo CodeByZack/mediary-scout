@@ -3,9 +3,6 @@
 .env.*.local
 .pan115_cookie
 
-__pycache__/
-.pytest_cache/
-.ruff_cache/
 .sisyphus/
 .serena/
 
@@ -47,7 +44,6 @@ docs/blog/
 
 # OhMyOpenCode runtime session artifacts
 .omo/
-.playwright-cli/
 .superpowers/
 .wrangler/
 
@@ -55,13 +51,9 @@ docs/blog/
 docs/promo/
 docs/images/devto-cover.*
 .opencode/
-.opencode/ralph-loop.local.md
 
 # 根目录截图残留（agent 浏览器会话产物，不该入库）
 /*.png
-*_TODO.md
-
-# session-local notes
 *_TODO.md
 
 # fnOS fpk build artifacts (generated, not committed)

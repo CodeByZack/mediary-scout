@@ -23,8 +23,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
             {/* 回链主站:demo 站已被 Google 索引却零回链,权重完全没回流。
                 锚文本用「官网」是刻意的 —— 两站都叫 Mediary Scout,这个词
                 帮搜索引擎判断哪个域名是主实体,消除实体混淆。 */}
-            <a href="https://mediaryscout.app">Mediary Scout 官网</a> ·{" "}
-            <a href="https://github.com/fancydirty/mediary-scout" target="_blank" rel="noreferrer">
+            <a href="https://github.com/CodeByZack/mediary-scout" target="_blank" rel="noreferrer">
               想真用 → GitHub 自部署
             </a>
           </div>
