@@ -20,7 +20,7 @@ import { useDemoAcquiredTmdbIds } from "../lib/use-demo-session";
 
 /**
  * Acquire control for a movie candidate. Visual states, kept consistent with
- * SeasonRequestMenu / RequestSeriesButton:
+ * SeasonRequestMenu:
  *  - requestable → a green "获取" pill;
  *  - reservable (an UNRELEASED film) → a "预定" pill; clicking reserves it so the
  *    daily patrol acquires it the moment it releases;

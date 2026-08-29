@@ -25,11 +25,9 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "eslint": "^10.5.0",
-    "playwright": "^1.60.0",
     "typescript": "^5.9.0",
     "typescript-eslint": "^8.61.1",
-    "vitest": "^4.0.0",
-    "yaml": "^2.9.0"
+    "vitest": "^4.0.0"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^2.0.48",
@@ -45,11 +43,7 @@
     "postcss": "^8.5.10"
   },
   "allowScripts": {
-    "@electron/rebuild@3.7.2": true,
-    "@electron/rebuild@3.6.1": true,
     "better-sqlite3@12.11.1": true,
-    "electron@33.4.11": true,
-    "electron-builder@25.1.8": true,
     "fsevents@2.3.3": true,
     "fsevents@2.3.2": true,
     "sharp@0.34.5": true

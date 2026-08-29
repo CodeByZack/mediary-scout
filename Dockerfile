@@ -86,11 +86,6 @@ COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 # public asset (e.g. /brands/<provider>.svg for the workspace switcher icons) 404s
 # and BrandMark falls back to a bare dot (demo on Vercel serves public/ natively).
 COPY --from=builder /app/apps/web/public ./apps/web/public
-# Admin CLI escape hatch (forgot-password). standalone ships no scripts/ — copy it
-# in so `docker compose exec web node scripts/reset-password.mjs <user>` works. The
-# script is self-contained (raw pg + scrypt), so it needs no workflow dist (which
-# standalone bundles into .next and doesn't expose as a module).
-COPY --from=builder /app/scripts/reset-password.mjs ./scripts/reset-password.mjs
 # Records the git commit this image was built from. `docker compose exec web cat
 # BUILD_COMMIT` tells you exactly which code the running container serves — the host's
 # `git rev-parse HEAD` does NOT (a stale image can outlive a pulled HEAD). scripts/deploy.sh
