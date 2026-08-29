@@ -8,7 +8,7 @@ import { resolveIsDesktop } from "./workflow-runtime";
 import { isDemoMode } from "./demo-mode";
 
 const DEFAULT_MAIN_COMMITS_URL =
-  "https://api.github.com/repos/fancydirty/mediary-scout/commits/main";
+  "https://api.github.com/repos/CodeByZack/mediary-scout/commits/main";
 const REMOTE_PROBE_TTL_MS = 10 * 60 * 1000;
 
 let remoteProbeCache:

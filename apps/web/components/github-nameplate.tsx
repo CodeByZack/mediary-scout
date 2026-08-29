@@ -9,7 +9,7 @@ export function GitHubNameplate() {
   return (
     <footer className="github-nameplate">
       <Link
-        href="https://github.com/fancydirty/mediary-scout"
+        href="https://github.com/CodeByZack/mediary-scout"
         target="_blank"
         rel="noopener noreferrer"
         className="github-nameplate-link"

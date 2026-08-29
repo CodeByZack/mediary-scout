@@ -5,8 +5,7 @@ import { Check, ExternalLink, LoaderCircle } from "lucide-react";
 import { savePanSouBaseUrlAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
 
-const PANSOU_SELF_HOST_TUTORIAL_URL =
-  "https://github.com/fancydirty/mediary-scout/blob/main/docs/pansou-self-host.md";
+const PANSOU_SELF_HOST_TUTORIAL_URL = "https://github.com/fish2018/pansou-web";
 
 export function PanSouConfigForm({
   baseURL: initialBaseURL,

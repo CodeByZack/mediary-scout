@@ -99,4 +99,4 @@ export function buildContainerUpgradePrompt(input: {
 }
 
 export const GITHUB_MAIN_COMMITS_URL =
-  "https://github.com/fancydirty/mediary-scout/commits/main";
+  "https://github.com/CodeByZack/mediary-scout/commits/main";

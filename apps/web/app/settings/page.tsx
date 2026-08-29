@@ -79,7 +79,7 @@ export default function SettingsPage({
             <p>
               🔭 这是只读演示站,不提供网盘连接、登录与任何写入设置。
               想真正使用(连 夸克/115/光鸭/123/天翼、配 LLM key、自定义画质/通知)请{" "}
-              <a href="https://github.com/fancydirty/mediary-scout" target="_blank" rel="noreferrer">
+              <a href="https://github.com/CodeByZack/mediary-scout" target="_blank" rel="noreferrer">
                 自部署
               </a>
               。

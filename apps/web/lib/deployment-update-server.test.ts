@@ -17,7 +17,7 @@ describe("fetchLatestMainCommit", () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ sha: SHA.toUpperCase() }), { status: 200 }));
     await expect(fetchLatestMainCommit(fetchImpl as typeof fetch)).resolves.toBe(SHA);
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://api.github.com/repos/fancydirty/mediary-scout/commits/main",
+      "https://api.github.com/repos/CodeByZack/mediary-scout/commits/main",
       expect.objectContaining({ cache: "no-store" }),
     );
   });
