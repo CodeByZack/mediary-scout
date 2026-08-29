@@ -2,14 +2,15 @@
 
 Mediary Scout 有两种部署方式:
 
-| | macOS 桌面版 | Docker Compose (服务器) |
+| | 飞牛 fnOS 原生应用 (fpk) | Docker Compose (服务器) |
 |---|---|---|
-| 适合 | Mac 用户,不想折腾 Docker | NAS / 软路由 / VPS / 闲置 PC |
-| 数据层 | SQLite(本地文件) | SQLite(volume `mediary-data`) |
-| 部署 | 下载 DMG,拖进 Applications | `docker compose up -d` |
-| 下载 | [GitHub Releases](https://github.com/fancydirty/mediary-scout/releases) | 本指南下方 |
+| 适合 | 飞牛 NAS 用户,不想开终端 | NAS / 软路由 / VPS / 闲置 PC |
+| 数据层 | SQLite(应用数据目录,升级保留) | SQLite(volume `mediary-data`) |
+| 部署 | Releases 下载 `.fpk` → 应用中心手动安装 | `git clone` + `docker compose up -d` |
+| 端口 | 3333 | 3000 |
+| 下载 | [GitHub Releases](https://github.com/CodeByZack/mediary-scout/releases) | 本指南下方 |
 
-**桌面版**:去 [Releases](https://github.com/fancydirty/mediary-scout/releases) 下载 `.dmg` 或 `.exe`,打开安装,启动后在 Settings 里配网盘和 LLM 即可。详见 [README → Install](../README.md#install)。
+**fnOS fpk**:去 [Releases](https://github.com/CodeByZack/mediary-scout/releases) 按架构下载 `.fpk`(`mediary-scout-arm.fpk` / `mediary-scout-x86.fpk`),在飞牛应用中心「手动安装」,装完直接开 `http://<NAS>:3333` 进设置页配网盘和 LLM。打包与维护细节见 [deploy/fpk/README.md](../deploy/fpk/README.md)。
 
 **Docker 版**:继续往下看。
 
@@ -31,10 +32,11 @@ Mediary Scout 有两种部署方式:
 - [安全](#安全)
 - [国内构建加速](#国内构建加速连不上-docker-hub)
 - [升级](#升级)
+- [备份与恢复](#备份与恢复mediary-data)
 
 ## 选择你的宿主
 
-任何能跑 Docker 的常开机器都行。挑一个:
+任何能跑 Docker 的常开机器都行。挑一个(**飞牛 fnOS 用户**:原生 fpk 安装比 Docker 更省事,见本文开头,可跳过本节):
 
 - **NAS(群晖 / 威联通 / unRAID)** —— 最推荐(常开、省电)。群晖用 Container Manager、威联通用 Container Station、unRAID 用 Community Apps 的 Compose Manager 插件,把本仓库 `docker-compose.yml` 贴进去起即可。数据(volume `mediary-data`)落在阵列/SSD 上。
 - **软路由(iStoreOS 等)** —— 作者实测在带镜像加速的 iStoreOS 上一把过。用 Docker 插件或 ssh 跑 compose;软路由存储小,可把 `mediary-data` 指到外挂盘。
@@ -46,7 +48,7 @@ Mediary Scout 有两种部署方式:
 ## Compose 快速开始
 
 ```bash
-git clone https://github.com/fancydirty/mediary-scout && cd mediary-scout
+git clone https://github.com/CodeByZack/mediary-scout && cd mediary-scout
 docker compose up -d        # 首次会构建 web 镜像,几分钟
 ```
 
@@ -61,7 +63,7 @@ docker compose up -d        # 首次会构建 web 镜像,几分钟
 > read: connection reset by peer
 > ```
 >
-> **这不是你配置错了,重试也没用**(作者实测重试十余次全失败)。在仓库根 `.env` 里
+> **这不是你配置错了,重试也没用**(实测重试十余次全失败)。在仓库根 `.env` 里
 > 加一行镜像源,三处会一起生效:
 >
 > ```bash
@@ -92,7 +94,7 @@ docker compose up -d        # 首次会构建 web 镜像,几分钟
 
 打开 `http://<你的主机>:3000`:
 1. **设置 → 网盘**:在品牌瓦片里选一个开始连接——115 / 夸克 / 天翼 / 123 扫码登录,光鸭粘贴 token(见各品牌连接小节);凭证入库后自动用于转存。五个品牌可各绑一块盘,互为独立工作区。
-2. 就这样。**TMDB 元数据经作者 CF Worker 开箱即用**(想用自己额度可在设置填 TMDB key);**PanSou 网盘搜索源已自带**。
+2. 就这样。**TMDB 元数据开箱即用**(内置公共代理兜底;想用自己的额度可在设置填 TMDB key);**PanSou 网盘搜索源已自带**。
 
 ### 组成 / 端口
 
@@ -173,7 +175,7 @@ docker compose up -d        # 首次会构建 web 镜像,几分钟
 
 ## 可选增强
 
-- **自己的 TMDB key**(设置 → TMDB 元数据):直连你自己的额度,调不通自动回退作者代理。
+- **自己的 TMDB key**(设置 → TMDB 元数据):直连你自己的额度,调不通自动回退内置公共代理。
 - **出站代理**(`.env` 设 `HTTP_PROXY` / `HTTPS_PROXY`):墙内想用**自己的 TMDB token / 额度**时用得到。TMDB 的 API 主机(`api.themoviedb.org`)在国内常被单独墙(官网能开 ≠ API 能通),直连不到你的 token 就用不上。给容器配一个能穿透的代理即可让全部出站请求(TMDB / PanSou / Prowlarr)走它:在仓库根 `.env` 里写 `HTTP_PROXY=http://172.17.0.1:7890` 和 `HTTPS_PROXY=http://172.17.0.1:7890`(`172.17.0.1` 是 Docker 默认网关,指向宿主机;端口换成你宿主上代理软件的实际端口,如 Clash 的 7890),再 `docker compose up -d`。`NO_PROXY` 可排除内网地址。**不设代理时行为不变**——TMDB token 留空走作者内置代理依旧开箱即用,这条只为「墙内 + 想用自己 token」准备。
   - **内置代理也连不上时同样用此法**(#83 实例,现已缓解):内置 TMDB 代理曾托管在 `*.workers.dev` 域名下,该域名在部分国内网络/运营商下会被整域阻断——症状是搜索报 `All N TMDB access(es) failed: TimeoutError`(N 为通道数,未配 token 时为 1)。**现默认代理已换自定义域名 `tmdb-proxy.mediaryscout.app`,绝大多数国内网络可直连**;若你的网络连它也阻断,再按上面配 `HTTP_PROXY` / `HTTPS_PROXY` 让容器出站走代理。
   - **WSL2 部署注意**(#83 踩坑实录):容器内的 `127.0.0.1` 指容器自身,填 Windows 宿主上的代理要用 WSL2 虚拟网卡的宿主 IP;且 Windows 防火墙常拦截来自 WSL2 虚拟网卡的入站连接(即使代理软件开了「允许局域网连接」),需要放行防火墙或在 WSL2 内起一层转发(监听 0.0.0.0 转发到 127.0.0.1:代理端口),容器再指向 WSL2 自身 IP。
@@ -196,7 +198,7 @@ docker compose up -d        # 首次会构建 web 镜像,几分钟
 
 ## 安全
 
-- 本项目只走**自部署**,作者不托管(见 [distribution-and-legal-positioning.md](distribution-and-legal-positioning.md))。默认单用户、无登录。
+- 本项目只走**自部署**,不提供任何托管(见 [distribution-and-legal-positioning.md](distribution-and-legal-positioning.md))。默认单用户、无登录。
 - **别在公网裸暴露 `:3000`**。要远程用就走上面的 Tailscale(私有,自带鉴权)。
 - 想多人合用同一实例(各绑各的网盘、各看各的库):设环境变量 `MEDIA_TRACK_MULTI_USER=1` 开多用户模式(出注册 / 登录页)。即便开了多用户,也仍建议放在 Tailscale / Access 之后。
 
@@ -212,13 +214,13 @@ docker compose up -d        # 首次会构建 web 镜像,几分钟
 **忘记密码怎么办**(本项目不发邮件,无需配 SMTP):
 
 - **普通用户忘了** → 找**站主**,在「设置 → 账号管理」里一键给他重置密码(不影响他的网盘和媒体库)。
-- **站主自己忘了** → 在宿主机上跑(谁能进这台机器谁就能找回):
+- **站主自己忘了** → 在宿主机上把 SQLite 库(`mediary.db`;Docker 在 `mediary-data` 卷 `/data/mediary.db`,fpk 在应用数据目录)里该账号的 `password_hash` 清成空串,例如:
 
-  ```bash
-  docker compose exec web node scripts/reset-password.mjs <用户名> [新密码]
+  ```sql
+  UPDATE accounts SET password_hash = '' WHERE username = '站主用户名';
   ```
 
-  不给新密码就随机生成并打印。登录后到「设置 → 修改密码」改成你自己的。
+  然后直接访问实例:`/login` 会识别「未设密码」并给出就地**设置访问密码**的表单,设完即用新密码登录。任何时候能碰到这台机器的人都能这么做——这也是为什么实例永远不该裸暴露公网。
 
 即便开了多用户,也仍建议放在 Tailscale 之后——登录只为隔离用户数据,不是给公网当门禁。
 
@@ -259,7 +261,7 @@ docker compose build --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 - 在 `.env` 设 `PANSOU_IMAGE=` 指向一个 ghcr 镜像/代理(如 `ghcr.nju.edu.cn/fish2018/pansou-web:latest`,镜像可用性自行确认),再 `docker compose up -d`;
 - 或者不用自带 pansou —— 把 `PANSOU_BASE_URL` 指到一个外部 PanSou 实例,然后 `docker compose up -d web`(不起 pansou 容器)。
 
-作者实测在带镜像加速的软路由(iStoreOS)上一把过。
+实测在带镜像加速的软路由(iStoreOS)上一把过。
 
 ## 升级
 
@@ -315,4 +317,3 @@ docker compose start web
 ```
 
 把 `backups/` 目录同步到机外（对象存储 / NAS / 另一台机器）再算真正有备份。
-
