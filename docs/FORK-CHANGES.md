@@ -283,6 +283,15 @@
 - 测试：+7（折叠单元×2、繁简全链盲转×1、摘要行×2、stepDetailView×2），并入 candidate-grader.test.ts 回归清单 → 23 文件 **217 用例全绿**；tsc workflow-check 0、TSX 语法过、opencc-js 不残留。
 - §22 观察项「仍见误判再评估」→ 本条即落地（龙族/母狮两案 payload 为完整案卷）。
 
+### 24. 移除桌面版（用户拍板：不做 Electron 桌面版）
+
+**提交**: `467cbaf`(分支 chore/remove-desktop-release → main)
+
+- 删除 `.github/workflows/release-desktop.yml`（v1.0.0 重发布时它被 tag push 连带触发、macOS job 网络失败、release skipped——从未产出任何东西，删除零损失）与整个 `apps/desktop/`（924K，与 web/workflow 代码零耦合）。
+- 连带清理：ci.yml 的 desktop typecheck 行、根 package-lock 的 workspace 节点与 electron 系依赖（−4700 余行）、.gitignore 的 dist-app 行、build-fpk.yml 过时注释、deploy/fpk/README 图标步骤（图标早已是随仓库持久化的静态资源，不再源自 desktop 工程）。
+- 保留：`deploy/fpk/manifest` 的 `desktop_applaunchname` 等字段（fnOS 术语，与桌面版无关）。
+- 背景：正式 v1.0.0 已重发布至 main 合并点 `f669334`（含消费流水线重构、可观测性 §21、预算/UI 消费 §19-20 后续、别名简体化与合并证据池 §22、简繁折叠与证据可见性 §23），Release 仅挂双架构 fpk。
+
 
 ---
 
