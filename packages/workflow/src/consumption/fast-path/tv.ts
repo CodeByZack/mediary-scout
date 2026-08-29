@@ -2,7 +2,12 @@ import { episodeCodeFromFileName } from "../../episode-code.js";
 import { arbitrateSelection } from "../../acquisition-v2/arbitrator.js";
 import { gradeCandidates, summarizeGrading } from "../../acquisition-v2/candidate-grader.js";
 import { MAX_DEAD_LINK_RETRIES, MAX_TRANSFER_ATTEMPTS } from "./budgets.js";
-import { aliasesFallbackReSearch, closeOutTvLanding } from "./landing.js";
+import {
+  aliasesFallbackReSearch,
+  candidateSnapshotId,
+  closeOutTvLanding,
+  type EvidenceView,
+} from "./landing.js";
 import {
   concludeUncovered,
   emitStep,
@@ -93,7 +98,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   }
 
   // 1. Grade the primed raw-snapshot candidates (code, zero LLM).
-  let raw = sandbox.rawSnapshotView();
+  let raw: EvidenceView | null = sandbox.rawSnapshotView();
   if (!raw) {
     // The raw pre-warm never landed (search source down) — there is NO evidence
     // base, so reportNoCoverage would throw SANDBOX_NO_PROVIDER_EVIDENCE (its
@@ -179,7 +184,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
         sandbox,
         target.title,
         "证据恢复",
-        `复用内存 primary 快照(${raw.candidates.length} 条候选),零额外 PanSou 请求(兜底共搜 ${fallback.rounds} 轮)`,
+        `合并 primary+兜底 证据池 ${raw.candidates.length} 条候选(兜底共搜 ${fallback.rounds} 轮,零额外 PanSou 请求)继续仲裁`,
       );
     }
   }
@@ -292,7 +297,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     stepLog(sandbox, target.title, "转存", transferDetail);
     emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current });
     const transfer = await sandbox.transferCandidate({
-      snapshotId: raw.snapshotId,
+      snapshotId: candidateSnapshotId(raw, current),
       candidateId: current,
     });
     // ★ 落地回合交 landing.ts 的 LandingVerdict 状态机收口（design §5）。

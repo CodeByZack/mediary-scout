@@ -12,7 +12,11 @@ import type { MovieTarget } from "../../acquisition-v2/task-agents.js";
 import { pickSubtitle } from "../../acquisition-v2/subtitle-picker.js";
 import type { AssrtProviderPort } from "../../subtitle-provider.js";
 import { MAX_DEAD_LINK_RETRIES, MAX_TRANSFER_ATTEMPTS } from "./budgets.js";
-import { aliasesFallbackReSearch } from "./landing.js";
+import {
+  aliasesFallbackReSearch,
+  candidateSnapshotId,
+  type EvidenceView,
+} from "./landing.js";
 import {
   concludeUncovered,
   emitStep,
@@ -180,7 +184,7 @@ export async function runMovieFastPathAcquisition(
 
   // 1. Grade the primed raw-snapshot candidates (code, zero LLM): identity is
   //    title + release year.
-  let raw = sandbox.rawSnapshotView();
+  let raw: EvidenceView | null = sandbox.rawSnapshotView();
   if (!raw) {
     const snapshotDetail = "无(搜索源未响应)";
     stepLog(sandbox, target.title, "预搜快照", snapshotDetail, "warn");
@@ -325,7 +329,7 @@ export async function runMovieFastPathAcquisition(
     stepLog(sandbox, target.title, "转存", transferDetail);
     emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current });
     const transfer = await sandbox.transferCandidate({
-      snapshotId: raw.snapshotId,
+      snapshotId: candidateSnapshotId(raw, current),
       candidateId: current,
     });
 

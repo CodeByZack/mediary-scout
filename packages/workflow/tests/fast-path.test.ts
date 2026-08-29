@@ -788,7 +788,34 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
     ]);
-    expect(searches.length).toBe(2); // 1 primary + 1 兜底;恢复 primary 零额外搜索
+    expect(searches.length).toBe(2); // 1 primary + 1 兜底;合并证据池零额外搜索
+  });
+
+  it("§E 合并池:兜底轮的好候选与 primary 一起进仲裁,转存回各自来源快照(母狮案)", async () => {
+    const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
+      results: {
+        狂飙: [{ id: "c1", title: "狂飙 高清" }], // B(无中字无集数证据)→ 进兜底
+        "The Knockout": [{ id: "f1", title: "狂飙 1-3季 高清.中字" }], // 兜底轮的更好 B
+      },
+      packs: { c1: { files: [] }, f1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
+      aliases: ["The Knockout"],
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: textModel('{"candidateId":"f1","reasoning":"1-3季 合集带中字,更完整"}'),
+      target: aliasTarget,
+      isChineseNative: false,
+    });
+
+    // 旧行为:恢复只回 primary 池,f1 根本不在仲裁桌上(选中也会触发假 id 防御)。
+    // 新行为:合并池 f1 在场,且转存经 candidateSnapshots 回到兜底轮的快照。
+    expect(result.escalated).toBe(true);
+    expect(result.coverage.coverageMet).toBe(true);
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+    ]);
+    expect(searches.length).toBe(2); // 合并纯内存:primary 1 + 兜底 1,零额外搜索
   });
 });
 

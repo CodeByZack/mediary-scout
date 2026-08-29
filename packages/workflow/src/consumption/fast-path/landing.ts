@@ -144,6 +144,19 @@ export function computeKnownEpisodeRange(needCodes: string[]): { min: number; ma
   return { min: Math.min(...numbers), max: Math.max(...numbers) };
 }
 
+/** rawSnapshotView 的形状(单快照);合并证据池在其上附加 candidateId→snapshotId 归属。 */
+type SnapshotView = NonNullable<ReturnType<TaskSandbox["rawSnapshotView"]>>;
+
+export interface EvidenceView extends SnapshotView {
+  /** 合并池专用:候选 id → 它真正来自哪个 observed snapshot。缺省 = 全体在 view.snapshotId。 */
+  candidateSnapshots?: Record<string, string>;
+}
+
+/** 转存的快照寻址:合并池里每个候选回到自己的来源快照,单快照视图零改动。 */
+export function candidateSnapshotId(view: EvidenceView, candidateId: string): string {
+  return view.candidateSnapshots?.[candidateId] ?? view.snapshotId;
+}
+
 /**
  * Aliases 兜底重搜 (§C). The fast path's primary search recalls by the bare
  * title ONLY — when it comes back empty, or grades without a unique A-grade
@@ -176,12 +189,12 @@ export async function aliasesFallbackReSearch(input: {
   sandbox: TaskSandbox;
   title: string;
   aliases: string[];
-  view: NonNullable<ReturnType<TaskSandbox["rawSnapshotView"]>>;
+  view: SnapshotView;
   grading: ReturnType<typeof gradeCandidates>;
   grade: (candidates: Array<{ id: string; title: string }>) => ReturnType<typeof gradeCandidates>;
   onProgress?: (event: AgentToolEvent) => void;
 }): Promise<{
-  view: NonNullable<ReturnType<TaskSandbox["rawSnapshotView"]>>;
+  view: EvidenceView;
   grading: ReturnType<typeof gradeCandidates>;
   rounds: number;
   restored: boolean;
@@ -192,6 +205,7 @@ export async function aliasesFallbackReSearch(input: {
   let currentGrading = grading;
   let rounds = 0;
   let foundUniqueA = false;
+  const roundViews: SnapshotView[] = [];
   for (const alias of aliases) {
     if (rounds >= MAX_FALLBACK_SEARCHES) break;
     const keyword = normalizeSearchKeyword(alias);
@@ -214,6 +228,7 @@ export async function aliasesFallbackReSearch(input: {
     const nextView = sandbox.rawSnapshotView();
     if (!nextView) continue; // defensive: prime succeeded, so a view must exist
     currentView = nextView;
+    roundViews.push(nextView);
     currentGrading = grade(nextView.candidates);
     const gradeDetail = `keyword=「${alias}」命中=${nextView.candidates.length} ${
       currentGrading.uniqueTopGrade
@@ -230,16 +245,40 @@ export async function aliasesFallbackReSearch(input: {
       break; // 唯一 A → 直接转存
     }
   }
-  // §E: 兜底全失败(没有唯一 A)且 primary 快照有候选 → 恢复 primary 证据继续原
-  // 仲裁/放弃逻辑。旧行为让「最后一个兜底快照为空」覆盖 primary 的候选,于是
-  // 狂飙 primary 45 条候选被丢、误报「暂无资源(快照为空)」。恢复用内存里的
-  // primary view(其 snapshotId 早已在 observedSnapshots,transferCandidate 可直接
-  // 用),不重新 primeRawSnapshot —— 零额外 PanSou 请求,预算语义原样保持。
-  if (!foundUniqueA && view.candidates.length > 0) {
-    const restoreDetail = `全部兜底无唯一 A,恢复 primary 快照(${view.candidates.length} 条候选)继续仲裁`;
-    stepLog(sandbox, title, "兜底重搜", restoreDetail);
-    emitStep(onProgress, "gradeCandidates", "search", restoreDetail);
-    return { view, grading, rounds, restored: true };
+  // §E: 兜底耗尽仍无唯一 A → 合并 primary + 各轮兜底 的证据池继续仲裁/放弃逻辑。
+  // 旧行为(替换式恢复)两头都出过事故:「最后一个兜底快照为空」覆盖 primary 让
+  // 狂飙 45 条候选被丢;反过来只恢复/只看最后一轮,又会吞掉另一侧的好候选
+  // (母狮案:兜底第 1 轮搜到「1-3季合集」,恢复 primary 后仲裁根本见不到它)。
+  // 合并纯内存操作、按标题去重、primary 优先入池;各轮候选带着自己 observed
+  // snapshot 的归属回传给转存寻址(candidateSnapshotId)——零额外 PanSou 请求,
+  // 预算语义原样保持。
+  if (!foundUniqueA) {
+    const candidateSnapshots: Record<string, string> = {};
+    const merged: Array<{ id: string; title: string }> = [];
+    let primaryCount = 0;
+    let fallbackCount = 0;
+    const addAll = (source: SnapshotView, fromFallback: boolean) => {
+      for (const candidate of source.candidates) {
+        // 只按 id 去重(跨快照 id 天然不同,同 id 只留首次来源)。不按标题去重:
+        // 同名异链是网盘资源常态,标题去重会把后轮快照里的合法候选 id 误删,
+        // 仲裁选中即触发假 id 防御(预算 ≤3 测试现场抓到的回归)。
+        if (candidateSnapshots[candidate.id] !== undefined) continue;
+        candidateSnapshots[candidate.id] = source.snapshotId;
+        merged.push(candidate);
+        if (fromFallback) fallbackCount += 1;
+        else primaryCount += 1;
+      }
+    };
+    addAll(view, false);
+    for (const roundView of roundViews) addAll(roundView, true);
+    if (merged.length > 0) {
+      const mergedView: EvidenceView = { snapshotId: view.snapshotId, candidates: merged, candidateSnapshots };
+      const mergedGrading = grade(merged);
+      const restoreDetail = `全部兜底无唯一 A,合并证据池(primary ${primaryCount} + 兜底 ${fallbackCount})继续仲裁`;
+      stepLog(sandbox, title, "兜底重搜", restoreDetail);
+      emitStep(onProgress, "gradeCandidates", "search", restoreDetail);
+      return { view: mergedView, grading: mergedGrading, rounds, restored: true };
+    }
   }
   return { view: currentView, grading: currentGrading, rounds, restored: false };
 }

@@ -63,7 +63,7 @@ describe("TmdbMetadataProvider", () => {
     });
 
     expect(requests).toEqual([
-      "https://api.themoviedb.org/3/tv/289271?language=zh-CN&append_to_response=translations",
+      "https://api.themoviedb.org/3/tv/289271?language=zh-CN&append_to_response=translations%2Calternative_titles",
       "https://api.themoviedb.org/3/tv/289271/season/1?language=zh-CN",
     ]);
     expect(target).toEqual({
@@ -243,6 +243,56 @@ describe("TmdbMetadataProvider", () => {
     // original_title + the zh-TW/zh-HK 译名 (deduped); zh duplicate of the main
     // title and the en entry (=== originalTitle) are dropped.
     expect(target.title.aliases).toEqual(["Oppenheimer", "奧本海默"]);
+  });
+
+  it("alternative_titles 地区官方名排在繁体译名前,简体资源名进别名(龙之家族案)", async () => {
+    const provider = new TmdbMetadataProvider({
+      readToken: "token",
+      fetchJson: async (url) => {
+        if (url.includes("/tv/94739?")) {
+          return {
+            id: 94739,
+            name: "权力的游戏前传：龙族",
+            original_name: "House of the Dragon",
+            first_air_date: "2022-08-21",
+            number_of_episodes: 18,
+            overview: "",
+            last_episode_to_air: { season_number: 2, episode_number: 8 },
+            seasons: [{ season_number: 1, episode_count: 10 }, { season_number: 2, episode_count: 8 }],
+            translations: {
+              translations: [
+                // TMDB 的中文 translation 只有繁体——这正是别名「全繁体」的来源。
+                { iso_639_1: "zh", iso_3166_1: "TW", data: { name: "龍族前傳" } },
+                { iso_639_1: "zh", iso_3166_1: "HK", data: { name: "龍族前傳" } },
+              ],
+            },
+            alternative_titles: {
+              titles: [
+                { iso_3166_1: "CN", title: "龙之家族" },
+                { iso_3166_1: "TW", title: "龍族前傳" },
+                { iso_3166_1: "US", title: "HOTD" },
+              ],
+            },
+          };
+        }
+        if (url.includes("/tv/94739/season/1?")) {
+          return { season_number: 1, episodes: [{ episode_number: 1, air_date: "2022-08-21" }] };
+        }
+        throw new Error(`Unexpected URL ${url}`);
+      },
+    });
+
+    const target = await prepareTrackingTarget({
+      tmdbId: 94739,
+      mediaType: "tv",
+      seasonNumber: 1,
+      qualityPreference: "4K",
+      metadataProvider: provider,
+    });
+
+    // original → alternative_titles(简体在前)→ translations,去重后:兜底 3 轮
+    // 会先打到「龙之家族」这个网盘真实用名,而不是只在繁体上空转。
+    expect(target.title.aliases).toEqual(["House of the Dragon", "龙之家族", "龍族前傳", "HOTD"]);
   });
 
   it("degrades silently when translations are missing or malformed (legacy alias behavior)", async () => {

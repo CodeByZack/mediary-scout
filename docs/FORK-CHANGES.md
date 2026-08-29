@@ -262,6 +262,18 @@
 - 测试：新增 consumption-evidence.test.ts(预算闸 4 用例) + apps/web/lib/step-args-text.test.ts(渲染 4 用例)；fast-path d1 序列同步 runCheckout；21 文件 163 用例全绿、tsc exit 0。
 - 后续批次（未在本提交）：movie 路径同等对齐；apps/web 活动页「候选证据」面板（链接/提取码从 resource_snapshots 现取现显，只走 DB 证据流）。
 
+### 22. 别名简体化 + §E 合并证据池（真机两单 no_coverage 的现场诊断产物）
+
+**提交**: （本次）`fix(consumption): 别名补 alternative_titles 简体名,§E 恢复改合并证据池`
+
+背景：3334 真机两单（龙族/母狮）暴露两个独立缺陷，靠 §21 的证据 payload 一眼定位：
+
+- **别名全繁体**（龙族案）：TMDB translations 只带 zh-TW/zh-HK 名（龍族前傳/龍之家族），网盘真实用名是简体（龙之家族）。修：`getTvDetails/getMovieDetails` 的 append_to_response 加 `alternative_titles`，`parseAlternativeTitles` 解析 tv `titles[].title` / movie `alternatives[].title`；`aliasList` 顺序改为 original → **地区官方名（简体在前）** → translations——兜底 ≤3 轮的词序直接受益。URL 断言测试同步（逗号编码 %2C）。
+- **§E 替换式恢复吞池**（母狮案）：恢复 primary 时把兜底轮搜到的好候选（「母狮 1-3季 合集」B 级）整个丢掉，仲裁见不到。修：恢复改**合并**——primary 优先入池 + 各轮兜底候选按 id 去重合并（不按标题去重：同名异链是常态，第一版标题去重被「预算 ≤3」测试当场打脸），重新 grade 一次（纯内存、零额外 PanSou，预算语义不变）。合并视图带 `candidateSnapshots`(id→来源快照)，tv/movie 转存改走 `candidateSnapshotId(raw, current)` 回各自 observed snapshot；狂飙防线原样保住。
+- 测试：+「§E 合并池(母狮案)」「alternative_titles 简体排序」两用例；狂飙/movie twin 恢复用例在合并语义下原样通过（断言注释措辞同步）。22 文件 189 用例全绿、tsc exit 0。
+- 遗留（观察项）：评分器无简繁折叠（「龍族前傳」命中的简体候选会被判低）——① 让简体词先进池后，多数场景已绕开；仍见误判再单独评估 opencc 级别方案。
+
+
 ---
 
 ## 注意事项

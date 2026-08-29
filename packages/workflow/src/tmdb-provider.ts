@@ -186,6 +186,9 @@ interface TmdbTvDetails {
   /** Chinese translated names from append_to_response=translations (tv → data.name).
    *  Empty when the response carried no (parseable) translations — never a failure. */
   translations: string[];
+  /** 地区官方别名 from alternative_titles (tv → titles[].title;含大陆简体名)。
+   *  Empty when absent — never a failure. */
+  alternative_titles: string[];
 }
 
 interface TmdbSeasonDetails {
@@ -209,6 +212,9 @@ interface TmdbMovieDetails {
   /** Chinese translated titles from append_to_response=translations (movie → data.title).
    *  Empty when the response carried no (parseable) translations — never a failure. */
   translations: string[];
+  /** 地区官方别名 from alternative_titles (movie → alternatives[].title)。
+   *  Empty when absent — never a failure. */
+  alternative_titles: string[];
 }
 
 export class TmdbMetadataProvider {
@@ -229,9 +235,11 @@ export class TmdbMetadataProvider {
     return parseTvDetails(
       await this.get(`tv/${tmdbId}`, {
         language: this.language,
-        // Chinese translated names ride the details payload so MediaTitle.aliases
-        // can carry the 译名 the resource sites use (search fallback + scoring).
-        append_to_response: "translations",
+        // Chinese names ride the details payload so MediaTitle.aliases can
+        // carry the 译名 the resource sites use (search fallback + scoring).
+        // alternative_titles 补上大陆简体等「地区官方名」——translations 往往只有
+        // zh-TW/zh-HK 繁体(龍族前傳/龍之家族),网盘资源实际用简体(龙之家族)。
+        append_to_response: "translations,alternative_titles",
       }),
     );
   }
@@ -248,8 +256,8 @@ export class TmdbMetadataProvider {
     return parseMovieDetails(
       await this.get(`movie/${tmdbId}`, {
         language: this.language,
-        // Chinese translated titles (see getTvDetails — movies use data.title).
-        append_to_response: "translations",
+        // Chinese translated titles + 地区官方别名 (see getTvDetails).
+        append_to_response: "translations,alternative_titles",
       }),
     );
   }
@@ -389,7 +397,7 @@ export async function prepareTrackingTarget(input: TvTrackingTargetInput): Promi
       title,
       originalTitle: normalizeTitle(details.original_name) || title,
       year: yearFromDate(details.first_air_date),
-      aliases: aliasList(title, details.original_name, details.translations),
+      aliases: aliasList(title, details.original_name, details.translations, details.alternative_titles),
       posterPath: details.poster_path,
       backdropPath: details.backdrop_path,
       overview: details.overview,
@@ -443,7 +451,7 @@ export async function prepareMovieTarget(input: {
       originalTitle: normalizeTitle(details.original_title) || title,
       year: yearFromDate(details.release_date),
       releaseDate: details.release_date || null,
-      aliases: aliasList(title, details.original_title, details.translations),
+      aliases: aliasList(title, details.original_title, details.translations, details.alternative_titles),
       posterPath: details.poster_path,
       backdropPath: details.backdrop_path,
       overview: details.overview,
@@ -507,7 +515,7 @@ export async function prepareSeriesTarget(input: {
       title,
       originalTitle: normalizeTitle(details.original_name) || title,
       year: yearFromDate(details.first_air_date),
-      aliases: aliasList(title, details.original_name, details.translations),
+      aliases: aliasList(title, details.original_name, details.translations, details.alternative_titles),
       posterPath: details.poster_path,
       backdropPath: details.backdrop_path,
       overview: details.overview,
@@ -574,6 +582,7 @@ function parseTvDetails(value: unknown): TmdbTvDetails {
       ? value["origin_country"].filter((country): country is string => typeof country === "string")
       : [],
     translations: parseChineseTranslations(value, "tv"),
+    alternative_titles: parseAlternativeTitles(value, "tv"),
   };
 }
 
@@ -603,6 +612,7 @@ function parseMovieDetails(value: unknown): TmdbMovieDetails {
           .filter((code): code is string => typeof code === "string")
       : [],
     translations: parseChineseTranslations(value, "movie"),
+    alternative_titles: parseAlternativeTitles(value, "movie"),
   };
 }
 
@@ -851,16 +861,41 @@ function parseChineseTranslations(value: Record<string, unknown>, mediaType: "tv
   return names;
 }
 
+/** Extract 地区官方别名 from a details response's alternative_titles payload
+ *  (append_to_response=alternative_titles). TV entries sit in titles[].title,
+ *  movie entries in alternatives[].title. Missing / malformed → [] (silent
+ *  degrade, same contract as parseChineseTranslations). */
+function parseAlternativeTitles(value: Record<string, unknown>, mediaType: "tv" | "movie"): string[] {
+  const container = isRecord(value["alternative_titles"]) ? value["alternative_titles"] : null;
+  const key = mediaType === "tv" ? "titles" : "alternatives";
+  const entries = container && Array.isArray(container[key]) ? container[key] : [];
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (!isRecord(entry)) continue;
+    const title = entry["title"];
+    if (typeof title === "string" && title.trim()) {
+      names.push(title.trim());
+    }
+  }
+  return names;
+}
+
 function normalizeTitle(value: string): string {
   return value.trim();
 }
 
-/** The alias list carried on MediaTitle: the original title plus every Chinese
- *  translated name, deduped and with anything identical to the main title /
+/** The alias list carried on MediaTitle: the original title, then every 地区官方
+ *  别名 (alternative_titles — the 大陆简体 resource name lives here), then every
+ *  Chinese translated name, deduped and with anything identical to the main title /
  *  original title dropped (those are already carried as their own fields).
  *  Translations come from append_to_response=translations and are optional —
  *  absent payloads yield the legacy [originalTitle] (or [] when it duplicates). */
-function aliasList(title: string, originalTitle: string, translations: string[] = []): string[] {
+function aliasList(
+  title: string,
+  originalTitle: string,
+  translations: string[] = [],
+  alternativeTitles: string[] = [],
+): string[] {
   const titleNorm = normalizeTitle(title);
   const originalNorm = normalizeTitle(originalTitle);
   const seen = new Set<string>();
@@ -876,6 +911,11 @@ function aliasList(title: string, originalTitle: string, translations: string[] 
   // main title (legacy behavior). Translations exclude BOTH title and original.
   push(originalTitle, new Set([titleNorm]));
   const translationExclusions = new Set([titleNorm, originalNorm]);
+  // 地区官方名排在繁体译名之前:兜底重搜 ≤3 轮取前几个别名,网盘实际用的简体资源名
+  // (龙之家族)必须先出场,而不是总被 zh-TW 变体(龍族前傳)挤掉名额。
+  for (const name of alternativeTitles) {
+    push(name, translationExclusions);
+  }
   for (const name of translations) {
     push(name, translationExclusions);
   }
