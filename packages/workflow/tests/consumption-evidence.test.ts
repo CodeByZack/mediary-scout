@@ -66,7 +66,7 @@ describe("evidenceDigestLine — stdout 命中摘要行", () => {
     expect(line.endsWith("＋1")).toBe(true);
     expect(line.includes("「超长标题")).toBe(true);
     for (const m of line.matchAll(/「(.+?)」/g)) {
-      expect(m[1].length).toBeLessThanOrEqual(24);
+      expect(m[1]?.length ?? 0).toBeLessThanOrEqual(24);
     }
   });
   it("不足 3 条:全列出,不带溢出尾巴", () => {
