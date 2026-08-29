@@ -242,6 +242,22 @@
 
 环境噪音备案：借用树缺 apps/web 运行时依赖（react/next）与 `yaml` 包，apps/web 整包 tsc、两个 web 测试与 runtime-config.test 在本机不可跑；三者与 main 基线同状，非本次重构引入。
 
+### 21. 可观测性增强（用户批准的新范围，叠加在等价重构分支上）
+
+**提交**: （本次）`feat(consumption): 可观测性增强——评分因果/候选证据/逐文件解析/结账行`
+
+背景：真机冒烟（Outer Banks run）暴露日志"只有结果没有因果"。原则：**合同行一字不动**，全部走新增 stepLog 行 + AgentToolEvent payload（stdout 依旧永不打印链接，守沙盒红线）。
+
+- L1 评分决策：primary 评分分布 + 为何进兜底/盲转/直选（tv.ts，含 gradingDecision 事件带 candidates 证据）；证据恢复：兜底耗尽回退 primary 的说明行。
+- L2 候选证据：viewResourceSnapshot / gradeCandidates / 兜底评分 / 仲裁事件全部挂 candidates/pool payload（id/标题≤120/评级/判因≤3，≤30 条）。
+- L3 仲裁输入输出：arbitrateSelection 事件挂 pool/reasoning/selected。
+- L4 解析明细：digest 后逐文件裸数字⚠行；候选标题含数字但季号未被识别 + 落盘裸数字 → 追加「季号提示」warn 行（issue #21 的可见层）。
+- L5 死链探测：判死依据行（返回 0 文件/不占转存预算计数）。
+- 结账行：run 终局三出口（入库/仲裁放弃/候选耗尽）输出 转存 x/3 · 死链 x/10 · PanSou 搜索次数 · AI 升级有无。
+- aliasesFallbackReSearch 返回值扩展 {rounds, restored}（内部接口，无外部消费方）。
+- 测试同步：fast-path.test.ts Task D 两处精确序列断言纳入新事件 + 3 条新 payload 断言；19 文件 155 用例全绿、单包 tsc exit 0。
+- 后续批次（未在本提交）：movie 路径同等对齐；apps/web 活动页「候选证据」面板（链接/提取码从 resource_snapshots 现取现显，只走 DB 证据流）。
+
 ---
 
 ## 注意事项

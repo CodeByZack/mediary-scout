@@ -815,10 +815,12 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect(steps.map((s) => s.toolName)).toEqual([
       "inspectTargetDir",
       "viewResourceSnapshot",
+      "gradingDecision",
       "gradeCandidates",
       "pickCandidate",
       "transferCandidate",
       "stagingDigest",
+      "digestFiles",
       "finalizeLanding",
       "finish",
     ]);
@@ -826,17 +828,23 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
       "search",
       "search",
       "search",
+      "search",
       "pick",
       "transfer",
+      "verify",
       "verify",
       "organize",
       "finalize",
     ]);
     // 序号连续;activity = stepLog 的 detail;转存带 candidateId 参数
-    expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(steps[1]!.activity).toBe("候选 1 条");
-    expect(steps[4]!.args.candidateId).toBe("c1");
-    expect(steps[7]!.activity).toContain("入库");
+    expect(steps[5]!.args.candidateId).toBe("c1");
+    expect(steps[9]!.activity).toContain("入库");
+    // 可观测性增强(L1/L2/L4):决策与证据 payload 随事件走 agent_steps
+    expect(steps[2]!.args.uniqueTopGrade).toBe(true);
+    expect((steps[2]!.args.candidates as unknown[]).length).toBe(1);
+    expect((steps[7]!.args.files as string[])[0]).toContain("S01E01");
     // 落盘结果不受 trace 影响
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
@@ -902,9 +910,10 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect(steps.map((s) => s.toolName)).toEqual([
       "inspectTargetDir",
       "viewResourceSnapshot",
+      "gradingDecision",
       "reportNoCoverage",
     ]);
-    expect(steps[2]!.activity).toBe("暂无资源(快照为空)");
+    expect(steps[3]!.activity).toBe("暂无资源(快照为空)");
   });
 
   it("onProgress 缺失(裸 sandbox)→ 不写 trace 也不崩溃", async () => {

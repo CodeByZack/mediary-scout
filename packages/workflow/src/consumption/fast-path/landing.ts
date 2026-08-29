@@ -12,6 +12,8 @@ import {
   concludeUncovered,
   emitStep,
   gradeDistribution,
+  gradedCandidateEvidence,
+  landingParseRows,
   nextCandidate,
   stepLog,
   type FastPathResult,
@@ -181,6 +183,8 @@ export async function aliasesFallbackReSearch(input: {
 }): Promise<{
   view: NonNullable<ReturnType<TaskSandbox["rawSnapshotView"]>>;
   grading: ReturnType<typeof gradeCandidates>;
+  rounds: number;
+  restored: boolean;
 }> {
   const { sandbox, title, aliases, view, grading, grade, onProgress } = input;
   const searched = new Set<string>([normalizeSearchKeyword(title)]);
@@ -217,7 +221,10 @@ export async function aliasesFallbackReSearch(input: {
         : gradeDistribution(currentGrading)
     }`;
     stepLog(sandbox, title, "兜底评分", gradeDetail);
-    emitStep(onProgress, "gradeCandidates", "search", gradeDetail);
+    emitStep(onProgress, "gradeCandidates", "search", gradeDetail, {
+      keyword: alias,
+      candidates: gradedCandidateEvidence(currentGrading),
+    });
     if (nextView.candidates.length > 0 && currentGrading.uniqueTopGrade) {
       foundUniqueA = true;
       break; // 唯一 A → 直接转存
@@ -232,9 +239,9 @@ export async function aliasesFallbackReSearch(input: {
     const restoreDetail = `全部兜底无唯一 A,恢复 primary 快照(${view.candidates.length} 条候选)继续仲裁`;
     stepLog(sandbox, title, "兜底重搜", restoreDetail);
     emitStep(onProgress, "gradeCandidates", "search", restoreDetail);
-    return { view, grading };
+    return { view, grading, rounds, restored: true };
   }
-  return { view: currentView, grading: currentGrading };
+  return { view: currentView, grading: currentGrading, rounds, restored: false };
 }
 
 /**
@@ -323,6 +330,8 @@ export async function closeOutTvLanding(options: {
       const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",无下一候选"}`;
       stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
       emitStep(onProgress, "transferCandidate", "transfer", deadDetail, { candidateId: current });
+      const probeDetail = `候选 ${current} 转存返回 0 个落盘文件 → 判死链(探测第 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} 次,不占 3 次转存预算)${next ? "" : ";池内无下一候选"}`;
+      stepLog(sandbox, target.title, "死链探测", probeDetail, "warn");
       return { verdict: "dead", done: null, next, escalated, deadRetries };
     }
 
@@ -340,6 +349,28 @@ export async function closeOutTvLanding(options: {
       digest.passes ? "log" : "warn",
     );
     emitStep(onProgress, "stagingDigest", "verify", digestDetail);
+    const parseRows = landingParseRows(transfer.staging, seasons);
+    if (parseRows.length > 0) {
+      stepLog(sandbox, target.title, "解析明细", parseRows.join(" / "));
+      emitStep(onProgress, "digestFiles", "verify", `逐文件解析 ${parseRows.length} 条`, { files: parseRows });
+    }
+    {
+      const candidate = grading.ranked.find((c) => c.id === current);
+      if (
+        candidate &&
+        candidate.seasonNumbers.length === 0 &&
+        /\d/.test(candidate.title) &&
+        parseRows.some((row) => row.includes("⚠"))
+      ) {
+        stepLog(
+          sandbox,
+          target.title,
+          "季号提示",
+          `候选标题「${candidate.title.slice(0, 60)}」含数字但季号未被评分器识别,落盘又按目标季解释——假入库风险面(issue #21)`,
+          "warn",
+        );
+      }
+    }
 
     // Clean landing → finalize (rename/归位/mark/wipe) in code, zero LLM.
     if (digest.passes) {

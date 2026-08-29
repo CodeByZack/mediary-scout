@@ -7,6 +7,8 @@ import {
   concludeUncovered,
   emitStep,
   fileBaseName,
+  gradeDistribution,
+  gradedCandidateEvidence,
   logStorageProvider,
   stepLog,
   type FastPathOptions,
@@ -112,7 +114,12 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   const snapshotDetail =
     raw.candidates.length === 0 ? "候选 0 条(快照为空)" : `候选 ${raw.candidates.length} 条`;
   stepLog(sandbox, target.title, "预搜快照", snapshotDetail, raw.candidates.length === 0 ? "warn" : "log");
-  emitStep(onProgress, "viewResourceSnapshot", "search", snapshotDetail);
+  emitStep(onProgress, "viewResourceSnapshot", "search", snapshotDetail, {
+    candidates: raw.candidates.slice(0, 30).map((candidate) => ({
+      id: candidate.id,
+      title: candidate.title.slice(0, 120),
+    })),
+  });
 
   let grading = gradeCandidates(raw.candidates, {
     title: target.title,
@@ -120,6 +127,26 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     seasons,
     isChineseNative,
   });
+
+  stepLog(
+    sandbox,
+    target.title,
+    "评分决策",
+    `${gradeDistribution(grading)} → ${
+      grading.uniqueTopGrade
+        ? "唯一 A,可盲转"
+        : target.aliases.length > 0
+          ? "无唯一 A,转别名兜底(预算 ≤3 轮)"
+          : "无唯一 A 且无别名,直接进入选片"
+    }`,
+  );
+  emitStep(
+    onProgress,
+    "gradingDecision",
+    "search",
+    `uniqueA=${grading.uniqueTopGrade ? "yes" : "no"}(${gradeDistribution(grading)})`,
+    { candidates: gradedCandidateEvidence(grading), uniqueTopGrade: grading.uniqueTopGrade },
+  );
 
   // 1b. Aliases 兜底重搜: the primary search recalled by target.title ONLY — when
   //     it comes back empty, or grades without a unique A (the 泰德·拉索 case: the
@@ -129,6 +156,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   //     snapshot, so grading/arbitration/transfer after a fallback read the NEW
   //     evidence — unless the whole fallback fails AND primary had candidates
   //     (§E: restore the primary evidence instead of discarding it).
+  let fallbackRounds = 0;
   if ((raw.candidates.length === 0 || !grading.uniqueTopGrade) && target.aliases.length > 0) {
     const fallback = await aliasesFallbackReSearch({
       sandbox,
@@ -147,6 +175,15 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     });
     raw = fallback.view;
     grading = fallback.grading;
+    fallbackRounds = fallback.rounds;
+    if (fallback.restored) {
+      stepLog(
+        sandbox,
+        target.title,
+        "证据恢复",
+        `复用内存 primary 快照(${raw.candidates.length} 条候选),零额外 PanSou 请求(兜底共搜 ${fallback.rounds} 轮)`,
+      );
+    }
   }
 
   if (raw.candidates.length === 0) {
@@ -165,7 +202,11 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   for (const candidate of grading.ranked) gradeCounts[candidate.grade] += 1;
   const gradingDetail = `A ${gradeCounts.A} / B ${gradeCounts.B} / C ${gradeCounts.C} / D ${gradeCounts.D}`;
   stepLog(sandbox, target.title, "评分", gradingDetail);
-  emitStep(onProgress, "gradeCandidates", "search", gradingDetail);
+  emitStep(onProgress, "gradeCandidates", "search", gradingDetail, {
+    candidates: gradedCandidateEvidence(grading),
+    uniqueTopGrade: grading.uniqueTopGrade,
+    fallbackRounds,
+  });
 
   // 2. Pick the first candidate: a unique A-grade transfers blind; otherwise the
   //    selection arbitrator picks one (escalation #1).
@@ -175,7 +216,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     current = grading.top.id;
     const pickDetail = `唯一 A 盲转:候选 ${current}(${grading.top.title})`;
     stepLog(sandbox, target.title, "选片", pickDetail);
-    emitStep(onProgress, "pickCandidate", "pick", pickDetail);
+    emitStep(onProgress, "pickCandidate", "pick", pickDetail, { candidateId: current, title: grading.top.title });
   } else {
     escalated = true;
     const arbitration = await arbitrateSelection({
@@ -190,7 +231,19 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
       const doneDetail = `暂无资源(仲裁放弃:${arbitration.reasoning || "无可用候选"})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "arbitrateSelection", "pick", declineDetail);
+      emitStep(onProgress, "arbitrateSelection", "pick", declineDetail, {
+        pool: gradedCandidateEvidence(grading),
+        reasoning: arbitration.reasoning ?? null,
+        selected: null,
+      });
+      stepLog(
+        sandbox,
+        target.title,
+        "结账",
+        `转存 0/${MAX_TRANSFER_ATTEMPTS} · 死链探测 0/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${
+          1 + fallbackRounds
+        } 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:有(选片仲裁,放弃)`,
+      );
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return concludeUncovered(sandbox, {
         text: `仲裁放弃:${arbitration.reasoning || "无可用候选"}`,
@@ -219,7 +272,11 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     }
     const pickedDetail = `选中候选 ${current}${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`;
     stepLog(sandbox, target.title, "仲裁", pickedDetail);
-    emitStep(onProgress, "arbitrateSelection", "pick", pickedDetail);
+    emitStep(onProgress, "arbitrateSelection", "pick", pickedDetail, {
+      pool: gradedCandidateEvidence(grading),
+      reasoning: arbitration.reasoning ?? null,
+      selected: current,
+    });
   }
 
   // 3. Transfer → digest → finalize / diagnose, with limited retries for dead
@@ -261,6 +318,13 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       transfer,
     });
     if (closed.done) {
+      stepLog(
+        sandbox,
+        target.title,
+        "结账",
+        `转存 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} · 死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · ` +
+          `PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`,
+      );
       return closed.done;
     }
     escalated = closed.escalated;
@@ -275,6 +339,13 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   const exhaustedDetail = `缺集(尝试 ${attempted.size} 次转存,扫过 ${tried.size} 个候选仍未覆盖)`;
   stepLog(sandbox, target.title, "结论", exhaustedDetail);
   emitStep(onProgress, "reportNoCoverage", "finalize", exhaustedDetail);
+  stepLog(
+    sandbox,
+    target.title,
+    "结账",
+    `转存 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} · 死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · ` +
+      `PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`,
+  );
   return {
     text: `fast path 未覆盖(尝试 ${attempted.size} 次转存)`,
     steps: attempted.size,

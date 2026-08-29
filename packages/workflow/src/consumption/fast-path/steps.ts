@@ -2,6 +2,7 @@ import type { LanguageModel } from "ai";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
 import type { AgentPhase, AgentToolEvent } from "../../acquisition-v2/activity.js";
 import { getStorageBrand } from "../../storage-brands.js";
+import { episodeCodeFromFileName } from "../../episode-code.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import type { TvAnimeTarget } from "../../acquisition-v2/task-agents.js";
 
@@ -117,6 +118,39 @@ export async function concludeUncovered(
 
 export function fileBaseName(path: string): string {
   return path.split("/").pop() ?? path;
+}
+
+/** L2 证据 payload:紧凑评级列表,供活动页展开(≤30 条;标题≤120 字;判因≤3 条)。 */
+export function gradedCandidateEvidence(
+  grading: ReturnType<typeof gradeCandidates>,
+): Array<Record<string, unknown>> {
+  return grading.ranked.slice(0, 30).map((candidate) => ({
+    id: candidate.id,
+    title: candidate.title.slice(0, 120),
+    grade: candidate.grade,
+    reasons: candidate.reasons.slice(0, 3),
+    ...(candidate.seasonNumbers.length > 0 ? { seasons: candidate.seasonNumbers } : {}),
+    ...(candidate.quality !== null ? { quality: candidate.quality } : {}),
+  }));
+}
+
+const VIDEO_EXT = /\.(mkv|mp4|avi|ts|webm|mov|m4v|wmv|flv|iso)$/i;
+
+/** L4 证据 payload:落盘视频逐文件集数解析行;⚠ = 裸数字按目标季解释(issue #21 可见层)。 */
+export function landingParseRows(
+  files: Array<{ path: string }>,
+  seasons: number[],
+): string[] {
+  return files
+    .filter((file) => VIDEO_EXT.test(file.path))
+    .slice(0, 40)
+    .map((file) => {
+      const base = fileBaseName(file.path);
+      const code = episodeCodeFromFileName(base, seasons);
+      const bare = /^\d{1,3}$/.test(base.replace(/\.[^.]+$/i, ""));
+      if (!code) return base + " → 解析失败";
+      return base + " → " + code + (bare ? " ⚠(裸数字,按目标季解释)" : "");
+    });
 }
 
 /** A/B/C/D 分布,兜底评分日志用(与主流程 stepLog 的「A x / B y / C z / D w」同款)。 */
