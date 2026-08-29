@@ -34,9 +34,7 @@ import {
   queueSeriesInitialization,
   queueTrackingInitialization,
   reserveMovie,
-  runQueuedMovieAcquisition,
-  runQueuedSeriesInitialization,
-  runQueuedType2Workflow,
+  runNextQueuedConsumption,
   resolveDriveSourceLabels,
   runScheduledType3Monitoring,
   sendPushNotifications,
@@ -957,7 +955,10 @@ export async function runNextQueuedWorkflow() {
   const resolveAccountContext = buildAccountContextResolver();
   const startedAt = new Date().toISOString();
   const onAuthErrorFreeze = (id: string, reason: string) => freezeConnectedStorage(id, reason);
-  const type2 = await runQueuedType2Workflow({
+  // ★ 步骤⑥：kind 优先级表（type2 单季 → series 整包 → movie）收进 workflow 包
+  // 的 runNextQueuedConsumption —— 与旧三段式逐字段等价（父级字段各 kind 互不读取），
+  // 三个导出仍保留（runQueuedType2Workflow 等，备料/兼容用）。
+  const outcome = await runNextQueuedConsumption({
     repository,
     resourceProvider: await getWorkerResourceProvider(),
     storage,
@@ -966,44 +967,14 @@ export async function runNextQueuedWorkflow() {
     ...quality,
     storageParentDirectoryId: parents.tv,
     animeStorageParentDirectoryId: parents.anime,
-    resolveAccountContext,
-    onAuthErrorFreeze,
-  });
-  if (type2.status !== "idle") {
-    await pushNotificationsSince(repository, startedAt);
-    return type2;
-  }
-  const series = await runQueuedSeriesInitialization({
-    repository,
-    resourceProvider: await getWorkerResourceProvider(),
-    storage,
-    model,
-    ...language,
-    ...quality,
-    storageParentDirectoryId: parents.tv,
-    animeStorageParentDirectoryId: parents.anime,
-    resolveAccountContext,
-    onAuthErrorFreeze,
-  });
-  if (series.status !== "idle") {
-    await pushNotificationsSince(repository, startedAt);
-    return series;
-  }
-  const movie = await runQueuedMovieAcquisition({
-    repository,
-    resourceProvider: await getWorkerResourceProvider(),
-    storage,
-    model,
-    ...language,
-    ...quality,
     moviesParentDirectoryId: parents.movies,
     resolveAccountContext,
     onAuthErrorFreeze,
   });
-  if (movie.status !== "idle") {
+  if (outcome.status !== "idle") {
     await pushNotificationsSince(repository, startedAt);
   }
-  return movie;
+  return outcome;
 }
 
 /** The user's preferred subtitle language for acquisition search, or undefined

@@ -9,6 +9,25 @@ import {
 
 const tvCtx = { title: "狂飙", aliases: [], seasons: [1] };
 
+describe("简繁折叠(normalizeForTitleMatch 末步,vendored t2s 表)", () => {
+  it("繁体别名认出简体候选标题(龙之家族案)→ 不再是「标题不匹配」的 D", () => {
+    const ctx = { title: "权力的游戏前传：龙族", aliases: ["龍之家族", "龍族前傳"], seasons: [1] };
+    const g = gradeCandidate({ id: "1", title: "龙之家族 4K 更至10集 最新" }, ctx);
+    expect(g.grade).not.toBe("D");
+    // 反向同理:简体目标标题认出繁体候选。
+    const g2 = gradeCandidate(
+      { id: "2", title: "龍族前傳.S01E01.1080p.中字" },
+      { title: "龙族前传", aliases: [], seasons: [1] },
+    );
+    expect(g2.grade).toBe("A");
+  });
+
+  it("折叠不放水:真正无关的候选仍判 D", () => {
+    const g = gradeCandidate({ id: "1", title: "沧元图" }, { title: "龍之家族", aliases: [], seasons: [1] });
+    expect(g.grade).toBe("D");
+  });
+});
+
 describe("seasonNumbersInTitle", () => {
   it("parses 第N季, Sxx and Season N", () => {
     expect(seasonNumbersInTitle("狂飙 第二季")).toEqual([2]);

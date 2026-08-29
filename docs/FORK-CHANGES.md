@@ -150,6 +150,142 @@
 
 ---
 
+## 任务消费流水线重构（consumption pipeline，纯等价重构）
+
+> 设计蓝图：`/vol1/1000/docs/mediary-scout-consumption-refactor-design.md`（§2 七阶段主干 / §3 ConsumptionContext / §7 文件布局）。
+> 目标：把「认领→落库」从 4 层参数透传（workflow-runtime → worker → runner-v2 → workflow-v2 → orchestrator）收敛为
+> 一次性 `ConsumptionContext` + 七阶段 `consumeClaimedRun(ctx)`。**纯等价重构：外部行为、日志文案、通知口径、失败语义零变化。**
+> 器件（TaskSandbox/candidate-grader/三仲裁/staging-digest/finalize-landing/subtitle-picker/episode-code/SQLite schema）一律不动。
+> 与设计的 4 处已对齐偏差：A 认领循环留在 workflow 包（apps/web 只备料）；B movie「落点已有视频」检查留在 ④（前移会省一次真实搜索=行为变化）；
+> C pipeline 不吞异常、调用方分派 failure 语义（队列 handleWorkflowRunFailure / 巡检自 catch）；D 过渡期三个 runQueued* 名字保留为表驱动薄包装。
+
+### 14. 步骤①——consumption/context.ts + pipeline.ts 转发骨架，三个队列入口接线
+
+**提交**: （本次）`refactor(consumption): 步骤① 消费上下文与七阶段纯转发骨架`
+
+- 新增 `packages/workflow/src/consumption/context.ts`：ConsumptionContext（kind/title/claimed/patrol + 消费依赖 + 注入能力 + 运行上下文，design §3 分组）、ClaimedRun（保留完整 snapshot——type1 锁 run 收尾需 WorkflowRun 全展开，设计稿的扁平 episodes/titleRef 由此导出，有损重建被等价原则否决）、PatrolRun（步骤⑥巡检直调时启用）、`buildConsumptionContext`（resolveWorkerDeps 合并后的依赖一次性装袋；type1 的 seasonScopes 派生自 series_init_queued 审计事件）；`storageParentForTitle`/`requireCategoryParent` 自 worker.ts 逐字迁入（= ①目录阶段的父级选择 + fail-loud）
+- 新增 `packages/workflow/src/consumption/pipeline.ts`：`consumeClaimedRun(ctx)` 七阶段主干入口（①prepareDirectories ②withStagingCleanup ③computeNeed ④runAcquisition ⑤reconcileNeed ⑥readLandedSize ⑦persistOutcome）。当前形态=按 kind 纯转发到现有 runner-v2 实现（其内部已按 ①–⑦ 顺序执行），步骤②–⑤ 逐阶段替换转发；type1 分支已吸收原 worker 尾段「claimed 锁 run 收尾落库」（逐字搬迁）；异常一律上抛由调用方分派（偏差 C），队列侧 catch 语义原封不动
+- `worker.ts`：runQueuedType2Workflow / runQueuedSeriesInitialization / runQueuedMovieAcquisition 三个认领入口的 try 体 → buildConsumptionContext + consumeClaimedRun；认领、resolveWorkerDeps、catch/handleWorkflowRunFailure 原位不动；两个私有 helper 迁出、失效 import 清理；type3 巡检与 patrolMovie 暂不切（步骤⑥按决策 1 直调 pipeline）
+- `index.ts`：新增 consumption 两模块出口
+- 验证：`./node_modules/.bin/tsc -p tsconfig.workflow-check.json` exit 0；vitest 9 个链路测试文件（worker / type3-worker / handle-workflow-failure / run-retry-transitions / v2-series-queue / v2-full-chain / v2-runner-persist / cancel-queued / movie-command-worker）= 9 files / 50 tests 全绿
+
+### 15. 步骤②——stages/directories.ts + stages/need.ts：①②③⑤⑥ 阶段收口
+
+**提交**: （本次）`refactor(consumption): 步骤② 目录/清理/需求对账阶段收口 stages/*`
+
+- 新增 `consumption/stages/directories.ts`：①`prepareDirectories`、②`withStagingCleanupStage`（335 文件泄漏兜底）、⑥`readLandedSizeStage`（best-effort 体积）——薄收口，器件 directory-lifecycle.ts / landed-size.ts 不动
+- 新增 `consumption/stages/need.ts`：③`computeNeed` → `NeedSnapshot{missing,obtained,providerAhead}`、⑤`reconcileNeed`（prior ∪ agent 标记，不重扫网盘）、no-op 零 API 早退的产物形状 `noOpWorkflowStageResult`/`assembleNoOpWorkflowResult`（原 EMPTY_OUTCOME 收编）
+- `acquisition-v2/workflow-v2.ts` 改调 stages 收口点（同一实现换门牌）：7a/7b 段与早退分支逐字等价；本地 EMPTY_OUTCOME 删除
+- 行为零变化——只是把装配段升格为按七阶段命名的文件，调用链仍经 workflow-v2（type1/type3/movie 转发路径同样受益）
+- 验证：tsc exit 0；vitest 11 文件 63 用例全绿（v2-workflow / v2-sync-need / v2-directory-lifecycle / v2-sandbox-cleanup / landed-size / staging-cleanup + 队列回归 worker / v2-full-chain / v2-series-queue / type3-worker）
+
+### 16. 步骤③——stages/acquire.ts：④装配段收口（唯一烧配额阶段）
+
+**提交**: （本次）`refactor(consumption): 步骤③ ④装配段收口 stages/acquire.ts`
+
+- 新增 `consumption/stages/acquire.ts`：`runAcquisitionCoreStage` = 原 workflow-v2.ts 闭包里的 orchestrator 装配调用（spread 长链逐字搬迁）+ ⑤对账 + ⑥体积 + 结果组装，连段顺序即语义不变；`RunAcquisitionV2WorkflowRequest`/`RunAcquisitionV2WorkflowResult`/`V2WorkflowSeason` 类型随迁（workflow-v2 re-export 保出口名，bridge/测试零改动）
+- `acquisition-v2/workflow-v2.ts` 变成纯阶段组合（①→②→③→no-op早退→④⑤⑥连段），~60 行；orchestrator 本体（TaskSandbox/预搜/字幕三闸门/tv 分发）作为器件不动
+- 注释语义保留：④ 是全链路唯一真实搜索/转存/LLM token 消耗点，③判空 no-op 不进 ④
+- 验证：tsc exit 0；vitest 12 文件 68 用例全绿（v2-workflow / v2-run-tv / v2-orchestrator / orchestrator-subtitle / v2-subtitle / v2-bridge / v2-acceptance / v2-acceptance-multiseason + 队列回归 worker / v2-full-chain / v2-series-queue / type3-worker）
+
+### 17. 步骤④——stages/persist.ts：⑦落库收口，pipeline 转真组合
+
+**提交**: （本次）`refactor(consumption): 步骤④ 落库阶段收口，pipeline 转真组合`
+
+- 新增 `consumption/stages/persist.ts`：⑦写-only 的四种落库形态全部自 runner-v2 逐字迁入 —— `persistSingleSeason`（type2/type3 单季）、`persistSeriesSeasons`（type1 逐季 _sN，证据/通知只挂第一条）、`persistSeriesLockRun`（type1 claimed 锁 run 收尾，步骤① 暂居 pipeline 的尾段归位）、`persistMovieRun`（movie 单记录）；`progressAndTraceSink`（活动页进度+agent_steps trace 合并写路径）与 `resolveNow`（finishedAt 跑后盖章语义）同步迁入
+- `pipeline.ts`：type2/type1/movie 分支从"转发 runner 包装"升级为**真实 ①–⑦ 组合**（runTvAcquisitionV2/runMovieAcquisitionV2 + persist.*，neededHint/priorObtained/seasons 形状逐一对位）；type3 分支暂留转发（runType3MonitoringV2AndPersist 仍是巡检唯一实现点，步骤⑥ 巡检直调时收口，避免双份对账漂移）
+- `runner-v2.ts` 瘦身：本地 persistSingleSeason/progressAndTraceSink/resolveNow 删除、series/movie 内联落库段替换为 persist.ts 调用 —— 过渡期仅剩"巡检宿主 + 旧 API 薄包装"（v2-runner-persist 测试面不动），步骤⑥ 物理删除
+- 验证：tsc exit 0；vitest 13 文件 97 用例全绿（v2-runner-persist / worker / v2-series-queue / v2-full-chain / movie-command-worker / type3-worker / handle-workflow-failure / run-retry-transitions / cancel-queued / agent-trace-integration / v2-bridge / v2-movie-workflow / notification-report）
+
+### 18. 步骤⑤——fast-path 拆分：consumption/fast-path/{budgets,steps,landing,tv,movie}.ts + LandingVerdict
+
+**提交**: （本次）`refactor(consumption): 步骤⑤ fast-path 拆分为五模块并落地 LandingVerdict`
+
+- 1375 行单体 `acquisition-v2/fast-path.ts` 按 design §5/§7 拆分（装配脚本行切片搬运，逐字等价；原文件退居 15 行兼容壳 re-export，orchestrator/测试引用面零改动）：
+  - `budgets.ts`：三常量（3/10/3 及血泪注释逐字保留）+ design §5 的 `Budgets`/`DEFAULT_BUDGETS`（业务循环保留直读常量，同源值，行为零变化）
+  - `steps.ts`：stepLog/emitStep/logStorageProvider（`[mediary-run]` 文案唯一出处）+ FastPathOptions/Result + nextCandidate/concludeUncovered/fileBaseName/gradeDistribution
+  - `landing.ts`：tryEpisodeMapping(§2.2)/computeKnownEpisodeRange/aliasesFallbackReSearch(§E primary 快照恢复) + 从主循环抽出的 **LandingVerdict 七值状态机** `closeOutTvLanding`（systemic/dead/clean/mapped_clean/accept/retry_other/abandon；15 个 return 点行级手术，日志与沙盒调用顺序逐字不变；死链不占转存预算的语义由"dead 分支不触 attempted.add + deadRetries 随判定带出"原样承载）
+  - `tv.ts`：runFastPathAcquisition（落点检查→评分→兜底重搜→唯一A/选片仲裁→循环驱动 closeOutTvLanding→耗尽尾段）
+  - `movie.ts`：runMovieFastPathAcquisition + clearMovieLanding + landSubtitlesForMovie（字幕软目标语义逐字保留）
+- 验证：tsc exit 0；vitest 16 文件 160 用例全绿（fast-path 27 / movie-fast-path / repetition-stop 预算 / staging-digest / finalize-landing / episode-code / keyword-references-title / v2-orchestrator / orchestrator-subtitle / v2-subtitle + e2e full-chain/worker/series/type3/acceptance×2）
+
+### 19. 步骤⑥——收敛：runner-v2 整体退场、三 clone 合一、巡检直调 pipeline、fast-path 壳删除
+
+**提交**: （本次）`refactor(consumption): 步骤⑥ 收敛——runner-v2 退场与巡检直调落地`
+
+- `runner-v2.ts`（17KB、4 个 `*AndPersist` 包装）删除：type3 巡检语义（priorObtained= DB obtained 标记、neededHint= aired∧¬obtained 计数、单季落库）逐字接管进 `consumption/pipeline.ts` 新 type3 真组合分支；movie/type2/type1 早已在 ④ 收口。
+- `worker.ts` 三份同构认领 clone → 统一 `runQueuedConsumption(kind, input)`（kind 由 `QUEUE_CONSUMPTION_ORDER = [type2_init, type1_package_init, movie_init]` 优先级表驱动）+ `runNextQueuedConsumption` 单认领循环；三个 `runQueued*` 公共导出保留为一行转发（类型签名逐字不变，偏差 D 收尾）。
+- 决策 1 落地：`runScheduledType3Monitoring` 改 `buildPatrolConsumptionContext`（context.ts 新增）→ `consumeClaimedRun`；`patrolMovie` 改合成 `PersistedWorkflowRunSnapshot`（movie 消费只读 runId/归属/title/season，证据数组由 ⑦ 重建）→ 同一入口。巡检自带 catch 原样（不重试/保留 episode 态/写 failed，偏差 C）。
+- `acquisition-v2/fast-path.ts` 兼容壳删除：orchestrator 与 fast-path/movie-fast-path 测试改指 `consumption/fast-path/{tv,movie}.js`；index.ts 摘除 runner-v2 导出行。
+- apps/web `runNextQueuedWorkflow` 三段式 → 单次 `runNextQueuedConsumption`（逐字段等价：父级字段各 kind 互不读取；resourceProvider 单 tick 装配 3→1 次，纯减量；`runNextQueuedWorkflow` 导出名不变，两个 web 测试仅 mock 该外壳、零改动）。
+- 测试改线：v2-runner-persist.test.ts / agent-trace-integration.test.ts 由 runner 包装入口改为合成快照 + 直调 pipeline（断言与记录形状全保留）。
+- 验证：`tsc -p tsconfig.workflow-check.json` exit 0；tests 目录单包 tsc 仅余基线同款 `yaml` 缺依赖噪音（main 亦如此，借用树环境限制）；vitest 19 文件 168 用例全绿（含 worker/type3-worker/movie-command-worker/v2-series-queue/v2-full-chain/acceptance×2 端到端）。apps/web 整包 tsc 在本借用树不可行（react/next 依赖缺失，基线同状）。
+
+### 20. 步骤⑦——历史事故语义自查（重构收官验证）
+
+**提交**: （本次）`test(consumption): 步骤⑦ 历史事故语义自查通过`
+
+纯等价重构的最终防线是"事故回归全绿"。本轮（步骤⑥/⑦合计，NAS 轻量口径）33 个测试文件 323 用例全绿：
+
+| 历史事故 | 回归位 | 关键断言 | 结果 |
+|---|---|---|---|
+| S03 假入库（PR #18） | episode-code.test.ts（22） | 单季任务 `01.mkv`→S03E01、多季禁无季规则 | ✅ |
+| 夸克 `(1)` 重复归位（PR #19） | finalize-landing.test.ts | skipCodes 透传、已就位文件不重复动 | ✅ |
+| 死链狂飙 45 候选 | fast-path.test.ts + budgets.ts 红线 | 死链计数 10 上限、dead 分支不触 attempted.add（不占 3 转存预算） | ✅ |
+| 335 文件 staging 泄漏 | staging-cleanup.test.ts | 成败必清理挂 run 生命周期 | ✅ |
+| 仲裁解析失败 | arbitrator.test.ts | 三升级点纯单次调用 + 保守降级（放弃不硬转） | ✅ |
+| no-op 零搜索 | v2-workflow.test.ts | need 为空直接结束、一次搜索都不发 | ✅ |
+| 日志/通知合同 | agent-trace-integration + notification-report + keyword-references-title | `[mediary-run][runId]` 步骤文案、通知 trigger 口径逐字不变 | ✅ |
+| 失败语义（偏差 C） | handle-workflow-failure + worker + type3-worker | pipeline 不吞异常；队列退避重入队、巡检不重试写 failed，两口径各自 catch | ✅ |
+
+预算红线复核：`MAX_TRANSFER_ATTEMPTS=3 / MAX_DEAD_LINK_RETRIES=10 / MAX_FALLBACK_SEARCHES=3` 唯一定义在 `consumption/fast-path/budgets.ts`；全仓 `attempted.add` 仅两处（TV 转存点 landing.ts:330、movie 转存点 movie.ts:360），死链路径零消耗——与重构前一致。
+
+环境噪音备案：借用树缺 apps/web 运行时依赖（react/next）与 `yaml` 包，apps/web 整包 tsc、两个 web 测试与 runtime-config.test 在本机不可跑；三者与 main 基线同状，非本次重构引入。
+
+### 21. 可观测性增强（用户批准的新范围，叠加在等价重构分支上）
+
+**提交**: （本次）`feat(consumption): 可观测性增强——评分因果/候选证据/逐文件解析/结账行`
+
+背景：真机冒烟（Outer Banks run）暴露日志"只有结果没有因果"。原则：**合同行一字不动**，全部走新增 stepLog 行 + AgentToolEvent payload（stdout 依旧永不打印链接，守沙盒红线）。
+
+- L1 评分决策：primary 评分分布 + 为何进兜底/盲转/直选（tv.ts，含 gradingDecision 事件带 candidates 证据）；证据恢复：兜底耗尽回退 primary 的说明行。
+- L2 候选证据：viewResourceSnapshot / gradeCandidates / 兜底评分 / 仲裁事件全部挂 candidates/pool payload（id/标题≤120/评级/判因≤3，≤30 条）。
+- L3 仲裁输入输出：arbitrateSelection 事件挂 pool/reasoning/selected。
+- L4 解析明细：digest 后逐文件裸数字⚠行；候选标题含数字但季号未被识别 + 落盘裸数字 → 追加「季号提示」warn 行（issue #21 的可见层）。
+- L5 死链探测：判死依据行（返回 0 文件/不占转存预算计数）。
+- 结账行：run 终局三出口（入库/仲裁放弃/候选耗尽）输出 转存 x/3 · 死链 x/10 · PanSou 搜索次数 · AI 升级有无。
+- aliasesFallbackReSearch 返回值扩展 {rounds, restored}（内部接口，无外部消费方）。
+- 测试同步：fast-path.test.ts Task D 两处精确序列断言纳入新事件 + 3 条新 payload 断言；19 文件 155 用例全绿、单包 tsc exit 0。
+- 预算闸：agent-trace-sink 对 args JSON >2000 字符整体硬截为 `_truncated`——证据列表自带 1800 预算(标题≤100、判因≤2×70、id 尾 24、文件行≤48+「…另有 N 条未列」)，保证 UI 拿到的是数据而非「参数过长已省略」。
+- 结账行进 agent_steps：新增 runCheckout(finalize) 事件（入库/仲裁放弃/候选耗尽三出口），活动页展开即见总开销。
+- 活动页渲染：stepArgsText 自 components/activity-feed.tsx 抽为纯函数 apps/web/lib/step-args-text.ts（可单测，旧六类输出逐字不变），新增「证据: 「标题」[评级]…等 N 条」「词「kw」· 证据: …」「解析: 01.mp4 → S01E01 ⚠(裸数字,按目标季解释) ｜ …」三类摘要行。
+- 测试：新增 consumption-evidence.test.ts(预算闸 4 用例) + apps/web/lib/step-args-text.test.ts(渲染 4 用例)；fast-path d1 序列同步 runCheckout；21 文件 163 用例全绿、tsc exit 0。
+- 后续批次（未在本提交）：movie 路径同等对齐；apps/web 活动页「候选证据」面板（链接/提取码从 resource_snapshots 现取现显，只走 DB 证据流）。
+
+### 22. 别名简体化 + §E 合并证据池（真机两单 no_coverage 的现场诊断产物）
+
+**提交**: （本次）`fix(consumption): 别名补 alternative_titles 简体名,§E 恢复改合并证据池`
+
+背景：3334 真机两单（龙族/母狮）暴露两个独立缺陷，靠 §21 的证据 payload 一眼定位：
+
+- **别名全繁体**（龙族案）：TMDB translations 只带 zh-TW/zh-HK 名（龍族前傳/龍之家族），网盘真实用名是简体（龙之家族）。修：`getTvDetails/getMovieDetails` 的 append_to_response 加 `alternative_titles`，`parseAlternativeTitles` 解析 tv `titles[].title` / movie `alternatives[].title`；`aliasList` 顺序改为 original → **地区官方名（简体在前）** → translations——兜底 ≤3 轮的词序直接受益。URL 断言测试同步（逗号编码 %2C）。
+- **§E 替换式恢复吞池**（母狮案）：恢复 primary 时把兜底轮搜到的好候选（「母狮 1-3季 合集」B 级）整个丢掉，仲裁见不到。修：恢复改**合并**——primary 优先入池 + 各轮兜底候选按 id 去重合并（不按标题去重：同名异链是常态，第一版标题去重被「预算 ≤3」测试当场打脸），重新 grade 一次（纯内存、零额外 PanSou，预算语义不变）。合并视图带 `candidateSnapshots`(id→来源快照)，tv/movie 转存改走 `candidateSnapshotId(raw, current)` 回各自 observed snapshot；狂飙防线原样保住。
+- 测试：+「§E 合并池(母狮案)」「alternative_titles 简体排序」两用例；狂飙/movie twin 恢复用例在合并语义下原样通过（断言注释措辞同步）。22 文件 189 用例全绿、tsc exit 0。
+- 遗留（观察项）：评分器无简繁折叠（「龍族前傳」命中的简体候选会被判低）——① 让简体词先进池后，多数场景已绕开；仍见误判再单独评估 opencc 级别方案。
+
+### 23. 评分器简繁折叠 + stdout 命中摘要 + 活动页结构化证据行（龙族案收尾）
+
+**提交**: （本次）`feat(consumption+web): 简繁折叠字表+stdout命中摘要+活动页结构化证据`
+
+- **③ 简繁折叠（vendored，零运行时依赖）**：`packages/workflow/src/t2s-table.ts` 内嵌 opencc-js@1.4.2 TSCharacters 词典的「单字→单字」映射（2966 条，源文件 ~7KB；词组条目依赖上下文，标题匹配不需要）。折叠点在 `normalizeForTitleMatch` 末步（planning-search-gate.ts，grader 的标题↔别名/关键词比对全走它）：繁体别名（龍之家族）自此能认出简体资源标题（龙之家族 4K 更至10集），修「搜索命中 4 条却全判 D」。搜索词序、别名内容、提示词、评分阈值一概不动——折叠只发生在比对层。opencc-js 仅作生成工具临时安装、已从 package.json/lock 移除。**附记（再生成）**：临时 `npm i opencc-js@1.4.2` → 读 `dist/esm-lib/dict/TSCharacters.js`（`export default "t s|t s|…"`）→ 取单字符对拼 T/S 双串重写 t2s-table.ts。
+- **stdout 命中摘要**：`evidenceDigestLine`（steps.ts）把评级池前 3 条「标题[评级]」+「＋N」打成一行；新增「兜底命中」（每轮兜底评分后）与「评分摘要」（tv primary/合并后、movie 评分后）stepLog——fnOS 日志不再只有分布数，池子里是什么一眼可见（仅标题+评级，无链接，红线安全）。
+- **活动页结构化证据行**：`stepDetailView`（step-args-text.ts 新纯函数）从 candidates/pool/files payload 提取全量行（写入侧已预算化，渲染侧不再截条）；activity-feed.tsx StepList 有结构化行时渲染 `StepEvidence`（评级徽章 A绿/B蓝/C橙/D灰 + 标题 + 判因，files 逐行），否则回退原一行摘要。globals.css 新增 `.act-step-evidence` 系样式。
+- 测试：+7（折叠单元×2、繁简全链盲转×1、摘要行×2、stepDetailView×2），并入 candidate-grader.test.ts 回归清单 → 23 文件 **217 用例全绿**；tsc workflow-check 0、TSX 语法过、opencc-js 不残留。
+- §22 观察项「仍见误判再评估」→ 本条即落地（龙族/母狮两案 payload 为完整案卷）。
+
+
+---
+
 ## 注意事项
 
 - `.gitignore`：追加 `*_TODO.md`、`deploy/fpk/app/server/`、`deploy/fpk/dist/`

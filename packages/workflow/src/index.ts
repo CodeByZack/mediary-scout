@@ -17,6 +17,9 @@ export * from "./repository.js";
 export * from "./resource-source-health.js";
 export { SqliteWorkflowRepository, createSqliteWorkflowRepository } from "./sqlite.js";
 export * from "./worker.js";
+// ★ 任务消费流水线（consumption-refactor design §7）：上下文 + 七阶段主干。
+export * from "./consumption/context.js";
+export * from "./consumption/pipeline.js";
 export * from "./commands.js";
 export * from "./pansou-provider.js";
 export * from "./prowlarr-provider.js";
@@ -68,4 +71,3 @@ export * from "./acquisition-v2/search-source-fault.js";
 export * from "./acquisition-v2/workflow-v2-bridge.js";
 export * from "./acquisition-v2/run-tv-v2.js";
 export * from "./acquisition-v2/stub-model.js";
-export * from "./runner-v2.js";

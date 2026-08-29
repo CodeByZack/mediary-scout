@@ -3,7 +3,7 @@ import { MockLanguageModelV3 } from "ai/test";
 import { TaskSandbox } from "../src/acquisition-v2/sandbox.js";
 import { FakeResourceProviderV2 } from "../src/acquisition-v2/fake-provider.js";
 import { Storage115Simulator } from "../src/acquisition-v2/storage-115-simulator.js";
-import { runFastPathAcquisition } from "../src/acquisition-v2/fast-path.js";
+import { runFastPathAcquisition } from "../src/consumption/fast-path/tv.js";
 import { makeAgentTraceSink } from "../src/acquisition-v2/agent-trace-sink.js";
 import { InMemoryWorkflowRepository } from "../src/index.js";
 import type { TvAnimeTarget } from "../src/acquisition-v2/task-agents.js";
@@ -788,7 +788,58 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
     ]);
-    expect(searches.length).toBe(2); // 1 primary + 1 兜底;恢复 primary 零额外搜索
+    expect(searches.length).toBe(2); // 1 primary + 1 兜底;合并证据池零额外搜索
+  });
+
+  it("§E 合并池:兜底轮的好候选与 primary 一起进仲裁,转存回各自来源快照(母狮案)", async () => {
+    const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
+      results: {
+        狂飙: [{ id: "c1", title: "狂飙 高清" }], // B(无中字无集数证据)→ 进兜底
+        "The Knockout": [{ id: "f1", title: "狂飙 1-3季 高清.中字" }], // 兜底轮的更好 B
+      },
+      packs: { c1: { files: [] }, f1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
+      aliases: ["The Knockout"],
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: textModel('{"candidateId":"f1","reasoning":"1-3季 合集带中字,更完整"}'),
+      target: aliasTarget,
+      isChineseNative: false,
+    });
+
+    // 旧行为:恢复只回 primary 池,f1 根本不在仲裁桌上(选中也会触发假 id 防御)。
+    // 新行为:合并池 f1 在场,且转存经 candidateSnapshots 回到兜底轮的快照。
+    expect(result.escalated).toBe(true);
+    expect(result.coverage.coverageMet).toBe(true);
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+    ]);
+    expect(searches.length).toBe(2); // 合并纯内存:primary 1 + 兜底 1,零额外搜索
+  });
+
+  it("简繁折叠进全链:简体标题命中繁体候选 → 唯一 A 盲转(零仲裁)", async () => {
+    const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
+      results: {
+        狂飙: [{ id: "c1", title: "狂飆.S01E01.1080p.中字" }], // 繁体候选,折叠后=简体标题
+      },
+      packs: { c1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
+      aliases: [],
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: textModel('{"candidateId":"never","reasoning":"不应被调用"}'),
+      target: aliasTarget,
+      isChineseNative: false,
+    });
+
+    expect(result.escalated).toBe(false); // 折叠后是 A 级唯一 → 盲转,不劳 AI
+    expect(result.coverage.coverageMet).toBe(true);
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+    ]);
+    expect(searches.length).toBe(1); // 折叠不引入额外搜索
   });
 });
 
@@ -815,28 +866,40 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect(steps.map((s) => s.toolName)).toEqual([
       "inspectTargetDir",
       "viewResourceSnapshot",
+      "gradingDecision",
       "gradeCandidates",
       "pickCandidate",
       "transferCandidate",
       "stagingDigest",
+      "digestFiles",
       "finalizeLanding",
       "finish",
+      "runCheckout",
     ]);
     expect(steps.map((s) => s.phase)).toEqual([
+      "search",
       "search",
       "search",
       "search",
       "pick",
       "transfer",
       "verify",
+      "verify",
       "organize",
+      "finalize",
       "finalize",
     ]);
     // 序号连续;activity = stepLog 的 detail;转存带 candidateId 参数
-    expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(steps[1]!.activity).toBe("候选 1 条");
-    expect(steps[4]!.args.candidateId).toBe("c1");
-    expect(steps[7]!.activity).toContain("入库");
+    expect(steps[5]!.args.candidateId).toBe("c1");
+    expect(steps[9]!.activity).toContain("入库");
+    expect(steps[10]!.activity).toContain("转存 1/3");
+    expect(steps[10]!.activity).toContain("PanSou 搜索 1 次(primary 1 + 兜底 0)");
+    // 可观测性增强(L1/L2/L4):决策与证据 payload 随事件走 agent_steps
+    expect(steps[2]!.args.uniqueTopGrade).toBe(true);
+    expect((steps[2]!.args.candidates as unknown[]).length).toBe(1);
+    expect((steps[7]!.args.files as string[])[0]).toContain("S01E01");
     // 落盘结果不受 trace 影响
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
@@ -902,9 +965,10 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect(steps.map((s) => s.toolName)).toEqual([
       "inspectTargetDir",
       "viewResourceSnapshot",
+      "gradingDecision",
       "reportNoCoverage",
     ]);
-    expect(steps[2]!.activity).toBe("暂无资源(快照为空)");
+    expect(steps[3]!.activity).toBe("暂无资源(快照为空)");
   });
 
   it("onProgress 缺失(裸 sandbox)→ 不写 trace 也不崩溃", async () => {

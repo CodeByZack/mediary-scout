@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { MockLanguageModelV3 } from "ai/test";
-import { runType2InitializationV2AndPersist } from "../src/runner-v2.js";
+import { buildConsumptionContext, type ConsumptionDeps } from "../src/consumption/context.js";
+import { consumeClaimedRun } from "../src/consumption/pipeline.js";
+import type { PersistedWorkflowRunSnapshot } from "../src/repository.js";
 import { FakeStorageExecutor } from "../src/fakes.js";
 import { InMemoryWorkflowRepository } from "../src/repository.js";
 import type { MediaTitle, ResourceCandidate, ResourceSnapshot, TrackedSeason } from "../src/domain.js";
@@ -85,25 +87,65 @@ function trackedSeason(): TrackedSeason {
   } as unknown as TrackedSeason;
 }
 
-const workflowRun = { id: "run-x", startedAt: "2026-06-15T00:00:00.000Z", finishedAt: "2026-06-15T00:01:00.000Z" };
+const RUN_ID = "run-x";
+const STARTED_AT = "2026-06-15T00:00:00.000Z";
 
-describe("agent trace — runner-v2 wires the durable run record", () => {
+/** 合成认领快照（步骤⑥ 后测试直调 pipeline，等价取代旧 runner 包装入口）。 */
+function fakeClaimed(): PersistedWorkflowRunSnapshot {
+  const season = trackedSeason();
+  return {
+    accountId: "acct_default",
+    connectedStorageId: null,
+    title: tvTitle,
+    season,
+    episodes: [],
+    workflowRun: {
+      id: RUN_ID,
+      kind: "type2_init",
+      status: "running",
+      trackedSeasonId: season.id,
+      startedAt: STARTED_AT,
+      finishedAt: null,
+      auditEvents: [],
+    },
+    resourceSnapshots: [],
+    decisions: [],
+    transferAttempts: [],
+    notifications: [],
+    obtainedEpisodes: [],
+    providerAheadEpisodes: [],
+  };
+}
+
+function ctxFor(repository: InMemoryWorkflowRepository, resourceProvider: ResourceProvider) {
+  const deps: ConsumptionDeps = {
+    repository,
+    resourceProvider,
+    storage: new FakeStorageExecutor(),
+    model: crashingModel(),
+    storageProvider: undefined,
+    preferredLanguage: undefined,
+    qualityPreference: undefined,
+    assrtToken: undefined,
+    tvParentDirectoryId: "tv_root",
+    animeParentDirectoryId: undefined,
+    moviesParentDirectoryId: undefined,
+  };
+  return buildConsumptionContext({
+    kind: "type2_init",
+    claimed: fakeClaimed(),
+    deps,
+  });
+}
+
+describe("agent trace — consumption pipeline wires the durable run record", () => {
   it("persists a reviewable no-coverage record (snapshot + resource evidence + notification), zero LLM", async () => {
     const repository = new InMemoryWorkflowRepository();
-    const result = await runType2InitializationV2AndPersist({
-      title: tvTitle,
-      season: trackedSeason(),
-      categoryParentId: "tv_root",
-      resourceProvider: emptyProvider(),
-      storage: new FakeStorageExecutor(),
-      model: crashingModel(), // the no-candidate path must never touch the LLM
-      repository,
-      workflowRun,
-    });
+    const outcome = await consumeClaimedRun(ctxFor(repository, emptyProvider()));
 
     // Fast path: empty raw snapshot → honest no-coverage, run completes normally.
-    expect(result.status).toBe("no_coverage");
-    const snapshot = await repository.getWorkflowRunSnapshot("run-x");
+    expect(outcome.workflowStatus).toBe("no_coverage");
+    const snapshot = await repository.getWorkflowRunSnapshot(RUN_ID);
     expect(snapshot).not.toBeNull();
     expect(snapshot!.workflowRun.status).toBe("no_coverage");
     // The search evidence is persisted (provider + keyword are复盘-able).
@@ -119,19 +161,10 @@ describe("agent trace — runner-v2 wires the durable run record", () => {
     // Two A-grade candidates → no unique top → the selection arbitrator runs,
     // and ITS model call throws mid-run.
     await expect(
-      runType2InitializationV2AndPersist({
-        title: tvTitle,
-        season: trackedSeason(),
-        categoryParentId: "tv_root",
-        resourceProvider: twoCandidatesProvider(),
-        storage: new FakeStorageExecutor(),
-        model: crashingModel(),
-        repository,
-        workflowRun,
-      }),
+      consumeClaimedRun(ctxFor(repository, twoCandidatesProvider())),
     ).rejects.toThrow();
 
     // Persist runs AFTER the acquisition awaits, so a mid-run crash skips it entirely.
-    expect(await repository.getWorkflowRunSnapshot("run-x")).toBeNull();
+    expect(await repository.getWorkflowRunSnapshot(RUN_ID)).toBeNull();
   });
 });

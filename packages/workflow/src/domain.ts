@@ -437,7 +437,7 @@ export interface WorkflowRunMetadata {
 /**
  * Facts produced by a movie acquisition run. Relocated from the retired
  * pre-V2 `movie-workflow.ts`; the V2 movie path (`movie-workflow-v2.ts`,
- * `runner-v2.ts`) emits exactly this shape so runner/web/UI are unchanged.
+ * `consumption/stages/persist.ts`) emits exactly this shape so worker/web/UI are unchanged.
  */
 export interface MovieWorkflowResult {
   status: WorkflowStatus;

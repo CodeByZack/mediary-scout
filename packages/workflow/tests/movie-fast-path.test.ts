@@ -3,7 +3,7 @@ import { MockLanguageModelV3 } from "ai/test";
 import { TaskSandbox } from "../src/acquisition-v2/sandbox.js";
 import { FakeResourceProviderV2 } from "../src/acquisition-v2/fake-provider.js";
 import { Storage115Simulator } from "../src/acquisition-v2/storage-115-simulator.js";
-import { runMovieFastPathAcquisition } from "../src/acquisition-v2/fast-path.js";
+import { runMovieFastPathAcquisition } from "../src/consumption/fast-path/movie.js";
 import { makeAgentTraceSink } from "../src/acquisition-v2/agent-trace-sink.js";
 import { InMemoryWorkflowRepository } from "../src/index.js";
 import type { MovieTarget } from "../src/acquisition-v2/task-agents.js";

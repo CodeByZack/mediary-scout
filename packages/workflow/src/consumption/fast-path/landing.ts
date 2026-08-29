@@ -1,0 +1,644 @@
+import type { LanguageModel } from "ai";
+import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
+import { arbitrateDiagnosis, arbitrateEpisodeMapping } from "../../acquisition-v2/arbitrator.js";
+import { finalizeLanding } from "../../acquisition-v2/finalize-landing.js";
+import { digestStaging, type StagingDigest } from "../../acquisition-v2/staging-digest.js";
+import { normalizeSearchKeyword } from "../../planning-search-gate.js";
+import type { AgentToolEvent } from "../../acquisition-v2/activity.js";
+import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
+import type { TvAnimeTarget } from "../../acquisition-v2/task-agents.js";
+import { MAX_DEAD_LINK_RETRIES, MAX_FALLBACK_SEARCHES } from "./budgets.js";
+import {
+  concludeUncovered,
+  emitStep,
+  evidenceDigestLine,
+  gradeDistribution,
+  gradedCandidateEvidence,
+  landingParseRows,
+  nextCandidate,
+  stepLog,
+  type FastPathResult,
+} from "./steps.js";
+
+/**
+ * fast path · TV 落地判定层（design §5/§7 consumption/fast-path/landing.ts）。
+ * 集数映射（§2.2）、aliases 兜底重搜（§C/§E）、以及从主循环抽出的七值
+ * LandingVerdict 落盘收口状态机。日志/emitStep 文案逐字搬迁，零行为变化。
+ */
+
+/**
+ * 集数映射尝试(§2.2): 代码解析不出集数的落盘(纯数字 `01.mp4` / E01 / fansub),
+ * 单季任务第一次收包时让 AI 给逐集映射,校验通过则重建 digest 并尽量归位。
+ *
+ * 返回值:
+ *   - "passed": 映射重建 digest 通过 → 调用方应像干净落地一样 finalize;
+ *   - "unmapped-but-clean": 映射唯一且合法,但重建后不覆盖 need → 不是脏包,
+ *     换下一个候选;
+ *   - "no" / "failed": 无 unparsed、非单季、映射失败或校验不通过 → 走诊断仲裁。
+ *
+ * 校验规则(代码,不信任 AI 输出):
+ *   1. 文件名必须在本次落盘的 unparsed 清单里(防幻觉文件名);
+ *   2. code 必须 SxxExx 形状且季与任务匹配(单季任务强制赛季一致);
+ *   3. 一个集数最多被映射一次(冲突 → 整体放弃该映射,回落仲裁);
+ *   4. 映射后的文件必须落在任务的 need/已收集范围内(防 AI 编造不存在的集数)。
+ */
+export async function tryEpisodeMapping(options: {
+  sandbox: TaskSandbox;
+  model: LanguageModel;
+  digest: StagingDigest;
+  seasons: number[];
+  targetTitle: string;
+  needCodes: string[];
+  ram: (overrides: Record<string, string>) => StagingDigest;
+  onDigest: (d: StagingDigest) => void;
+  /** 映射校验通过后的 clean 表(仅映射合法时回调)——调用方把它喂回
+   *  finalizeLanding.overrides,否则 rename/归位按裸文件名解析会跳过这些
+   *  fansub/纯数字文件,映射成果落不了地。 */
+  onMapping?: (clean: Record<string, string>) => void;
+  /** 必填但可为 undefined — 便于 exactOptionalPropertyTypes 下直接传 FastPathOptions.onProgress */
+  onProgress: ((event: AgentToolEvent) => void) | undefined;
+}): Promise<"passed" | "unmapped-but-clean" | "no" | "failed"> {
+  const { digest } = options;
+  // 仅 TV 单季且有 unparsed 视频才值得让 AI 映射;movie / 多季 / 无 unparsed → no.
+  if (
+    options.seasons.length !== 1 ||
+    digest.unparsedVideos.length === 0 ||
+    digest.unparsedVideos.every((name) => /(sample|样本|广告|花絮|预告|trailer)/i.test(name))
+  ) {
+    return "no";
+  }
+
+  const model = options.model;
+  const unparsed = digest.unparsedVideos.filter((n) => !/(sample|样本|广告|花絮|预告|trailer)/i.test(n));
+  if (unparsed.length === 0) return "no";
+
+  const knownRange = computeKnownEpisodeRange(options.needCodes);
+  const arbitration = await arbitrateEpisodeMapping({
+    model,
+    unparsedFiles: unparsed,
+    title: options.targetTitle,
+    seasons: options.seasons,
+    knownEpisodeRange: knownRange,
+  });
+
+  // 校验映射(代码,不信任 AI)。
+  const allowed = new Set(unparsed);
+  const seenCodes = new Set<string>();
+  const clean: Record<string, string> = {};
+  let valid = true;
+  for (const [fileName, code] of Object.entries(arbitration.mapping)) {
+    if (!allowed.has(fileName)) {
+      valid = false;
+      break;
+    }
+    if (seenCodes.has(code)) {
+      valid = false;
+      break;
+    }
+    seenCodes.add(code);
+    clean[fileName] = code;
+  }
+  if (!valid) {
+    const failDetail = `集数映射校验失败(文件名幻觉/集数冲突),回落诊断仲裁`;
+    stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail);
+    return "failed";
+  }
+
+  // 校验通过的部分映射先交出去:无论重建 digest 是否整体通过,这些映射都是
+  // 可信的(AI 确认 + 代码校验过),诊断仲裁 accept 时 finalizeLanding 需要
+  // 它们才能让映射的文件 rename/归位。2026-08-21 bugfix:此前只有 "passed"
+  // 分支回调 onMapping,部分映射(valid 但重建仍脏)走 accept 时 overrides 为
+  // undefined,AI 确认过的文件全部被 staging wipe 清掉(假入库)。
+  options.onMapping?.(clean);
+
+  // 重建 digest:overrides 把映射喂回代码解析。
+  const re = options.ram(clean);
+  options.onDigest(re);
+  if (re.passes) {
+    const mapDetail = `集数映射 ${Object.entries(clean).length} 个文件 → ${Object.values(clean).join(",")},重建 digest 通过`;
+    stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "log");
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail);
+    return "passed";
+  }
+  if (re.episodeCodes.length > 0 && !re.isDirtyPack) {
+    // 映射上了但没覆盖 need(例如映射出的是别的集数)—— 回收干净但无用。
+    const mapDetail = `集数映射生效但未覆盖目标(${re.episodeCodes.join(",")}),丢弃换候选`;
+    stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "warn");
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail);
+    return "unmapped-but-clean";
+  }
+  // 重建后仍脏(映射不完整/失败) → 回落诊断仲裁。
+  const failDetail = `集数映射后仍不通过(${re.summary.split("\n").join(" / ")}),回落诊断仲裁`;
+  stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
+  emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail);
+  return "failed";
+}
+
+/** 从 needCodes(S01E01 形状)推导已知集数范围。 */
+export function computeKnownEpisodeRange(needCodes: string[]): { min: number; max: number } | null {
+  const numbers = needCodes
+    .map((code) => /^S\d{2}E(\d{2,4})$/.exec(code)?.[1])
+    .map((n) => (n ? Number(n) : NaN))
+    .filter((n) => !Number.isNaN(n));
+  if (numbers.length === 0) return null;
+  return { min: Math.min(...numbers), max: Math.max(...numbers) };
+}
+
+/** rawSnapshotView 的形状(单快照);合并证据池在其上附加 candidateId→snapshotId 归属。 */
+type SnapshotView = NonNullable<ReturnType<TaskSandbox["rawSnapshotView"]>>;
+
+export interface EvidenceView extends SnapshotView {
+  /** 合并池专用:候选 id → 它真正来自哪个 observed snapshot。缺省 = 全体在 view.snapshotId。 */
+  candidateSnapshots?: Record<string, string>;
+}
+
+/** 转存的快照寻址:合并池里每个候选回到自己的来源快照,单快照视图零改动。 */
+export function candidateSnapshotId(view: EvidenceView, candidateId: string): string {
+  return view.candidateSnapshots?.[candidateId] ?? view.snapshotId;
+}
+
+/**
+ * Aliases 兜底重搜 (§C). The fast path's primary search recalls by the bare
+ * title ONLY — when it comes back empty, or grades without a unique A-grade
+ * (the 泰德·拉索 case: the title search drowns in unrelated hits while the
+ * aliases' 足球教练 never gets searched), each alias gets ONE more
+ * primeRawSnapshot round, in the order the target carries them — English
+ * original first, then the other 译名 (zh-TW/zh-HK) — until a unique A-grade
+ * appears or the budget (≤ MAX_FALLBACK_SEARCHES rounds) runs out.
+ *
+ * primeRawSnapshot OVERWRITES the prior raw snapshot, so a successful fallback's
+ * returned view/grading are the LAST searched evidence — the caller's
+ * arbitration / transfer must read them, never the pre-fallback snapshot.
+ *
+ * §E restore: when the fallback exhausts its budget WITHOUT finding a unique
+ * A-grade AND the primary snapshot had candidates, the primary evidence is
+ * restored (returned as-is) so the caller continues the ORIGINAL arbitration /
+ * give-up logic on the primary candidates — never "暂无资源" just because the
+ * LAST fallback snapshot came back empty (the 狂飙 case: primary 45 候选被丢).
+ * The restore is in-memory (the primary snapshot id is already in
+ * observedSnapshots, so transferCandidate works), NOT a re-prime — zero extra
+ * PanSou hits, the budget semantics stay untouched.
+ *
+ * Budget: ≤ MAX_FALLBACK_SEARCHES additional PanSou hits, keywords deduped
+ * (the title counts as already used). A provider failure on one round keeps the
+ * previous snapshot and moves to the next alias — bounded, so a dead source
+ * costs at most the budget, never the run. aliases 为空时调用方根本不会进来,
+ * 行为与「一次搜索直接走原逻辑」完全一致。
+ */
+export async function aliasesFallbackReSearch(input: {
+  sandbox: TaskSandbox;
+  title: string;
+  aliases: string[];
+  view: SnapshotView;
+  grading: ReturnType<typeof gradeCandidates>;
+  grade: (candidates: Array<{ id: string; title: string }>) => ReturnType<typeof gradeCandidates>;
+  onProgress?: (event: AgentToolEvent) => void;
+}): Promise<{
+  view: EvidenceView;
+  grading: ReturnType<typeof gradeCandidates>;
+  rounds: number;
+  restored: boolean;
+}> {
+  const { sandbox, title, aliases, view, grading, grade, onProgress } = input;
+  const searched = new Set<string>([normalizeSearchKeyword(title)]);
+  let currentView = view;
+  let currentGrading = grading;
+  let rounds = 0;
+  let foundUniqueA = false;
+  const roundViews: SnapshotView[] = [];
+  for (const alias of aliases) {
+    if (rounds >= MAX_FALLBACK_SEARCHES) break;
+    const keyword = normalizeSearchKeyword(alias);
+    if (keyword === "" || searched.has(keyword)) continue; // 用过的词去重
+    searched.add(keyword);
+    rounds += 1;
+    const roundDetail = `keyword=「${alias}」(第 ${rounds}/${MAX_FALLBACK_SEARCHES} 轮)`;
+    stepLog(sandbox, title, "兜底重搜", roundDetail);
+    emitStep(onProgress, "searchResources", "search", roundDetail, { keyword: alias });
+    try {
+      await sandbox.primeRawSnapshot(alias);
+    } catch (error) {
+      // Provider down on a fallback round — keep the current snapshot and try the
+      // next alias (bounded by the budget; a dead source never kills the run).
+      const failDetail = `keyword=「${alias}」搜索失败:${error instanceof Error ? error.message : String(error)}`;
+      stepLog(sandbox, title, "兜底重搜", failDetail, "warn");
+      emitStep(onProgress, "searchResources", "search", failDetail, { keyword: alias });
+      continue;
+    }
+    const nextView = sandbox.rawSnapshotView();
+    if (!nextView) continue; // defensive: prime succeeded, so a view must exist
+    currentView = nextView;
+    roundViews.push(nextView);
+    currentGrading = grade(nextView.candidates);
+    const gradeDetail = `keyword=「${alias}」命中=${nextView.candidates.length} ${
+      currentGrading.uniqueTopGrade
+        ? `唯一A级 top=${currentGrading.top?.id}(${currentGrading.top?.title})`
+        : gradeDistribution(currentGrading)
+    }`;
+    stepLog(sandbox, title, "兜底评分", gradeDetail);
+    if (currentGrading.ranked.length > 0) {
+      stepLog(sandbox, title, "兜底命中", evidenceDigestLine(currentGrading));
+    }
+    emitStep(onProgress, "gradeCandidates", "search", gradeDetail, {
+      keyword: alias,
+      candidates: gradedCandidateEvidence(currentGrading),
+    });
+    if (nextView.candidates.length > 0 && currentGrading.uniqueTopGrade) {
+      foundUniqueA = true;
+      break; // 唯一 A → 直接转存
+    }
+  }
+  // §E: 兜底耗尽仍无唯一 A → 合并 primary + 各轮兜底 的证据池继续仲裁/放弃逻辑。
+  // 旧行为(替换式恢复)两头都出过事故:「最后一个兜底快照为空」覆盖 primary 让
+  // 狂飙 45 条候选被丢;反过来只恢复/只看最后一轮,又会吞掉另一侧的好候选
+  // (母狮案:兜底第 1 轮搜到「1-3季合集」,恢复 primary 后仲裁根本见不到它)。
+  // 合并纯内存操作、按标题去重、primary 优先入池;各轮候选带着自己 observed
+  // snapshot 的归属回传给转存寻址(candidateSnapshotId)——零额外 PanSou 请求,
+  // 预算语义原样保持。
+  if (!foundUniqueA) {
+    const candidateSnapshots: Record<string, string> = {};
+    const merged: Array<{ id: string; title: string }> = [];
+    let primaryCount = 0;
+    let fallbackCount = 0;
+    const addAll = (source: SnapshotView, fromFallback: boolean) => {
+      for (const candidate of source.candidates) {
+        // 只按 id 去重(跨快照 id 天然不同,同 id 只留首次来源)。不按标题去重:
+        // 同名异链是网盘资源常态,标题去重会把后轮快照里的合法候选 id 误删,
+        // 仲裁选中即触发假 id 防御(预算 ≤3 测试现场抓到的回归)。
+        if (candidateSnapshots[candidate.id] !== undefined) continue;
+        candidateSnapshots[candidate.id] = source.snapshotId;
+        merged.push(candidate);
+        if (fromFallback) fallbackCount += 1;
+        else primaryCount += 1;
+      }
+    };
+    addAll(view, false);
+    for (const roundView of roundViews) addAll(roundView, true);
+    if (merged.length > 0) {
+      const mergedView: EvidenceView = { snapshotId: view.snapshotId, candidates: merged, candidateSnapshots };
+      const mergedGrading = grade(merged);
+      const restoreDetail = `全部兜底无唯一 A,合并证据池(primary ${primaryCount} + 兜底 ${fallbackCount})继续仲裁`;
+      stepLog(sandbox, title, "兜底重搜", restoreDetail);
+      emitStep(onProgress, "gradeCandidates", "search", restoreDetail);
+      return { view: mergedView, grading: mergedGrading, rounds, restored: true };
+    }
+  }
+  return { view: currentView, grading: currentGrading, rounds, restored: false };
+}
+
+/**
+ * TV 落地收口状态机（design §5 LandingVerdict）：一个候选的落地回合内，
+ * digest → 集数映射(§2.2) → 诊断仲裁 → finalize/丢弃，收敛为七种判定：
+ *   systemic(系统阻塞) / dead(死链探测) / clean(干净落地) / mapped_clean(映射通过)
+ *   / accept(诊断 accept) / retry_other(换候选续跑) / abandon(诚实终止)。
+ * done 非空 = 本轮终局（调用方直接 return）；done=null 用 next 继续循环。
+ * escalated/deadRetries 随判定带出，循环侧统一回收 —— 预算语义原样
+ * （死链不占转存预算：dead 分支不触 attempted.add）。
+ */
+export type LandingVerdict =
+  | "systemic"
+  | "dead"
+  | "clean"
+  | "mapped_clean"
+  | "accept"
+  | "retry_other"
+  | "abandon";
+
+export interface TvCloseOut {
+  verdict: LandingVerdict;
+  /** 非空 = 终局结论（含当轮 escalated）。 */
+  done: FastPathResult | null;
+  /** done=null 时推进的候选（null = 无下一候选，循环自然收敛到耗尽尾段）。 */
+  next: string | null;
+  escalated: boolean;
+  deadRetries: number;
+}
+
+export async function closeOutTvLanding(options: {
+  sandbox: TaskSandbox;
+  model: LanguageModel;
+  target: TvAnimeTarget;
+  onProgress: ((event: AgentToolEvent) => void) | undefined;
+  seasons: number[];
+  needCodes: string[];
+  onDiskCodes: Set<string>;
+  grading: ReturnType<typeof gradeCandidates>;
+  tried: Set<string>;
+  attempted: Set<string>;
+  current: string;
+  escalated: boolean;
+  deadRetries: number;
+  transfer: Awaited<ReturnType<TaskSandbox["transferCandidate"]>>;
+}): Promise<TvCloseOut> {
+  const {
+    sandbox,
+    model,
+    target,
+    onProgress,
+    seasons,
+    needCodes,
+    onDiskCodes,
+    grading,
+    tried,
+    attempted,
+    transfer,
+  } = options;
+  const current = options.current;
+  let escalated = options.escalated;
+  let deadRetries = options.deadRetries;
+
+    // Systemic block (quota/auth/VIP) — every remaining candidate fails the same
+    // way; stop grinding.
+    if (transfer.systemicBlock) {
+      const blockDetail = `系统阻塞:${transfer.systemicBlock.reason}`;
+      stepLog(sandbox, target.title, "转存失败", blockDetail, "error");
+      const doneDetail = `失败(系统阻塞:${transfer.systemicBlock.reason})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "transferCandidate", "transfer", blockDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
+      return { verdict: "systemic", done: {
+        text: `系统阻塞:${transfer.systemicBlock.reason}`,
+        steps: attempted.size,
+        coverage: await sandbox.finish(),
+        escalated,
+      }, next: null, escalated, deadRetries };
+    }
+
+    // Dead link (nothing landed) — a cheap probe, not a transfer attempt; advance
+    // to the next candidate until the dead-link scan cap or the pool is exhausted.
+    if (transfer.staging.length === 0) {
+      deadRetries += 1;
+      const next = nextCandidate(grading, tried);
+      const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",无下一候选"}`;
+      stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
+      emitStep(onProgress, "transferCandidate", "transfer", deadDetail, { candidateId: current });
+      const probeDetail = `候选 ${current} 转存返回 0 个落盘文件 → 判死链(探测第 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} 次,不占 3 次转存预算)${next ? "" : ";池内无下一候选"}`;
+      stepLog(sandbox, target.title, "死链探测", probeDetail, "warn");
+      return { verdict: "dead", done: null, next, escalated, deadRetries };
+    }
+
+    // A real transfer happened — this is the countable attempt.
+    attempted.add(current);
+    const digest = digestStaging({ files: transfer.staging, seasons, needCodes });
+    const digestDetail = digest.passes
+      ? `干净落地,覆盖 ${digest.coveredCodes.join(",") || "-"}`
+      : `未通过(${digest.isDirtyPack ? "脏包" : "未覆盖目标"}):${digest.summary.split("\n").join(" / ")}`;
+    stepLog(
+      sandbox,
+      target.title,
+      "digest 验证",
+      digestDetail,
+      digest.passes ? "log" : "warn",
+    );
+    emitStep(onProgress, "stagingDigest", "verify", digestDetail);
+    const parseRows = landingParseRows(transfer.staging, seasons);
+    if (parseRows.length > 0) {
+      stepLog(sandbox, target.title, "解析明细", parseRows.join(" / "));
+      emitStep(onProgress, "digestFiles", "verify", `逐文件解析 ${parseRows.length} 条`, { files: parseRows });
+    }
+    {
+      const candidate = grading.ranked.find((c) => c.id === current);
+      if (
+        candidate &&
+        candidate.seasonNumbers.length === 0 &&
+        /\d/.test(candidate.title) &&
+        parseRows.some((row) => row.includes("⚠"))
+      ) {
+        stepLog(
+          sandbox,
+          target.title,
+          "季号提示",
+          `候选标题「${candidate.title.slice(0, 60)}」含数字但季号未被评分器识别,落盘又按目标季解释——假入库风险面(issue #21)`,
+          "warn",
+        );
+      }
+    }
+
+    // Clean landing → finalize (rename/归位/mark/wipe) in code, zero LLM.
+    if (digest.passes) {
+      try {
+        const finalized = await finalizeLanding({
+          sandbox,
+          digest,
+          canonicalTitle: target.title,
+          seasons,
+          skipCodes: [...onDiskCodes],
+        });
+        const skipNote =
+          finalized.skippedOnDisk.length > 0
+            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集(${finalized.skippedOnDisk.sort().join(",")})`
+            : "";
+        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
+        stepLog(sandbox, target.title, "归位", organizeDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
+      } catch (error) {
+        // A rename/move guard refused, or storage failed mid-landing — nothing was
+        // reliably placed. Wipe staging and surface honest no-coverage (never a
+        // fake obtained mark), mirroring the agent's honest termination.
+        try {
+          await sandbox.discardStaging();
+        } catch {
+          // staging already empty / no separate staging — nothing to wipe.
+        }
+        const organizeFailDetail = error instanceof Error ? error.message : String(error);
+        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+        return { verdict: "abandon", done: await concludeUncovered(sandbox, {
+          text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
+          steps: attempted.size,
+          escalated,
+          reason: error instanceof Error ? error.message : String(error),
+        }), next: null, escalated, deadRetries };
+      }
+      const doneDetail = `入库(obtained=${digest.coveredCodes.join(",") || "-"})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
+      return { verdict: "clean", done: {
+        text: `fast path 归位标记:${digest.coveredCodes.join(",") || "-"}`,
+        steps: attempted.size,
+        coverage: await sandbox.finish(),
+        escalated,
+      }, next: null, escalated, deadRetries };
+    }
+
+    // Dirty / off-target landing. TV-only, single-season: if the landing has
+    // videos the CODE cannot parse into episode codes (纯数字 `01.mp4` / E01 /
+    // 日漫 fansub), the fast path first asks the AI for a 逐集映射 (§2.2) —
+    // the design intent the old agent loop had ("you can read that
+    // [NC-Raws] Lyricis Recoil - 01.mkv is S01E01"). A verified mapping lets the
+    // pack land like a clean digest (zero further LLM decisions); a failed or
+    // partial mapping falls through to the diagnostic arbitrator.
+    // Movie landings never map episodes — they go straight to the movie diagnosis.
+    escalated = true;
+    let landingDigest = digest;
+    let mappingTable: Record<string, string> | undefined;
+    const mappingEscalated = await tryEpisodeMapping({
+      sandbox,
+      model,
+      digest,
+      seasons,
+      targetTitle: target.title,
+      needCodes,
+      ram: (overrides) => digestStaging({ files: transfer.staging, seasons, needCodes, overrides }),
+      onDigest: (d) => {
+        landingDigest = d;
+      },
+      onMapping: (clean) => {
+        mappingTable = clean;
+      },
+      onProgress,
+    });
+    if (mappingEscalated === "passed") {
+      // Wiped via overrides — same close-out as a clean landing (rename/归位/mark).
+      try {
+        const finalized = await finalizeLanding({
+          sandbox,
+          digest: landingDigest,
+          canonicalTitle: target.title,
+          seasons,
+          skipCodes: [...onDiskCodes],
+          ...(mappingTable ? { overrides: mappingTable } : {}),
+        });
+        const skipNote =
+          finalized.skippedOnDisk.length > 0
+            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集(${finalized.skippedOnDisk.sort().join(",")})`
+            : "";
+        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
+        stepLog(sandbox, target.title, "归位", organizeDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
+      } catch (error) {
+        try {
+          await sandbox.discardStaging();
+        } catch {
+          // already empty.
+        }
+        const organizeFailDetail = error instanceof Error ? error.message : String(error);
+        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+        return { verdict: "abandon", done: await concludeUncovered(sandbox, {
+          text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
+          steps: attempted.size,
+          escalated,
+          reason: error instanceof Error ? error.message : String(error),
+        }), next: null, escalated, deadRetries };
+      }
+      const doneDetail = `入库(集数映射:${landingDigest.coveredCodes.join(",") || "-"})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
+      return { verdict: "mapped_clean", done: {
+        text: `集数映射归位:${landingDigest.coveredCodes.join(",") || "-"}`,
+        steps: attempted.size,
+        coverage: await sandbox.finish(),
+        escalated,
+      }, next: null, escalated, deadRetries };
+    }
+    if (mappingEscalated === "unmapped-but-clean") {
+      // 映射成功但没覆盖 need → 不是脏包了,但也没拿到需要的集 → 换候选。
+      const leftover = await sandbox.inspectStaging();
+      if (leftover.length > 0) {
+        await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
+      }
+      const next = nextCandidate(grading, tried);
+      const retryDetail = `映射未覆盖目标:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
+      stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
+      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail);
+      return { verdict: "retry_other", done: null, next, escalated, deadRetries };
+    }
+
+    const diagnosis = await arbitrateDiagnosis({
+      model,
+      summary: landingDigest.summary,
+      title: target.title,
+      // 功能4: 把剩余候选按分级喂给诊断仲裁,retry_other 时一次挑出下一个,
+      // 避免每个脏包都重新仲裁(45 候选只试 3 次的教训)。
+      remainingCandidates: grading.ranked.map((c) => ({
+        id: c.id,
+        title: c.title,
+        grade: c.grade,
+      })),
+      triedIds: [...tried],
+    });
+    if (diagnosis.action === "accept") {
+      try {
+        // 2026-08-21 bugfix: 必须把 AI 集数映射的 overrides 传给 finalizeLanding ——
+        // 否则纯数字/日漫 fansub 文件名(如 `08.mkv`)在诊断仲裁 accept 后重新用裸
+        // 文件名解析时依然解析不出(S03 任务纯数字规则本就禁猜),文件不 rename/
+        // 不归位/不 mark,最后被 staging wipe 当垃圾清掉 → 日志写"入库"实际没入库。
+        // 与上方 mappingEscalated === "passed" 分支保持一致。
+        await finalizeLanding({
+          sandbox,
+          digest: landingDigest,
+          canonicalTitle: target.title,
+          seasons,
+          ...(mappingTable ? { overrides: mappingTable } : {}),
+        });
+      } catch (error) {
+        try {
+          await sandbox.discardStaging();
+        } catch {
+          // already empty.
+        }
+        const organizeFailDetail = error instanceof Error ? error.message : String(error);
+        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+        return { verdict: "abandon", done: await concludeUncovered(sandbox, {
+          text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
+          steps: attempted.size,
+          escalated,
+          reason: error instanceof Error ? error.message : String(error),
+        }), next: null, escalated, deadRetries };
+      }
+      const doneDetail = `入库(仲裁 accept:${diagnosis.reasoning})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
+      return { verdict: "accept", done: {
+        text: `仲裁 accept:${diagnosis.reasoning}`,
+        steps: attempted.size,
+        coverage: await sandbox.finish(),
+        escalated,
+      }, next: null, escalated, deadRetries };
+    }
+    if (diagnosis.action === "abandon") {
+      await sandbox.discardStaging();
+      const declineDetail = `放弃:${diagnosis.reasoning}`;
+      stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
+      const doneDetail = `暂无资源(仲裁 abandon:${diagnosis.reasoning})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail);
+      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+      return { verdict: "abandon", done: await concludeUncovered(sandbox, {
+        text: `仲裁 abandon:${diagnosis.reasoning}`,
+        steps: attempted.size,
+        escalated,
+        reason: diagnosis.reasoning,
+      }), next: null, escalated, deadRetries };
+    }
+    // retry_other → clear the bad pack's files (keep the staging dir alive) and
+    // try the next candidate. 功能4: AI 已随仲裁返回 nextCandidateId 就直接用它
+    // (需校验:候选存在、未尝试过),否则才回退机械按序 nextCandidate。
+    const leftover = await sandbox.inspectStaging();
+    if (leftover.length > 0) {
+      await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
+    }
+    const aiNext =
+      diagnosis.nextCandidateId &&
+      grading.ranked.some((c) => c.id === diagnosis.nextCandidateId) &&
+      !tried.has(diagnosis.nextCandidateId)
+        ? diagnosis.nextCandidateId
+        : null;
+    const next = aiNext ?? nextCandidate(grading, tried);
+    const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}${aiNext ? "(仲裁指定)" : ""}`;
+    stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
+    emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail);
+    return { verdict: "retry_other", done: null, next, escalated, deadRetries };
+}

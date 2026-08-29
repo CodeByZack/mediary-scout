@@ -1,14 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { MockLanguageModelV3 } from "ai/test";
 import {
-  runMovieAcquisitionV2AndPersist,
-  runSeriesInitializationV2AndPersist,
-  runType2InitializationV2AndPersist,
-  runType3MonitoringV2AndPersist,
-} from "../src/runner-v2.js";
-import { FakeStorageExecutor } from "../src/fakes.js";
+  buildConsumptionContext,
+  buildPatrolConsumptionContext,
+  type ConsumptionDeps,
+} from "../src/consumption/context.js";
+import { consumeClaimedRun } from "../src/consumption/pipeline.js";
+import type { PersistedWorkflowRunSnapshot, WorkflowRepository } from "../src/repository.js";
 import { InMemoryWorkflowRepository } from "../src/repository.js";
-import { createEpisodeStates, type MediaTitle, type ResourceSnapshot, type TrackedSeason } from "../src/domain.js";
+import { FakeStorageExecutor } from "../src/fakes.js";
+import {
+  createEpisodeStates,
+  type AuditEvent,
+  type EpisodeState,
+  type MediaTitle,
+  type ResourceSnapshot,
+  type TrackedSeason,
+  type WorkflowKind,
+} from "../src/domain.js";
 import type { ResourceProvider } from "../src/ports.js";
 
 const USAGE = {
@@ -78,24 +87,73 @@ function trackedSeason(): TrackedSeason {
   };
 }
 
-const workflowRun = { id: "run-x", startedAt: "2026-06-15T00:00:00.000Z", finishedAt: "2026-06-15T00:01:00.000Z" };
+const RUN_ID = "run-x";
+const STARTED_AT = "2026-06-15T00:00:00.000Z";
 
-describe("runner-v2 persist wrappers — V2 engine results persisted in the existing record shapes", () => {
+/** 合成认领快照（步骤⑥ 后测试直调 pipeline，等价取代旧 runner 包装入口）。 */
+function fakeClaimed(overrides: {
+  kind: WorkflowKind;
+  title: MediaTitle;
+  season: TrackedSeason;
+  episodes?: EpisodeState[];
+  auditEvents?: AuditEvent[];
+}): PersistedWorkflowRunSnapshot {
+  return {
+    accountId: "acct_default",
+    connectedStorageId: null,
+    title: overrides.title,
+    season: overrides.season,
+    episodes: overrides.episodes ?? [],
+    workflowRun: {
+      id: RUN_ID,
+      kind: overrides.kind,
+      status: "running",
+      trackedSeasonId: overrides.season.id,
+      startedAt: STARTED_AT,
+      finishedAt: null,
+      auditEvents: overrides.auditEvents ?? [],
+    },
+    resourceSnapshots: [],
+    decisions: [],
+    transferAttempts: [],
+    notifications: [],
+    obtainedEpisodes: [],
+    providerAheadEpisodes: [],
+  };
+}
+
+function depsFor(
+  repository: WorkflowRepository,
+  over: Partial<ConsumptionDeps> = {},
+): ConsumptionDeps {
+  return {
+    repository,
+    resourceProvider: emptyProvider(),
+    storage: new FakeStorageExecutor(),
+    model: searchThenReportModel(),
+    storageProvider: undefined,
+    preferredLanguage: undefined,
+    qualityPreference: undefined,
+    assrtToken: undefined,
+    tvParentDirectoryId: undefined,
+    animeParentDirectoryId: undefined,
+    moviesParentDirectoryId: undefined,
+    ...over,
+  };
+}
+
+describe("consumption pipeline persist — V2 engine results persisted in the existing record shapes", () => {
   it("type2 init: persists one type2_init snapshot with the tracked season and episodes", async () => {
     const repository = new InMemoryWorkflowRepository();
-    const result = await runType2InitializationV2AndPersist({
-      title: tvTitle,
-      season: trackedSeason(),
-      categoryParentId: "tv_root",
-      resourceProvider: emptyProvider(),
-      storage: new FakeStorageExecutor(),
-      model: searchThenReportModel(),
-      repository,
-      workflowRun,
+    const ctx = buildConsumptionContext({
+      kind: "type2_init",
+      claimed: fakeClaimed({ kind: "type2_init", title: tvTitle, season: trackedSeason() }),
+      deps: depsFor(repository, { tvParentDirectoryId: "tv_root" }),
     });
+    const outcome = await consumeClaimedRun(ctx);
 
-    expect(result.status).toBe("no_coverage");
-    const snapshot = await repository.getWorkflowRunSnapshot("run-x");
+    expect(outcome.workflowStatus).toBe("no_coverage");
+    const snapshot = await repository.getWorkflowRunSnapshot(RUN_ID);
     expect(snapshot).not.toBeNull();
     expect(snapshot!.workflowRun.kind).toBe("type2_init");
     expect(snapshot!.workflowRun.trackedSeasonId).toBe("tmdb_tv_100_s1");
@@ -106,19 +164,21 @@ describe("runner-v2 persist wrappers — V2 engine results persisted in the exis
 
   it("type3 patrol: persists a type3_monitor snapshot, scheduled-trigger notification", async () => {
     const repository = new InMemoryWorkflowRepository();
-    await runType3MonitoringV2AndPersist({
+    const ctx = buildPatrolConsumptionContext({
       title: tvTitle,
-      season: trackedSeason(),
-      episodes: createEpisodeStates({ trackedSeasonId: "tmdb_tv_100_s1", seasonNumber: 1, totalEpisodes: 3, latestAiredEpisode: 3 }),
-      categoryParentId: "tv_root",
-      resourceProvider: emptyProvider(),
-      storage: new FakeStorageExecutor(),
-      model: searchThenReportModel(),
-      repository,
-      workflowRun,
+      patrol: {
+        runId: RUN_ID,
+        startedAt: STARTED_AT,
+        season: trackedSeason(),
+        episodes: createEpisodeStates({ trackedSeasonId: "tmdb_tv_100_s1", seasonNumber: 1, totalEpisodes: 3, latestAiredEpisode: 3 }),
+        accountId: "acct_default",
+        connectedStorageId: null,
+      },
+      deps: depsFor(repository, { tvParentDirectoryId: "tv_root" }),
     });
+    await consumeClaimedRun(ctx);
 
-    const snapshot = await repository.getWorkflowRunSnapshot("run-x");
+    const snapshot = await repository.getWorkflowRunSnapshot(RUN_ID);
     expect(snapshot!.workflowRun.kind).toBe("type3_monitor");
     const notifications = await repository.listNotifications();
     expect(notifications.some((notification) => notification.trigger === "scheduled")).toBe(true);
@@ -126,23 +186,31 @@ describe("runner-v2 persist wrappers — V2 engine results persisted in the exis
 
   it("series init: persists one type1_package_init record per season under _s{n} ids", async () => {
     const repository = new InMemoryWorkflowRepository();
-    await runSeriesInitializationV2AndPersist({
-      title: tvTitle,
-      seasons: [
-        { seasonNumber: 1, totalEpisodes: 3, latestAiredEpisode: 3 },
-        { seasonNumber: 2, totalEpisodes: 3, latestAiredEpisode: 3 },
-      ],
-      categoryParentId: "tv_root",
-      resourceProvider: emptyProvider(),
-      storage: new FakeStorageExecutor(),
-      model: searchThenReportModel(),
-      repository,
-      workflowRun,
-      seasonQualityRecord: "4K",
+    const ctx = buildConsumptionContext({
+      kind: "type1_package_init",
+      claimed: fakeClaimed({
+        kind: "type1_package_init",
+        title: tvTitle,
+        season: trackedSeason(),
+        auditEvents: [
+          {
+            type: "series_init_queued",
+            message: "Series initialization queued",
+            data: {
+              seasons: [
+                { seasonNumber: 1, totalEpisodes: 3, latestAiredEpisode: 3 },
+                { seasonNumber: 2, totalEpisodes: 3, latestAiredEpisode: 3 },
+              ],
+            },
+          },
+        ],
+      }),
+      deps: depsFor(repository, { tvParentDirectoryId: "tv_root" }),
     });
+    await consumeClaimedRun(ctx);
 
-    const s1 = await repository.getWorkflowRunSnapshot("run-x_s1");
-    const s2 = await repository.getWorkflowRunSnapshot("run-x_s2");
+    const s1 = await repository.getWorkflowRunSnapshot(`${RUN_ID}_s1`);
+    const s2 = await repository.getWorkflowRunSnapshot(`${RUN_ID}_s2`);
     expect(s1!.workflowRun.kind).toBe("type1_package_init");
     expect(s2!.workflowRun.kind).toBe("type1_package_init");
     // Resource evidence rides on the first season only.
@@ -153,18 +221,15 @@ describe("runner-v2 persist wrappers — V2 engine results persisted in the exis
 
   it("movie init: persists a movie_init snapshot via the V2 movie engine", async () => {
     const repository = new InMemoryWorkflowRepository();
-    const result = await runMovieAcquisitionV2AndPersist({
-      title: movieTitle,
-      categoryParentId: "movies_root",
-      resourceProvider: emptyProvider(),
-      storage: new FakeStorageExecutor(),
-      model: searchThenReportModel(),
-      repository,
-      workflowRun,
+    const ctx = buildConsumptionContext({
+      kind: "movie_init",
+      claimed: fakeClaimed({ kind: "movie_init", title: movieTitle, season: trackedSeason() }),
+      deps: depsFor(repository, { moviesParentDirectoryId: "movies_root" }),
     });
+    const outcome = await consumeClaimedRun(ctx);
 
-    expect(result.status).toBe("no_coverage");
-    const snapshot = await repository.getWorkflowRunSnapshot("run-x");
+    expect(outcome.workflowStatus).toBe("no_coverage");
+    const snapshot = await repository.getWorkflowRunSnapshot(RUN_ID);
     expect(snapshot!.workflowRun.kind).toBe("movie_init");
   });
 });
