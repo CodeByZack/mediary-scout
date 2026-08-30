@@ -2,7 +2,7 @@ import type { LanguageModel } from "ai";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
 import type { AgentPhase, AgentToolEvent } from "../../acquisition-v2/activity.js";
 import { getStorageBrand } from "../../storage-brands.js";
-import { episodeCodeFromFileName } from "../../episode-code.js";
+import { episodeCodeFromFileName, episodeDateConflict } from "../../episode-code.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import type { TvAnimeTarget } from "../../acquisition-v2/task-agents.js";
 
@@ -179,6 +179,7 @@ const VIDEO_EXT = /\.(mkv|mp4|avi|ts|webm|mov|m4v|wmv|flv|iso)$/i;
 export function landingParseRows(
   files: Array<{ path: string }>,
   seasons: number[],
+  episodeAirDates?: Record<string, string>,
 ): string[] {
   const rows = files
     .filter((file) => VIDEO_EXT.test(file.path))
@@ -188,6 +189,9 @@ export function landingParseRows(
       const bare = /^\d{1,3}$/.test(base.replace(/\.[^.]+$/i, ""));
       const shown = base.length > 48 ? base.slice(0, 45) + "…" : base;
       if (!code) return shown + " → 解析失败";
+      if (episodeDateConflict(code, base, episodeAirDates)) {
+        return shown + ` → ${code} ⚠(文件日期与该集播出日不符,不采信)`;
+      }
       return shown + " → " + code + (bare ? " ⚠(裸数字,按目标季解释)" : "");
     });
   const kept = pushWithinBudget<string>([], rows, 1850);

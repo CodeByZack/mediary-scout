@@ -1,4 +1,4 @@
-import { episodeCodeFromFileName } from "../episode-code.js";
+import { episodeCodeFromFileName, episodeDateConflict } from "../episode-code.js";
 import type { SimTreeFile } from "./storage-115-simulator.js";
 
 /**
@@ -26,6 +26,9 @@ export interface StagingDigest {
   episodeCodes: string[];
   /** Videos whose filename carried no episode code (movie main file, or TV junk). */
   unparsedVideos: string[];
+  /** 年守卫剔除的文件(解析/映射出了集数,但文件自带日期与该集播出日矛盾)。
+   *  同时计入 unparsedVideos —— 不采信就是"解析不出"。 */
+  dateRejectedVideos: string[];
   /** Episode codes parsed but OUTSIDE the task's season scope. */
   outOfSeasonCodes: string[];
   /** Human-readable junk signals found (sample/广告/花絮/预告/…). */
@@ -55,6 +58,11 @@ export interface StagingDigestInput {
    *  fansub 文件名也能正常参与覆盖判定与归位。文件名必须与落盘 basename
    *  完全一致;校验在调用方(仲裁返回后)完成,这里只做查表。 */
   overrides?: Record<string, string>;
+  /** TMDB 各集播出日(SxxExx → "YYYY-MM-DD")。给了就启用**年守卫**:文件名带
+   *  显式日期、与该集播出日相差 > 45 天的,解析/映射出的集数一律不采信(计入
+   *  无法解析)。2026-08-30 中餐厅:「1-10季」合集包实际落的是第九季(2025
+   *  日期)文件,在 S10 单季任务下被整包解释成 S10Exx —— 号码对、季份错。 */
+  episodeAirDates?: Record<string, string>;
 }
 
 function fileBaseName(file: SimTreeFile): string {
@@ -75,6 +83,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
   const episodeCodes: string[] = [];
   const unparsedVideos: string[] = [];
   const junkSignals: string[] = [];
+  const dateRejectedVideos: string[] = [];
   // AI 集数映射覆盖(§2.2):代码解析不出的文件由仲裁给映射,digest 里优先查表。
   // 文件名的匹配对不上 overrides 里给的 key 时按 unparsed 处理(宁可少认不乱认)。
   const overrides = input.overrides ?? {};
@@ -83,7 +92,12 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
     const base = fileBaseName(video);
     const code = overrides[base] ?? episodeCodeFromFileName(base, input.seasons);
     if (code) {
-      if (!episodeCodes.includes(code)) {
+      // 年守卫(issue #21 同族):文件自带日期与该集播出日明显矛盾 → 不采信,
+      // 按解析失败处理(宁可少认不乱认;映射表给出的 code 同样过守卫)。
+      if (episodeDateConflict(code, base, input.episodeAirDates)) {
+        dateRejectedVideos.push(base);
+        unparsedVideos.push(base);
+      } else if (!episodeCodes.includes(code)) {
         episodeCodes.push(code);
       }
     } else {
@@ -125,6 +139,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
     subtitles,
     episodeCodes,
     unparsedVideos,
+    dateRejectedVideos,
     outOfSeasonCodes,
     junkSignals,
     coveredCodes,
@@ -136,6 +151,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
       subtitles,
       episodeCodes,
       unparsedVideos,
+      dateRejectedVideos,
       outOfSeasonCodes,
       junkSignals,
       coveredCodes,
@@ -151,6 +167,9 @@ function summarizeDigest(d: Omit<StagingDigest, "summary">): string {
   lines.push(`视频 ${d.videos.length} 个 / 字幕 ${d.subtitles.length} 个`);
   if (d.episodeCodes.length > 0) {
     lines.push(`解析出集数: ${d.episodeCodes.join(", ")}`);
+  }
+  if (d.dateRejectedVideos.length > 0) {
+    lines.push(`季份日期不符剔除: ${d.dateRejectedVideos.join(" / ")}`);
   }
   if (d.unparsedVideos.length > 0) {
     lines.push(`无法解析集数的视频: ${d.unparsedVideos.join(" / ")}`);
