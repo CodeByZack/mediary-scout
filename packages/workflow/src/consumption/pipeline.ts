@@ -104,6 +104,15 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
         deadLinkStore: ctx.repository,
         model: ctx.model,
         workflowRunId: claimed.runId,
+        // 年守卫数据:入队时(prepareTrackingTarget)已把 TMDB 各集播出日写进
+        // 认领快照的 episode_states;缺省 = 守卫惰性,旧语义原样。
+        episodeAirDates: Object.fromEntries(
+          claimed.snapshot.episodes.flatMap((episode) =>
+            episode.airDate === null
+              ? []
+              : [[episode.episodeCode, episode.airDate] as const],
+          ),
+        ),
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,
@@ -246,6 +255,15 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
         priorObtained: patrol.episodes
           .filter((episode) => episode.obtained)
           .map((episode) => episode.episodeCode),
+        // 年守卫数据:巡检当季的全部播出日(syncSeasonMetadata 刚从 TMDB 刷新)。
+        // 「1-10季」合集包把第九季(2025 日期)文件塞进 S10 任务的假入库靠它拒收。
+        episodeAirDates: Object.fromEntries(
+          patrol.episodes.flatMap((episode) =>
+            episode.airDate === null
+              ? []
+              : [[episode.episodeCode, episode.airDate] as const],
+          ),
+        ),
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,

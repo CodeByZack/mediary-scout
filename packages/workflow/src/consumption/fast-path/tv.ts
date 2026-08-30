@@ -1,4 +1,4 @@
-import { episodeCodeFromFileName } from "../../episode-code.js";
+import { episodeCodeFromFileName, episodeDateConflict } from "../../episode-code.js";
 import { arbitrateSelection } from "../../acquisition-v2/arbitrator.js";
 import { gradeCandidates, summarizeGrading } from "../../acquisition-v2/candidate-grader.js";
 import { MAX_DEAD_LINK_RETRIES, MAX_TRANSFER_ATTEMPTS } from "./budgets.js";
@@ -59,8 +59,12 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   const onDiskCodes = new Set<string>();
   const onDisk = await sandbox.inspectTargetDir();
   for (const file of onDisk) {
-    const code = episodeCodeFromFileName(fileBaseName(file.path), seasons);
+    const base = fileBaseName(file.path);
+    const code = episodeCodeFromFileName(base, seasons);
     if (!code) continue;
+    // 年守卫同样作用于在库文件:名字像 E11 但自带日期与播出日矛盾的,不据此
+    // 反标 obtained(防历史错标件把缺集"自我认证"掉)。
+    if (episodeDateConflict(code, base, target.episodeAirDates)) continue;
     onDiskCodes.add(code);
     if (needCodes.includes(code)) {
       alreadyPresent.add(code);
@@ -321,11 +325,14 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       escalated,
       deadRetries,
       transfer,
+      ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
     });
     if (closed.done) {
+      // 结账行的「AI 升级」以本轮真实值为准:done 分支此前用外层旧 escalated,
+      // 首轮落盘即经仲裁收尾(映射+诊断各一次)时会误报「无」。
       const checkoutDetail =
         `转存 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} · 死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · ` +
-        `PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
+        `PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated || closed.escalated ? "有" : "无"}`;
       stepLog(sandbox, target.title, "结账", checkoutDetail);
       emitStep(onProgress, "runCheckout", "finalize", checkoutDetail);
       return closed.done;

@@ -22,10 +22,22 @@ export function syncSeasonAgainstMetadata(input: {
   episodes: EpisodeState[];
   latestAiredEpisode: number;
   totalEpisodes: number;
+  /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD")。落进 episode_states 的 airDate
+   *  (年守卫数据);已有值不覆盖。 */
+  episodeAirDates?: Record<string, string>;
 }): { season: TrackedSeason; episodes: EpisodeState[]; changed: boolean } {
   const newTotal = Math.max(input.season.totalEpisodes, input.totalEpisodes);
   const newLatest = Math.min(newTotal, Math.max(input.season.latestAiredEpisode, input.latestAiredEpisode));
-  const changed = newTotal !== input.season.totalEpisodes || newLatest !== input.season.latestAiredEpisode;
+  const datesWorthMerging =
+    input.episodeAirDates !== undefined &&
+    input.episodes.some(
+      (episode) =>
+        episode.airDate === null && input.episodeAirDates?.[episode.episodeCode] !== undefined,
+    );
+  const changed =
+    newTotal !== input.season.totalEpisodes ||
+    newLatest !== input.season.latestAiredEpisode ||
+    datesWorthMerging;
   if (!changed) {
     return { season: input.season, episodes: input.episodes, changed: false };
   }
@@ -36,6 +48,7 @@ export function syncSeasonAgainstMetadata(input: {
     seasonNumber: input.season.seasonNumber,
     totalEpisodes: newTotal,
     latestAiredEpisode: newLatest,
+    ...(input.episodeAirDates === undefined ? {} : { episodeAirDates: input.episodeAirDates }),
   });
   const oldByCode = new Map(input.episodes.map((episode) => [episode.episodeCode, episode]));
   const merged: EpisodeState[] = baseline.map((base) => {
@@ -49,11 +62,11 @@ export function syncSeasonAgainstMetadata(input: {
         obtained: true,
         verifiedFileIds: old.verifiedFileIds,
         metadataStatus: old.metadataStatus,
-        airDate: old.airDate,
+        airDate: old.airDate ?? base.airDate,
         title: old.title,
       };
     }
-    return { ...base, airDate: old.airDate, title: old.title };
+    return { ...base, airDate: old.airDate ?? base.airDate, title: old.title };
   });
 
   // Preserve obtained provider-ahead episodes that sit beyond the (new) total.

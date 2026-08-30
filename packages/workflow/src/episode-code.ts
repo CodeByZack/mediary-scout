@@ -36,6 +36,61 @@ function isPlausibleEpisodeNumber(n: number): boolean {
  * 调用方(digest 的 outOfSeasonCodes / finalize 的 seasonSet)负责把季不匹配
  * 的过滤掉。
  */
+
+/**
+ * 综艺衍生内容 token —— 只给「第N期」规则当黑名单用(见规则 4 注释)。
+ * 中文 token 直接子串匹配;英文 token 带词边界(避免 Episode 里的 "ed"、top 里的 "op" 误伤)。
+ */
+const VARIETY_DERIVATIVE_MARKER =
+  /加更|加长|直拍|手记|纯享|花絮|彩蛋|抢先|超前|幕后|访谈|坦白局|速看|特别企划|衍生|独家|高光|精选|会员|陪看|点评|repo|recap|vlog|bonus|\bpv\b|\bop\b|\bed\b|\bcut\b|\bplus\b/i;
+
+/**
+ * 从文件名里抽取显式播出日期:`2025.08.29` / `2025-08-29` / `2025-08-29` / `20250829` /
+ * `2025年8月29日` → ISO "YYYY-MM-DD";没有(或形态不完整,如裸 `2026.06`)返回 null。
+ * 年份限 2000–2099,月日做值域校验;`(?<!\d)` 边界保证分辨率/CRC 数字不被当日期。
+ */
+export function explicitFileDate(name: string): string | null {
+  const separated = /(?:^|[^0-9])(20\d{2})\s*[.\-\/年]\s*(\d{1,2})\s*[.\-\/月]\s*(\d{1,2})\s*日?(?![0-9])/.exec(name);
+  if (separated?.[1] && separated[2] && separated[3]) {
+    const month = Number(separated[2]);
+    const day = Number(separated[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${separated[1]}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+    return null;
+  }
+  const compact = /(?:^|[^0-9])(20\d{2})(0[1-9]|1[0-2])([0-2]\d|3[01])(?![0-9])/.exec(name);
+  if (compact?.[1] && compact[2] && compact[3]) {
+    return `${compact[1]}-${compact[2]}-${compact[3]}`;
+  }
+  return null;
+}
+
+/** 年守卫容差:文件日期与目标集 TMDB 播出日最多相差 45 天(周更综艺的更新滞后余量)。 */
+export const EPISODE_DATE_TOLERANCE_DAYS = 45;
+
+/**
+ * 年守卫(issue #21 同族,2026-08-30 中餐厅案):文件名带显式日期、该集 TMDB 播出日已知,
+ * 两者相差 > 容差 → 判冲突(不采信这个集数)。典型:「1-10季」合集包实际落的是第九季
+ * (2025 日期)的文件,在 S10 单季任务下被解析/映射成 S10E11 —— 号码对、季份错。
+ * 文件名无日期、或该集播出日未知 → false(守卫惰性,保持旧语义)。
+ */
+export function episodeDateConflict(
+  code: string,
+  fileName: string,
+  airDates?: Record<string, string>,
+): boolean {
+  if (!airDates) return false;
+  const air = airDates[code];
+  if (!air) return false;
+  const fileDate = explicitFileDate(fileName);
+  if (!fileDate) return false;
+  const t1 = Date.parse(`${fileDate}T00:00:00Z`);
+  const t2 = Date.parse(`${air.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(t1) || Number.isNaN(t2)) return false;
+  return Math.abs(t1 - t2) / 86400000 > EPISODE_DATE_TOLERANCE_DAYS;
+}
+
 export function episodeCodeFromFileName(name: string, seasons?: number[]): string | null {
   // 0. 标准 SxxExx — 自带季信息,始终可解析(与 seasons 上下文无关)。
   //    Episode allows up to 4 digits for 1000+ episode anime (One Piece/柯南/蜡笔小新);
@@ -73,11 +128,24 @@ export function episodeCodeFromFileName(name: string, seasons?: number[]): strin
       return `S${crossMatch[1].padStart(2, "0")}E${crossMatch[2].padStart(2, "0")}`;
     }
 
-    // 4. `第N集` / `第N话`(动漫,容忍空格;日文汉字「話」一并支持)。
+    // 4. `第N集` / `第N话` / `第N期`(动漫「集/话」,国产综艺「期」;容忍空格;日文汉字「話」一并支持)。
     //    单季上下文才启用;数字上限放开到 4 位(1000+ 集长篇动漫,与第N集一致)。
-    const chineseMatch = /第\s*(\d{1,4})\s*(?:集|话|話)/.exec(name);
+    //    `第N期`(2026-08-30 中餐厅案):国内综艺把正片写作「第N期」,原契约不识别 →
+    //    整季文件全部"解析失败",巡检白烧一轮仲裁。「期」规则带衍生内容黑名单:
+    //    文件名含加更/直拍/手记等衍生 token 时「第N期」不是正片证据(正片「第8期」
+    //    旁边的「合伙人手记第8期」是衍生内容,计入覆盖会造出假集数)。「集/话」维持
+    //    原样、黑名单不外溢,避免改动既有动漫语义。
+    const chineseMatch = /第\s*(\d{1,4})\s*(?:集|话|話|期)/.exec(name);
     if (chineseMatch?.[1] && Number(chineseMatch[1]) <= 9999) {
-      return `S${seasonLabel}E${chineseMatch[1].padStart(2, "0")}`;
+      const derivativeBlocked = chineseMatch[0].endsWith("期") && VARIETY_DERIVATIVE_MARKER.test(name);
+      if (!derivativeBlocked) {
+        return `S${seasonLabel}E${chineseMatch[1].padStart(2, "0")}`;
+      }
+      // 「第N期」被衍生黑名单挡掉后,再看是否另有 `第N集/话` 证据(不放过混名)。
+      const fallbackMatch = /第\s*(\d{1,4})\s*(?:集|话|話)/.exec(name);
+      if (fallbackMatch?.[1] && Number(fallbackMatch[1]) <= 9999) {
+        return `S${seasonLabel}E${fallbackMatch[1].padStart(2, "0")}`;
+      }
     }
   }
 
@@ -150,7 +218,7 @@ export function canonicalMovieFileName(input: {
 export function cleanTitleForCanonicalName(title: string): string {
   return title
     .replace(/[Ss]\d{1,2}[Ee]\d{1,4}/g, "")
-    .replace(/第\s*\d{1,4}\s*(?:集|话|話)/g, "")
+    .replace(/第\s*\d{1,4}\s*(?:集|话|話|期)/g, "")
     .replace(/[\\/:*?"<>|]/g, "")
     .replace(/\s+/g, " ")
     .trim();

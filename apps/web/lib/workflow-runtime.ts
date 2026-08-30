@@ -809,6 +809,7 @@ export async function queueCandidateTracking(
     repository: getWorkflowRepository(),
     accountId,
     connectedStorageId: workspace.id,
+    ...(target.episodeAirDates === undefined ? {} : { episodeAirDates: target.episodeAirDates }),
   });
   const status = request.status === "completed" ? "queued" : request.status;
 
@@ -1592,6 +1593,7 @@ function tmdbSeasonMetadataSync(): SeasonMetadataSync | undefined {
     return {
       latestAiredEpisode: target.season.latestAiredEpisode,
       totalEpisodes: target.season.totalEpisodes,
+      ...(target.episodeAirDates === undefined ? {} : { episodeAirDates: target.episodeAirDates }),
     };
   };
 }
@@ -1608,6 +1610,7 @@ async function trackingTargetFromCandidateId(candidateId: string): Promise<{
   title: MediaTitle;
   season: TrackedSeason;
   keyword: string;
+  episodeAirDates?: Record<string, string>;
 } | null> {
   const parsed = parseTvCandidateId(candidateId);
   if (!parsed) {

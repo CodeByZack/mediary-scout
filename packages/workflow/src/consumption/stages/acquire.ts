@@ -43,6 +43,9 @@ export interface RunAcquisitionV2WorkflowRequest {
    *  Empty for a first acquisition; the type-3 patrol passes the DB's obtained
    *  episode codes so the need = aired − 实有 (NOT a 115 scan). */
   priorObtained?: string[];
+  /** TMDB 各集播出日(SxxExx → "YYYY-MM-DD")。type3 巡检带当季 episode_states 的
+   *  播出日进 fast path,启用年守卫;缺省 = 守卫惰性(旧语义)。issue #21 同族防线。 */
+  episodeAirDates?: Record<string, string>;
   searchBudget?: number;
   maxSteps?: number;
   preferredLanguage?: string;
@@ -106,6 +109,7 @@ export async function runAcquisitionCoreStage(
       aliases: request.title.aliases,
       seasons: request.seasons.map((season) => season.seasonNumber),
       missingEpisodes: need.missing,
+      ...(request.episodeAirDates === undefined ? {} : { episodeAirDates: request.episodeAirDates }),
       qualityPreference: request.qualityPreference,
     },
     stagingDirectoryId: directories.stagingDirectoryId,

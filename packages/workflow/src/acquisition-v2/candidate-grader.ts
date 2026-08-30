@@ -78,7 +78,7 @@ const QUALITY_MARKER =
 
 /** Episode / series-coverage markers — a release that names concrete episodes or
  *  declares a full pack is evidence it actually contains the work. */
-const EPISODE_CODE_MARKER = /[Ss]\d{1,2}[Ee]\d{1,4}|第\s*\d{1,4}\s*集/;
+const EPISODE_CODE_MARKER = /[Ss]\d{1,2}[Ee]\d{1,4}|第\s*\d{1,4}\s*(?:集|期)/;
 const COMPLETE_MARKER = /全集|全\s*\d+\s*集|complete|完结|更新至|全季/i;
 
 /** A release that names a DIFFERENT work from the same IP — the classic 同名异作
@@ -87,10 +87,20 @@ const COMPLETE_MARKER = /全集|全\s*\d+\s*集|complete|完结|更新至|全季
 const DIFFERENT_WORK_MARKER =
   /电影版|剧场版|OVA|特别篇|番外|外传|前传|衍生|真人版|\bSP\b|特别版|剪辑版/i;
 
-/** Season markers — `第N季`, `Sxx`, `Season N`. */
+/** Season markers — `第N季`, `Sxx`, `Season N`, plus the invisible-season forms
+ *  of issue #21 (`3.全集`, bare `N季`, range `1-10季`). */
 const SEASON_MARKER_SXX = /[Ss](\d{1,2})/;
 const SEASON_MARKER_CN = /第\s*([一二三四五六七八九十\d]+)\s*季/;
 const SEASON_MARKER_EN = /\bseason\s*(\d{1,2})\b/i;
+/** 隐形季号(issue #21):`奇异新世界3.全集` — 紧贴「全集/合集」的季号。`(?<!\d)`
+ *  让年份不中(`2019.全集` 里的 19 前有数字);「全20集」没有数字+点+全集形态,不中。 */
+const SEASON_MARKER_DOT = /(?<!\d)(\d{1,2})\s*[.．]\s*(?:全集|合集)/;
+/** 裸 `N季`(不带「第」):排除范围前缀(`1-10季` 的 10 前是连字符)、年份(`2025季`
+ *  的 25 前是数字)、总季数声明(`全10季`/`共3季` — 那是"共几季",不指向某一季)。 */
+const SEASON_MARKER_PLAIN = /(?<![\d.\-–~全共])(\d{1,2})\s*季/;
+/** 季范围 `1-10季`/`5~8季`:只用于"范围不含目标季 → 降级",不作为 A 级季证据 ——
+ *  合集包内容构成不可信(2026-08-30 中餐厅:"1-10季"包实际只转到第九季目录)。 */
+const SEASON_MARKER_RANGE = /(?<!\d)(\d{1,2})\s*[-–~至]\s*(\d{1,2})\s*季/;
 
 /** A release year embedded in the title — `(2023)`, `2023年`, `Title.2008.1080p`.
  *  `\b` bounds it so a resolution string (`1920x1080`) never reads as year 1920
@@ -135,7 +145,29 @@ export function seasonNumbersInTitle(title: string): number[] {
     const n = Number(en[1]);
     if (n >= 1) found.push(n);
   }
+  // issue #21:隐形季号两种形态,让「3.全集」「3季」的 3 也被看见,喂给现成的
+  // mismatch→C 闸门(S01/S02 任务下假 A 消失;真对季时它本来就是对的)。
+  const dot = SEASON_MARKER_DOT.exec(title);
+  if (dot?.[1]) {
+    const n = Number(dot[1]);
+    if (n >= 1 && n <= 99) found.push(n);
+  }
+  const plain = SEASON_MARKER_PLAIN.exec(title);
+  if (plain?.[1]) {
+    const n = Number(plain[1]);
+    if (n >= 1 && n <= 99) found.push(n);
+  }
   return [...new Set(found)];
+}
+
+/** 标题里的季范围(`1-10季` → [1,10]),无则 null。范围只参与 mismatch 降级,
+ *  不算点名单季的证据(见 SEASON_MARKER_RANGE 注释)。 */
+export function seasonRangeInTitle(title: string): [number, number] | null {
+  const match = SEASON_MARKER_RANGE.exec(title);
+  const lo = match?.[1] ? Number(match[1]) : Number.NaN;
+  const hi = match?.[2] ? Number(match[2]) : Number.NaN;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo < 1 || hi < 1) return null;
+  return [Math.min(lo, hi), Math.max(lo, hi)];
 }
 
 /** The release year embedded in a candidate title (19xx/20xx), or null when the
@@ -236,12 +268,26 @@ export function gradeCandidate(
   }
 
   // C — the title names a season this task does NOT cover (another season's pack).
+  // issue #21:点名单季(含隐形形态 `3.全集`/`3季`)走原 mismatch;季范围(`1-10季`)
+  // 也参与降级 —— 范围不含目标季必是别季包;含目标季时范围不给 A 级证据(合集包
+  // 内容构成不可信),评分维持原档(中餐厅 1-10 季包今天就是 B,修后仍是 B)。
+  const seasonRange = seasonRangeInTitle(candidate.title);
   const seasonMismatch =
     context.seasons.length > 0 &&
-    seasons.length > 0 &&
-    !seasons.some((season) => context.seasons.includes(season));
+    (seasons.length > 0
+      ? !seasons.some((season) => context.seasons.includes(season))
+      : seasonRange !== null &&
+        !context.seasons.some(
+          (season) => seasonRange[0] <= season && season <= seasonRange[1],
+        ));
   if (seasonMismatch) {
-    reasons.push(`标题指向季号 ${seasons.join("/")}，不在本任务季范围 ${context.seasons.join("/")}`);
+    const named =
+      seasons.length > 0
+        ? `标题指向季号 ${seasons.join("/")}`
+        : seasonRange
+          ? `标题季范围 ${seasonRange[0]}-${seasonRange[1]}`
+          : "标题季信息";
+    reasons.push(`${named}，不在本任务季范围 ${context.seasons.join("/")}`);
     return makeGraded(candidate, "C", reasons, hasChineseSub, seasons, quality);
   }
 

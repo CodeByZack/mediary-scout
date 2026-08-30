@@ -162,6 +162,9 @@ export interface PreparedTrackingTarget {
   title: MediaTitle;
   season: TrackedSeason;
   keyword: string;
+  /** TMDB 该季各集播出日(SxxExx→"YYYY-MM-DD",无日期的集不入表)。
+   *  供 episode_states 落库 + fast path 年守卫(issue #21 同族防线)。 */
+  episodeAirDates?: Record<string, string>;
 }
 
 interface TmdbTvDetails {
@@ -387,6 +390,14 @@ export async function prepareTrackingTarget(input: TvTrackingTargetInput): Promi
   const totalEpisodes = totalEpisodesForSeason(details, seasonDetails, input.seasonNumber);
   const latestAiredEpisode = latestAiredEpisodeForSeason(details, seasonDetails, input.seasonNumber);
   const latestAiredSource: LatestAiredSource = "metadata";
+  const episodeAirDates: Record<string, string> = {};
+  for (const episode of seasonDetails.episodes ?? []) {
+    if (episode.episode_number !== undefined && episode.air_date) {
+      episodeAirDates[
+        `S${String(input.seasonNumber).padStart(2, "0")}E${String(episode.episode_number).padStart(2, "0")}`
+      ] = episode.air_date;
+    }
+  }
 
   return {
     title: {
@@ -417,6 +428,7 @@ export async function prepareTrackingTarget(input: TvTrackingTargetInput): Promi
     // filters out title matches and drifts to same-quality wrong works. Quality
     // is post-recall selection guidance (getQualityGuidance), not a search term.
     keyword: title,
+    ...(Object.keys(episodeAirDates).length > 0 ? { episodeAirDates } : {}),
   };
 }
 

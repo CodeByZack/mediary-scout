@@ -92,6 +92,14 @@ describe("TmdbMetadataProvider", () => {
         latestAiredSource: "metadata",
       },
       keyword: "翘楚",
+      // PR #24:备播日随目标一起产出——只收有 air_date 的已播集(未播的 15–24 号
+      // 日期为 null,不进表)。年守卫的数据源就是这张表。
+      episodeAirDates: Object.fromEntries(
+        Array.from({ length: 14 }, (_, index) => [
+          `S01E${String(index + 1).padStart(2, "0")}`,
+          `2026-06-${String(index + 1).padStart(2, "0")}`,
+        ]),
+      ),
     });
   });
 

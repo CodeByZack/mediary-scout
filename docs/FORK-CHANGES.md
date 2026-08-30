@@ -332,6 +332,67 @@
 
 ---
 
+### 26. 综艺「第N期」解析、只补缺集与隐形季号年守卫（PR #24，中餐厅 S10E11 假入库事故善后）
+
+**事故**（2026-08-30 06:00 巡检日志）:中餐厅 S10E11 任务盲转的「1-10季」合集包实为**第九季(2025)**内容。
+四个根因叠加:
+1. 文件名解析器不认综艺命名「第N期」→ 42 个文件全部「无法解析」→ 包被判定为需要 AI 映射的脏包;
+2. 集数映射仲裁(deepseek-v4-flash)把 S9 的 2025 文件映射成 S10E02–E11(编号、年份都对得上 S10 的时间线,它不知道);
+3. finalize 会把**所有**解析出集数的文件一律入库(不止缺集)——假 E11 就此落地并 markObtained;
+4. 评分器看不见「3.全集」这类隐形季号(issue #21),合集包照样评成唯一 A 盲转。
+
+**修复四件套**(用户点名 ①③,追加 ②=issue #21、④=年守卫——只上①③会让假入库恶化:S9 文件将直接解析出 S10E11,零 AI 参与,③照样把它落进 S10):
+
+- **①「第N期」解析**(`episode-code.ts`):`第N集/话/話` 规则扩为 `第N(?:集|话|話|期)`,单季任务启用、
+  多季禁用(原约束不变)。**衍生内容黑名单**只对「期」生效(集/话原语义不外溢):
+  加更/直拍/手记/纯享/花絮/彩蛋/抢先/幕后/坦白局/`PV`/`bonus` 等命中即不给集号(如
+  「合伙人手记第4期」「加更班第11期」仍交仲裁);命中被挡后回退再测一次 `集/话` 形态,防「第N期」写法误伤「第N集」。
+- **② issue #21 隐形季号**(`candidate-grader.ts`):`seasonNumbersInTitle` 新增 `3.全集/4.合集` 点号形态
+  (年 1900–2099 之外、1–99 之内,`2019.合集` 不误伤)与裸 `N季`(`共3季` 被 `全共` 负向后顾挡掉,
+  `全20集`/`S03E01.1080p` 不受影响);新增 `seasonRangeInTitle` 认 `1-10季` 范围——**范围只作 mismatch
+  降级证据,绝不作 A 证据**(范围内维持 B,范围外降 C),保住当下「中餐厅」候选池 A1/B7 的形状不变。
+- **③ finalize 只补缺集**(`finalize-landing.ts` + `landing.ts`):`finalizeLanding` 新增 `onlyCodes`
+  (= 任务 needCodes,落地点三处调用全部传入;诊断 accept 分支此前还漏传 skipCodes 一并修);季目录已有
+  同集副本、非缺集的解析成果(已获取集、超前于播出计划集)一律不入库随 wipe 丢弃。新增 `skippedNotNeeded`
+  返回字段,结账日志「改名 N 个:…」后追加「/ 非缺集跳过 N 件」。**行为变化**:以前超播集顺带入库、
+  provider-ahead 一起 mark 的宽容行为,现按用户拍板改为「只补该补的」;不传 onlyCodes 的旧调用语义不变
+  (finalize-landing 旧回归全绿)。
+- **④ 年守卫**(新原语在 `episode-code.ts`):`explicitFileDate` 抽文件名内嵌完整日期(`2025.08.29`/
+  `2025-08-29`、`20250829`、`2025年8月29日`,边界防护拒 1920/分辨率/半年份);
+  `episodeDateConflict(集码, 文件名, 播出日表)` = 文件日期与该集 TMDB 播出日相差 > 45 天判冲突;
+  **任一侧无数据即惰性**(不发明新拦截)。生效点三处:digest(拒收,文件按日期剔除并进「季份日期不符剔除」
+  摘要行,同时保留在「无法解析」列表交仲裁知悉)、finalize(兜底再拦)、落点检查 inspectTargetDir
+  (防历史错标件在季目录里自我认证)。AI 映射的结果同样受 digest 这道闸约束——映射救不了日期矛盾。
+
+**播出日数据链**(④的供血,零 schema 迁移——`episode_states.air_date` 列本就在、一直空着):
+`prepareTrackingTarget` 从 TMDB 季度详情组 `SxxExx→air_date` 表 → `PreparedTrackingTarget.episodeAirDates`
+→ `queueTrackingInitialization` 写进初始 `createEpisodeStates`(type2 首采入库即带);巡检侧
+`SeasonMetadataSync` 回传当季全表 → `syncSeasonAgainstMetadata` 合并(旧值不覆盖;仅日期可合并且
+计数不变时也 changed=true)→ `PatrolRun.episodes` → `pipeline.ts` type2/type3 两分支把
+`claimed.snapshot.episodes`/`patrol.episodes` 的播出日组成 map 交给 `runTvAcquisitionV2` →
+`RunAcquisitionV2WorkflowRequest` → TvAnimeTarget → fast path。series(type1 多季)与 demo/fake 模式
+无日期 = 守卫惰性,属预期。
+
+**顺手修的可观测性小 bug**(tv.ts):结账行「AI 升级」此前读外层旧变量,首轮落盘即经映射+诊断收尾的
+run 会误报「无」(今天的日志正是靠第二轮才纠正)——done 分支改取本轮真实 `closed.escalated`。
+`steps.ts` 解析明细对日期冲突文件打「⚠(文件日期与该集播出日不符,不采信)」,活动页可见。
+
+**文件与提交**(分支 `fix/variety-episode-and-invisible-season`,squash 前):
+`20f47b1` ①+守卫原语;`cedbb27` ②评分器;`b60fa21` ④数据链(10 文件);`113dd02` ③+守卫生效点+结账修正;
+`eab9203` 新增 `packages/workflow/tests/variety-episode-landing.test.ts`(19 例:期解析/黑名单/多季禁用/
+日期形态与边界/冲突阈值 45d vs 365d/隐形季号验收含 `2019.合集`+`全20集` 负例/范围降级/digest 守卫/
+sync 回填不覆盖/**fast-path 回放三连**:纯 2026 综艺包零 AI 入库、S9 假包守卫拒收诚实无覆盖、
+混装包只落缺的 E11 其余全弃)。
+
+**验证**:workflow-check tsc 0 错;受影响 9 套件 + 新验收共 170 例全绿(episode-code/candidate-grader/
+staging-digest/finalize-landing/fast-path/movie-fast-path/v2-run-tv/season-sync/variety);
+CI 全绿后 squash 合并。issue #21 验收单(奇异新世界3.全集 C/C/A、狂飙与电影回归、三负例)已由新用例覆盖,关闭。
+
+**遗留(未做)**:「第N期」黑名单是启发式,综艺官方若把正片就叫「XX特辑第N期」仍会漏给仲裁(可接受);
+多季任务仍完全不认期/集形态(交 AI,保守);守卫依赖文件名内嵌日期与 TMDB 播出日,二者任一缺失即惰性——
+文件名无日期的假包走原仲裁路径,行为不变。
+
+---
 ## 注意事项
 
 - `.gitignore`：追加 `*_TODO.md`、`deploy/fpk/app/server/`、`deploy/fpk/dist/`

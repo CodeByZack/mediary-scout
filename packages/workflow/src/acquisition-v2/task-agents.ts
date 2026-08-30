@@ -252,6 +252,9 @@ export interface TvAnimeTarget {
   seasons: number[];
   /** Missing episode codes, which MAY span the seasons above (e.g. ["S01E07","S02E13"]). */
   missingEpisodes: string[];
+  /** TMDB 各集播出日(SxxExx → "YYYY-MM-DD")。巡检/首采接线方从 episode_states
+   *  带过来;fast path 用它做年守卫(digest/finalize 拒收日期与播出日矛盾的集)。 */
+  episodeAirDates?: Record<string, string>;
   qualityPreference: string;
 }
 

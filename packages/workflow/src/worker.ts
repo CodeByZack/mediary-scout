@@ -106,14 +106,20 @@ async function resolveWorkerDeps(
 }
 
 /**
- * Refresh a tracked season's aired/total counts from TMDB. Returning null (or
- * throwing) leaves the season on its stored counts — the sweep still runs, it
- * just won't discover episodes aired since tracking began.
+ * Refresh a tracked season's aired/total counts (and per-episode air dates)
+ * from TMDB. Returning null (or throwing) leaves the season on its stored
+ * counts — the sweep still runs, it just won't discover episodes aired since
+ * tracking began. episodeAirDates(SxxExx→"YYYY-MM-DD")回填 episode_states 的
+ * 播出日,是 fast path 年守卫的数据来源(issue #21 同族防线)。
  */
 export type SeasonMetadataSync = (input: {
   tmdbId: number;
   seasonNumber: number;
-}) => Promise<{ latestAiredEpisode: number; totalEpisodes: number } | null>;
+}) => Promise<{
+  latestAiredEpisode: number;
+  totalEpisodes: number;
+  episodeAirDates?: Record<string, string>;
+} | null>;
 
 /**
  * §7: per-account worker context. After a run is claimed, the worker resolves the
@@ -486,6 +492,7 @@ export async function runScheduledType3Monitoring(input: {
             episodes,
             latestAiredEpisode: meta.latestAiredEpisode,
             totalEpisodes: meta.totalEpisodes,
+            ...(meta.episodeAirDates === undefined ? {} : { episodeAirDates: meta.episodeAirDates }),
           });
           season = synced.season;
           episodes = synced.episodes;

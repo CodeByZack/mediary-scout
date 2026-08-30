@@ -323,6 +323,8 @@ export async function closeOutTvLanding(options: {
   seasons: number[];
   needCodes: string[];
   onDiskCodes: Set<string>;
+  /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD",可缺省)—— digest/finalize 共用的年守卫数据。 */
+  episodeAirDates?: Record<string, string>;
   grading: ReturnType<typeof gradeCandidates>;
   tried: Set<string>;
   attempted: Set<string>;
@@ -380,7 +382,12 @@ export async function closeOutTvLanding(options: {
 
     // A real transfer happened — this is the countable attempt.
     attempted.add(current);
-    const digest = digestStaging({ files: transfer.staging, seasons, needCodes });
+    const digest = digestStaging({
+      files: transfer.staging,
+      seasons,
+      needCodes,
+      ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+    });
     const digestDetail = digest.passes
       ? `干净落地,覆盖 ${digest.coveredCodes.join(",") || "-"}`
       : `未通过(${digest.isDirtyPack ? "脏包" : "未覆盖目标"}):${digest.summary.split("\n").join(" / ")}`;
@@ -392,7 +399,7 @@ export async function closeOutTvLanding(options: {
       digest.passes ? "log" : "warn",
     );
     emitStep(onProgress, "stagingDigest", "verify", digestDetail);
-    const parseRows = landingParseRows(transfer.staging, seasons);
+    const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates);
     if (parseRows.length > 0) {
       stepLog(sandbox, target.title, "解析明细", parseRows.join(" / "));
       emitStep(onProgress, "digestFiles", "verify", `逐文件解析 ${parseRows.length} 条`, { files: parseRows });
@@ -424,11 +431,16 @@ export async function closeOutTvLanding(options: {
           canonicalTitle: target.title,
           seasons,
           skipCodes: [...onDiskCodes],
+          onlyCodes: needCodes,
+          ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
         });
         const skipNote =
-          finalized.skippedOnDisk.length > 0
+          (finalized.skippedOnDisk.length > 0
             ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集(${finalized.skippedOnDisk.sort().join(",")})`
-            : "";
+            : "") +
+          (finalized.skippedNotNeeded.length > 0
+            ? ` / 非缺集跳过 ${finalized.skippedNotNeeded.length} 件`
+            : "");
         const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
         emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
@@ -483,7 +495,14 @@ export async function closeOutTvLanding(options: {
       seasons,
       targetTitle: target.title,
       needCodes,
-      ram: (overrides) => digestStaging({ files: transfer.staging, seasons, needCodes, overrides }),
+      ram: (overrides) =>
+        digestStaging({
+          files: transfer.staging,
+          seasons,
+          needCodes,
+          overrides,
+          ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+        }),
       onDigest: (d) => {
         landingDigest = d;
       },
@@ -501,12 +520,17 @@ export async function closeOutTvLanding(options: {
           canonicalTitle: target.title,
           seasons,
           skipCodes: [...onDiskCodes],
+          onlyCodes: needCodes,
+          ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
           ...(mappingTable ? { overrides: mappingTable } : {}),
         });
         const skipNote =
-          finalized.skippedOnDisk.length > 0
+          (finalized.skippedOnDisk.length > 0
             ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集(${finalized.skippedOnDisk.sort().join(",")})`
-            : "";
+            : "") +
+          (finalized.skippedNotNeeded.length > 0
+            ? ` / 非缺集跳过 ${finalized.skippedNotNeeded.length} 件`
+            : "");
         const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
         emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
@@ -577,6 +601,9 @@ export async function closeOutTvLanding(options: {
           digest: landingDigest,
           canonicalTitle: target.title,
           seasons,
+          skipCodes: [...onDiskCodes],
+          onlyCodes: needCodes,
+          ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
           ...(mappingTable ? { overrides: mappingTable } : {}),
         });
       } catch (error) {
