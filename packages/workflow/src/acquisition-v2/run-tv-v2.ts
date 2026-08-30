@@ -36,6 +36,9 @@ export interface RunTvAcquisitionV2Request {
   /** 实有 = the DB obtained marks (agent's prior markObtained); empty for a first
    *  acquisition, the type-3 patrol passes the DB obtained codes. */
   priorObtained?: string[];
+  /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD")— 巡检侧从 episode_states 带入,
+   *  启用 fast path 年守卫(日期与播出日矛盾的集数不采信)。 */
+  episodeAirDates?: Record<string, string>;
   searchBudget?: number;
   maxSteps?: number;
   preferredLanguage?: string;
@@ -82,6 +85,7 @@ export async function runTvAcquisitionV2(request: RunTvAcquisitionV2Request): Pr
     searchProfile: profile,
     ...(qualityGuidance === "" ? {} : { qualityGuidance }),
     ...(request.priorObtained === undefined ? {} : { priorObtained: request.priorObtained }),
+    ...(request.episodeAirDates === undefined ? {} : { episodeAirDates: request.episodeAirDates }),
     ...(request.searchBudget === undefined ? {} : { searchBudget: request.searchBudget }),
     ...(request.maxSteps === undefined ? {} : { maxSteps: request.maxSteps }),
     ...(request.preferredLanguage === undefined ? {} : { preferredLanguage: request.preferredLanguage }),

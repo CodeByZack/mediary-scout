@@ -47,6 +47,8 @@ export async function queueTrackingInitialization(input: {
   createWorkflowRunId?: () => string;
   now?: () => string;
   staleActiveRunTimeoutMs?: number;
+  /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD"),写进初始 episode_states(年守卫数据)。 */
+  episodeAirDates?: Record<string, string>;
 }): Promise<TrackingInitializationRequestResult> {
   const now = input.now ?? (() => new Date().toISOString());
   const workflowRunId = input.createWorkflowRunId?.() ?? crypto.randomUUID();
@@ -57,6 +59,7 @@ export async function queueTrackingInitialization(input: {
     seasonNumber: input.season.seasonNumber,
     totalEpisodes: input.season.totalEpisodes,
     latestAiredEpisode: input.season.latestAiredEpisode,
+    ...(input.episodeAirDates === undefined ? {} : { episodeAirDates: input.episodeAirDates }),
   });
 
   const reservation = await input.repository.reserveWorkflowRun({
