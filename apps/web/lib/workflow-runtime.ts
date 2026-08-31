@@ -1616,6 +1616,7 @@ async function trackingTargetFromCandidateId(candidateId: string): Promise<{
   season: TrackedSeason;
   keyword: string;
   episodeAirDates?: Record<string, string>;
+  episodeNames?: Record<string, string>;
 } | null> {
   const parsed = parseTvCandidateId(candidateId);
   if (!parsed) {
