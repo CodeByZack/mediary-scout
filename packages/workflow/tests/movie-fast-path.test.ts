@@ -674,6 +674,9 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       target: aliasTarget,
     });
 
+    // P2-R1:primary 优先的鉴别力——新流程必经 primary 选片仲裁(escalated=true);
+    // 旧实现直接兜底盲转唯一 A(零 LLM,escalated=false),此断言对旧实现必失败。
+    expect(result.escalated).toBe(true);
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["MOVIE"]);
     // 兜底池独立预算:primary 3/3 全废后兜底仍转成 c4。
