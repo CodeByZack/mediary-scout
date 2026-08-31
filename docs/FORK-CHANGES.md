@@ -428,6 +428,13 @@ CI 全绿后 squash 合并。issue #21 验收单(奇异新世界3.全集 C/C/A�
 兜底仍用自己的 3 次配额转存成功」）、movie-fast-path.test.ts（25 例，同款新增用例）、variety-episode-landing /
 consumption-evidence / finalize-landing / v2-run-tv / v2-orchestrator / v2-full-chain / search-view 相关文件全绿。
 
+**review 修复（subagent 复核，PR #25 追加 commit 996546b）**：1) P1-1 死链/escalated 跨阶段回写——
+TV 阶段2 原从 stale ctx 起算（死链上限虚高可到 20、AI 升级低报），改随调用重建 ctx 传最新值，并新增
+「primary 死链 + 兜底死链累计 10 次上限后诚实终止」验收（日志坐实兜底从 4/10 继续而非 0 起算）；
+2) P1-2 仲裁放弃路径删阶段内重复结账 emit（主流程 done 分支统一覆盖，旧代码此路径单条结账）；
+3) P1-3「预算分开」验收用例改为 primary **3 个 A 候选全部 off-target 真烧满 3/3 预算**（原 2 个候选
+只烧 2/3、旧共享预算下同样全绿，不鉴别），并断言结账行 `转存 primary 3/3 · 兜底转存 1/3`。
+
 **补记**：v1.0.0 tag 于 2026-08-30 从 `f669334` 移到 `fcaa17a`（含 PR #24 修复）重发双架构 fpk
 （arm 15,445,034B / x86 15,246,503B，Create 2026-08-30T04:15:42Z，run 33292057274 success）。
 
