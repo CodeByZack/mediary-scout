@@ -810,6 +810,7 @@ export async function queueCandidateTracking(
     accountId,
     connectedStorageId: workspace.id,
     ...(target.episodeAirDates === undefined ? {} : { episodeAirDates: target.episodeAirDates }),
+    ...(target.episodeNames === undefined ? {} : { episodeNames: target.episodeNames }),
   });
   const status = request.status === "completed" ? "queued" : request.status;
 
@@ -1579,7 +1580,10 @@ export async function runScheduledType3(options?: {
  * the sweep on stored counts.
  */
 function tmdbSeasonMetadataSync(): SeasonMetadataSync | undefined {
-  if (process.env.MEDIA_TRACK_SEARCH_PROVIDER !== "tmdb") {
+  // 2026-08-31 放开门闩:此前仅 MEDIA_TRACK_SEARCH_PROVIDER=tmdb 才注入 TMDB 播出日
+  // 同步。数据源(pansou/prowlarr 等)与 TMDB 元数据是两回事——搜索源决不影响「该季
+  // 各集何时播出」(年守卫数据)。配了 TMDB 就同步;没配 TMDB 时才 undefined。
+  if (!process.env.MEDIA_TRACK_TMDB_API_KEY && !process.env.TMDB_PROXY_BASE_URL) {
     return undefined;
   }
   return async ({ tmdbId, seasonNumber }) => {
@@ -1594,6 +1598,7 @@ function tmdbSeasonMetadataSync(): SeasonMetadataSync | undefined {
       latestAiredEpisode: target.season.latestAiredEpisode,
       totalEpisodes: target.season.totalEpisodes,
       ...(target.episodeAirDates === undefined ? {} : { episodeAirDates: target.episodeAirDates }),
+      ...(target.episodeNames === undefined ? {} : { episodeNames: target.episodeNames }),
     };
   };
 }

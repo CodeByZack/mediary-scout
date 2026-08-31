@@ -63,6 +63,9 @@ export interface StagingDigestInput {
    *  无法解析)。2026-08-30 中餐厅:「1-10季」合集包实际落的是第九季(2025
    *  日期)文件,在 S10 单季任务下被整包解释成 S10Exx —— 号码对、季份错。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")。综艺「第N期上/下 ↔
+   *  Episode N (Part 1/2)」锚定用(2026-08-31 地球超新鲜案);缺省 = 无锚定。 */
+  episodeNames?: Record<string, string>;
 }
 
 function fileBaseName(file: SimTreeFile): string {
@@ -90,15 +93,16 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
 
   for (const video of videos) {
     const base = fileBaseName(video);
-    const code = overrides[base] ?? episodeCodeFromFileName(base, input.seasons);
-    if (code) {
+    const parsedCode =
+      overrides[base] ?? episodeCodeFromFileName(base, input.seasons, input.episodeNames);
+    if (parsedCode) {
       // 年守卫(issue #21 同族):文件自带日期与该集播出日明显矛盾 → 不采信,
       // 按解析失败处理(宁可少认不乱认;映射表给出的 code 同样过守卫)。
-      if (episodeDateConflict(code, base, input.episodeAirDates)) {
+      if (episodeDateConflict(parsedCode, base, input.episodeAirDates)) {
         dateRejectedVideos.push(base);
         unparsedVideos.push(base);
-      } else if (!episodeCodes.includes(code)) {
-        episodeCodes.push(code);
+      } else if (!episodeCodes.includes(parsedCode)) {
+        episodeCodes.push(parsedCode);
       }
     } else {
       unparsedVideos.push(base);
@@ -121,7 +125,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
 
   const needSet = new Set(input.needCodes);
   const coveredCodes = episodeCodes.filter((code) => needSet.has(code));
-  const missingCodes = input.needCodes.filter((code) => !needSet.has(code) || !episodeCodes.includes(code));
+  const missingCodes = input.needCodes.filter((need) => !needSet.has(need) || !episodeCodes.includes(need));
 
   const hasJunk = junkSignals.length > 0;
   // TV: a video that does not parse to an episode code is junk (sample/花絮/预告

@@ -155,3 +155,66 @@ describe("digestStaging — overrides (功能2 AI 集数映射)", () => {
     expect(d.missingCodes).toEqual(["S01E02"]);
   });
 });
+describe("digestStaging — 综艺「第N期」Part 锚定(2026-08-31 地球超新鲜案)", () => {
+  const episodeNames = {
+    S01E01: "Episode 1 (Part 1)",
+    S01E02: "Episode 1 (Part 2)",
+    S01E19: "Episode 10 (Part 1)",
+    S01E20: "Episode 10 (Part 2)",
+  } as Record<string, string>;
+
+  it("第10期上→S01E19、第10期下→S01E20(每期拆两集的综艺,机械 E(N) 会错位)", () => {
+    const d = digestStaging({
+      seasons: [1],
+      needCodes: ["S01E19"],
+      episodeNames,
+      files: [
+        video("2026.08.28_第10期上_4K.mp4"),
+        video("2026.08.29_第10期下_4K.mp4"),
+      ],
+    });
+    expect(d.episodeCodes).toEqual(["S01E19", "S01E20"]);
+    expect(d.coveredCodes).toEqual(["S01E19"]);
+  });
+
+  it("无 episodeNames(未配 TMDB 元数据)时回退机械 E(N):第10期→S01E10(旧语义)", () => {
+    const d = digestStaging({
+      seasons: [1],
+      needCodes: ["S01E10"],
+      files: [video("2026.08.28_第10期_4K.mp4")],
+    });
+    expect(d.episodeCodes).toEqual(["S01E10"]);
+  });
+
+  it("有 episodeNames 但该期不在表内 → 回退机械 E(N)(不退化全包 unparsed)", () => {
+    const d = digestStaging({
+      seasons: [1],
+      needCodes: ["S01E11"],
+      episodeNames,
+      files: [video("2026.09.05_第11期_4K.mp4")],
+    });
+    expect(d.episodeCodes).toEqual(["S01E11"]);
+  });
+
+  it("第N期无上/下标记且该期多 part → 取 Part 1(正片主体)", () => {
+    const d = digestStaging({
+      seasons: [1],
+      needCodes: ["S01E19"],
+      episodeNames,
+      files: [video("2026.08.28_第10期_4K.mp4")],
+    });
+    expect(d.episodeCodes).toEqual(["S01E19"]);
+  });
+
+  it("第N期被衍生黑名单挡掉(彩蛋/加更)不参与 Part 锚定", () => {
+    const d = digestStaging({
+      seasons: [1],
+      needCodes: ["S01E19"],
+      episodeNames,
+      files: [video("2026.08.28_第10期彩蛋_4K.mp4")],
+    });
+    // 彩蛋不该有集号
+    expect(d.episodeCodes).toEqual([]);
+    expect(d.unparsedVideos.length).toBe(1);
+  });
+});

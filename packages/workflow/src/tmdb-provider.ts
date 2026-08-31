@@ -165,6 +165,10 @@ export interface PreparedTrackingTarget {
   /** TMDB 该季各集播出日(SxxExx→"YYYY-MM-DD",无日期的集不入表)。
    *  供 episode_states 落库 + fast path 年守卫(issue #21 同族防线)。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 该季各集原始 name(SxxExx→"Episode 10 (Part 1)")。
+   *  综艺「第N期上/下」锚定用:期号+Part 一一定位到集号(2026-08-31 地球超新鲜案)。
+   *  无 name 的集不入表。 */
+  episodeNames?: Record<string, string>;
 }
 
 interface TmdbTvDetails {
@@ -199,6 +203,8 @@ interface TmdbSeasonDetails {
   episodes?: Array<{
     episode_number?: number;
     air_date?: string | null;
+    /** 原样 TMDB name("Episode 10 (Part 1)")——综艺 Part 锚定数据源。 */
+    name?: string;
   }>;
 }
 
@@ -391,14 +397,13 @@ export async function prepareTrackingTarget(input: TvTrackingTargetInput): Promi
   const latestAiredEpisode = latestAiredEpisodeForSeason(details, seasonDetails, input.seasonNumber);
   const latestAiredSource: LatestAiredSource = "metadata";
   const episodeAirDates: Record<string, string> = {};
+  const episodeNames: Record<string, string> = {};
   for (const episode of seasonDetails.episodes ?? []) {
-    if (episode.episode_number !== undefined && episode.air_date) {
-      episodeAirDates[
-        `S${String(input.seasonNumber).padStart(2, "0")}E${String(episode.episode_number).padStart(2, "0")}`
-      ] = episode.air_date;
-    }
+    if (episode.episode_number === undefined) continue;
+    const code = "S" + String(input.seasonNumber).padStart(2, "0") + "E" + String(episode.episode_number).padStart(2, "0");
+    if (episode.air_date) episodeAirDates[code] = episode.air_date;
+    if (episode.name) episodeNames[code] = episode.name;
   }
-
   return {
     title: {
       id: titleId,
@@ -429,6 +434,7 @@ export async function prepareTrackingTarget(input: TvTrackingTargetInput): Promi
     // is post-recall selection guidance (getQualityGuidance), not a search term.
     keyword: title,
     ...(Object.keys(episodeAirDates).length > 0 ? { episodeAirDates } : {}),
+    ...(Object.keys(episodeNames).length > 0 ? { episodeNames } : {}),
   };
 }
 

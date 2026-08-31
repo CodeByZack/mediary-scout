@@ -39,6 +39,8 @@ export interface RunTvAcquisitionV2Request {
   /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD")— 巡检侧从 episode_states 带入,
    *  启用 fast path 年守卫(日期与播出日矛盾的集数不采信)。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name,综艺「第N期上/下 ↔ Episode N (Part 1/2)」锚定数据。 */
+  episodeNames?: Record<string, string>;
   searchBudget?: number;
   maxSteps?: number;
   preferredLanguage?: string;
@@ -86,6 +88,7 @@ export async function runTvAcquisitionV2(request: RunTvAcquisitionV2Request): Pr
     ...(qualityGuidance === "" ? {} : { qualityGuidance }),
     ...(request.priorObtained === undefined ? {} : { priorObtained: request.priorObtained }),
     ...(request.episodeAirDates === undefined ? {} : { episodeAirDates: request.episodeAirDates }),
+          ...(request.episodeNames === undefined ? {} : { episodeNames: request.episodeNames }),
     ...(request.searchBudget === undefined ? {} : { searchBudget: request.searchBudget }),
     ...(request.maxSteps === undefined ? {} : { maxSteps: request.maxSteps }),
     ...(request.preferredLanguage === undefined ? {} : { preferredLanguage: request.preferredLanguage }),

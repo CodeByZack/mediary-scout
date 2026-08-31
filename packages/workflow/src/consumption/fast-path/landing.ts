@@ -61,6 +61,9 @@ export async function tryEpisodeMapping(options: {
    * 综艺「第N期」在 TMDB 可能一节拆多集(第10期= E19/E20 而非 E10),机械 E(N)
    * 会系统性错位;把全部落盘文件交 AI 重映射时,知道整季真实集号范围才能对齐。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")—— ram 重建 digest 时透传给
+   *  episodeCodeFromFileName 做「第N期」Part 锚定(与年守卫同源)。 */
+  episodeNames?: Record<string, string>;
 }): Promise<"passed" | "unmapped-but-clean" | "no" | "failed"> {
   const { digest } = options;
   // 仅 TV 单季值得让 AI 映射;movie / 多季 → no。
@@ -352,6 +355,8 @@ export async function closeOutTvLanding(options: {
   onDiskCodes: Set<string>;
   /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD",可缺省)—— digest/finalize 共用的年守卫数据。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")——「第N期」Part 锚定数据。 */
+  episodeNames?: Record<string, string>;
   grading: ReturnType<typeof gradeCandidates>;
   tried: Set<string>;
   attempted: Set<string>;
@@ -414,6 +419,7 @@ export async function closeOutTvLanding(options: {
       seasons,
       needCodes,
       ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+      ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
     });
     const digestDetail = digest.passes
       ? `干净落地,覆盖 ${digest.coveredCodes.join(",") || "-"}`
@@ -523,6 +529,7 @@ export async function closeOutTvLanding(options: {
       targetTitle: target.title,
       needCodes,
       ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+      ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
       ram: (overrides) =>
         digestStaging({
           files: transfer.staging,
@@ -530,6 +537,7 @@ export async function closeOutTvLanding(options: {
           needCodes,
           overrides,
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+          ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
         }),
       onDigest: (d) => {
         landingDigest = d;

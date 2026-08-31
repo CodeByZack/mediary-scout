@@ -69,6 +69,8 @@ interface TvPoolContext {
   escalated: boolean;
   /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD",可缺省)—— digest/finalize 共用的年守卫数据。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")—— 综艺「第N期」Part 锚定。 */
+  episodeNames?: Record<string, string>;
 }
 
 /** 阶段运行结果。done 非空 = 该池已收尾(入库或诚实终止)，直接返回；否则 caller 决定是否
@@ -197,6 +199,7 @@ async function runTvCandidatePhase(
       deadRetries,
       transfer,
       ...(ctx.episodeAirDates !== undefined ? { episodeAirDates: ctx.episodeAirDates } : {}),
+      ...(ctx.episodeNames !== undefined ? { episodeNames: ctx.episodeNames } : {}),
     });
     if (closed.done) {
       return { done: closed.done, escalated: closed.escalated, deadRetries: closed.deadRetries };
@@ -383,6 +386,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     deadRetries,
     escalated,
     ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
+    ...(target.episodeNames !== undefined ? { episodeNames: target.episodeNames } : {}),
   };
 
   // ★ 阶段1 —— primary 池:只要 primary 有 A 候选(或根本没有别名可兜底)就先转存 primary,

@@ -113,6 +113,15 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
               : [[episode.episodeCode, episode.airDate] as const],
           ),
         ),
+        // 综艺 Part 锚定数据:TMDB 原始 name 已在 episode_states.title(createEpisodeStates
+        // 用 episodeNames 生成);「第N期上/下 ↔ Episode N (Part 1/2)」靠它定位。
+        episodeNames: Object.fromEntries(
+          claimed.snapshot.episodes.flatMap((episode) =>
+            !episode.title || /^Episode d+$/.test(episode.title)
+              ? []
+              : [[episode.episodeCode, episode.title] as const],
+          ),
+        ),
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,
@@ -262,6 +271,13 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
             episode.airDate === null
               ? []
               : [[episode.episodeCode, episode.airDate] as const],
+          ),
+        ),
+        episodeNames: Object.fromEntries(
+          patrol.episodes.flatMap((episode) =>
+            !episode.title || /^Episode d+$/.test(episode.title)
+              ? []
+              : [[episode.episodeCode, episode.title] as const],
           ),
         ),
         now,

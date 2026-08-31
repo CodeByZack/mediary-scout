@@ -46,6 +46,9 @@ export interface RunAcquisitionV2WorkflowRequest {
   /** TMDB 各集播出日(SxxExx → "YYYY-MM-DD")。type3 巡检带当季 episode_states 的
    *  播出日进 fast path,启用年守卫;缺省 = 守卫惰性(旧语义)。issue #21 同族防线。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx → "Episode 10 (Part 1)")。综艺「第N期上/下 ↔
+   *  Episode N (Part 1/2)」锚定数据(2026-08-31 地球超新鲜案);缺省 = 无 Part 锚定。 */
+  episodeNames?: Record<string, string>;
   searchBudget?: number;
   maxSteps?: number;
   preferredLanguage?: string;
@@ -110,6 +113,7 @@ export async function runAcquisitionCoreStage(
       seasons: request.seasons.map((season) => season.seasonNumber),
       missingEpisodes: need.missing,
       ...(request.episodeAirDates === undefined ? {} : { episodeAirDates: request.episodeAirDates }),
+          ...(request.episodeNames === undefined ? {} : { episodeNames: request.episodeNames }),
       qualityPreference: request.qualityPreference,
     },
     stagingDirectoryId: directories.stagingDirectoryId,

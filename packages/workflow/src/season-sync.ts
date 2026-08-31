@@ -25,6 +25,8 @@ export function syncSeasonAgainstMetadata(input: {
   /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD")。落进 episode_states 的 airDate
    *  (年守卫数据);已有值不覆盖。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")。落进 title(综艺 Part 锚定数据)。 */
+  episodeNames?: Record<string, string>;
 }): { season: TrackedSeason; episodes: EpisodeState[]; changed: boolean } {
   const newTotal = Math.max(input.season.totalEpisodes, input.totalEpisodes);
   const newLatest = Math.min(newTotal, Math.max(input.season.latestAiredEpisode, input.latestAiredEpisode));
@@ -49,6 +51,7 @@ export function syncSeasonAgainstMetadata(input: {
     totalEpisodes: newTotal,
     latestAiredEpisode: newLatest,
     ...(input.episodeAirDates === undefined ? {} : { episodeAirDates: input.episodeAirDates }),
+    ...(input.episodeNames === undefined ? {} : { episodeNames: input.episodeNames }),
   });
   const oldByCode = new Map(input.episodes.map((episode) => [episode.episodeCode, episode]));
   const merged: EpisodeState[] = baseline.map((base) => {

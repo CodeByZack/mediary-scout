@@ -119,6 +119,8 @@ export type SeasonMetadataSync = (input: {
   latestAiredEpisode: number;
   totalEpisodes: number;
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)"),综艺 Part 锚定用。 */
+  episodeNames?: Record<string, string>;
 } | null>;
 
 /**
@@ -493,6 +495,7 @@ export async function runScheduledType3Monitoring(input: {
             latestAiredEpisode: meta.latestAiredEpisode,
             totalEpisodes: meta.totalEpisodes,
             ...(meta.episodeAirDates === undefined ? {} : { episodeAirDates: meta.episodeAirDates }),
+            ...(meta.episodeNames === undefined ? {} : { episodeNames: meta.episodeNames }),
           });
           season = synced.season;
           episodes = synced.episodes;
