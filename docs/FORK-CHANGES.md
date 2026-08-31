@@ -393,6 +393,45 @@ CI 全绿后 squash 合并。issue #21 验收单(奇异新世界3.全集 C/C/A�
 文件名无日期的假包走原仲裁路径,行为不变。
 
 ---
+
+### 27. fast path 两阶段候选池（PR #25，primary 优先仲裁/转存 + 兜底预算独立）
+
+**背景**：fast path 原有兜底逻辑（1b 块）在**选片之前**触发——只要 primary 池没有唯一 A
+（`!uniqueTopGrade`）且存在别名，`aliasesFallbackReSearch` 的命中就会**整体替换** primary 证据池；
+而 §E 的合并恢复只在兜底全失败时才发生。后果（地球超新鲜 S02E19 巡检日志实证）：primary 预搜
+命中 **14 个 A 候选**，但评分只是「无唯一 A」，代码便直接跳别名兜底、只转了兜底搜到的 2 个链接——
+14 个 A 全程没进仲裁、没被尝试。
+
+**用户拍板的新设计**（两阶段，预算分开）：
+
+- **阶段1 primary 池**：只要 primary 有 A 候选（或根本没有别名可兜底）就先在 primary 内
+  选片——唯一 A 盲转 / 多 A 走选片仲裁——然后进转存循环（预算 `MAX_TRANSFER_ATTEMPTS=3`）；
+- **阶段2 兜底池**：**仅当** primary 无 A 候选、**或** primary 转存预算耗尽仍未覆盖，且存在别名时
+  才启动 `aliasesFallbackReSearch`（合并证据池继续选片/仲裁），用**独立的**转存预算
+  `MAX_FALLBACK_TRANSFER_ATTEMPTS=3`（新常量）——primary 试穷不挤占兜底配额（总上限 6）。
+- 空池且无别名 → 零 LLM 诚实终止（原行为不变，兜底只负责「空池但有别名」）；
+  死链探测 `MAX_DEAD_LINK_RETRIES=10` 跨两阶段共享、不占任何转存预算；
+  `MAX_FALLBACK_SEARCHES=3` 兜底重搜轮数不变。
+
+**实现**：tv.ts / movie.ts 各自抽出阶段运行器（`runTvCandidatePhase` / `runMovieCandidatePhase`，
+选片 + 转存循环，入参含 attemptBudget / poolLabel，跨池共享 tried/deadRetries/escalated，转存预算按
+「本池增量」独立记账），主流程两阶段编排。结账行改为两池分别显示：
+`转存 primary X/3 · 兜底转存 Y/3 · 死链探测 Z/10 · PanSou 搜索 N 次(primary 1 + 兜底 R) · AI 升级:…`。
+
+**行为变化**（有意为之）：primary 有 A（非唯一）时不再先跳兜底，而是先在 primary 池内仲裁转存——
+这会让原先「两个 A 平级 → 兜底盲转零 LLM」的用例变成「primary 仲裁（一次 AI 调用）」。
+
+**Budgets 接口扩展**：`Budgets` 增加 `maxFallbackTransferAttempts` 字段（当前无外部调用方，扩展安全），
+`DEFAULT_BUDGETS` 同步。
+
+**验证**：workflow-check tsc 0 错；fast-path.test.ts（30 例，含新增「预算分开：primary 3 次转存全废后
+兜底仍用自己的 3 次配额转存成功」）、movie-fast-path.test.ts（25 例，同款新增用例）、variety-episode-landing /
+consumption-evidence / finalize-landing / v2-run-tv / v2-orchestrator / v2-full-chain / search-view 相关文件全绿。
+
+**补记**：v1.0.0 tag 于 2026-08-30 从 `f669334` 移到 `fcaa17a`（含 PR #24 修复）重发双架构 fpk
+（arm 15,445,034B / x86 15,246,503B，Create 2026-08-30T04:15:42Z，run 33292057274 success）。
+
+---
 ## 注意事项
 
 - `.gitignore`：追加 `*_TODO.md`、`deploy/fpk/app/server/`、`deploy/fpk/dist/`

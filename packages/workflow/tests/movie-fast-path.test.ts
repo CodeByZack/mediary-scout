@@ -33,6 +33,19 @@ function textModel(text: string) {
   });
 }
 
+/** Model returning a scripted sequence of texts, one per doGenerate call. */
+function sequentialModel(texts: string[]) {
+  let i = 0;
+  return new MockLanguageModelV3({
+    doGenerate: async () => ({
+      content: [{ type: "text" as const, text: texts[i++] ?? texts[texts.length - 1]! }],
+      finishReason: { unified: "stop" as const, raw: "stop" as const },
+      usage: USAGE,
+      warnings: [],
+    }),
+  });
+}
+
 /** A model that THROWS if invoked — proves the happy path never calls the LLM. */
 function throwModel() {
   return new MockLanguageModelV3({
@@ -436,7 +449,7 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     ]);
   });
 
-  it("标题搜索无唯一 A（两个 A 平级）时用 aliases 兜底（movie twin），命中唯一 A 直接盲转", async () => {
+  it("primary 有 A(非唯一)→ 先在 primary 池仲裁转存,不提前跳兜底(movie twin,PR #25)", async () => {
     let searches = 0;
     const fallbackMovieTarget: MovieTarget = {
       ...movieTarget,
@@ -445,13 +458,13 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     const { sandbox, movieDir, storage } = await createMovieSetup({
       candidates: [
         { id: "c1", title: "流浪地球.2019.4K" },
-        { id: "c2", title: "流浪地球.2019.1080p" }, // 两个 A → 无唯一 top → 触发兜底
+        { id: "c2", title: "流浪地球.2019.1080p" }, // 两个 A → 无唯一 top → primary 池仲裁
       ],
       extraResults: {
         "the wandering earth": [{ id: "c3", title: "The Wandering Earth.2019.4K" }],
       },
       packs: {
-        c3: { files: [{ path: "The Wandering Earth.2019.4K.mkv", sizeBytes: 2_000_000_000 }] },
+        c1: { files: [{ path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 }] },
       },
       onSearch: () => {
         searches += 1;
@@ -460,14 +473,15 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
 
     const result = await runMovieFastPathAcquisition({
       sandbox,
-      model: throwModel(),
+      model: textModel('{"candidateId":"c1","reasoning":"4K 优先"}'),
       target: fallbackMovieTarget,
     });
 
-    expect(result.escalated).toBe(false);
+    // PR #25:primary 有 A → 先自己仲裁转存;aliases 兜底只在无 A 或转存失败后才启动。
+    expect(result.escalated).toBe(true); // primary 池仲裁
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["MOVIE"]);
-    expect(searches).toBe(2);
+    expect(searches).toBe(1); // 只有 primary 预搜,兜底没触发
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);
@@ -608,6 +622,56 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       "流浪地球 (2019).mkv",
     ]);
     expect(searches.length).toBe(2); // 1 primary + 1 兜底;恢复 primary 零额外搜索
+  });
+
+  it("PR #25 预算分开:primary 转存预算耗尽后,兜底池仍用自己的配额转存成功(movie twin)", async () => {
+    // primary 两个 A(c1/c2)都被诊断 reject(off-target)→ 各自占 1 次 primary 预算;
+    // primary 试尽后仍未覆盖 → 兜底池启动,兜底搜到唯一 A(c3) → 用兜底自己的预算盲转成功。
+    // 旧行为:兜底与 primary 共用 MAX_TRANSFER_ATTEMPTS=3,primary 失败后兜底配额被挤占。
+    const { sandbox, movieDir, storage, aliasTarget, searches } = await createMovieAliasSetup({
+      results: {
+        流浪地球: [
+          { id: "c1", title: "流浪地球.2019.4K.中字" },
+          { id: "c2", title: "流浪地球.2019.1080P.中字" }, // 两个 A → primary 仲裁
+        ],
+        "The Wandering Earth": [{ id: "c3", title: "The Wandering Earth.2019.4K.中字" }], // 兜底唯一 A
+      },
+      packs: {
+        // c1/c2 都落成「非单部正片/脏包」(两张视频碟)→ 诊断 reject_other → primary 试尽
+        c1: {
+          files: [
+            { path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 },
+            { path: "流浪地球.2019.4K.Extra.mkv", sizeBytes: 1_000_000_000 },
+          ],
+        },
+        c2: {
+          files: [
+            { path: "流浪地球.2019.1080p.mkv", sizeBytes: 2_000_000_000 },
+            { path: "流浪地球.2019.1080p.Extra.mkv", sizeBytes: 1_000_000_000 },
+          ],
+        },
+        c3: { files: [{ path: "The Wandering Earth.2019.4K.mkv", sizeBytes: 2_000_000_000 }] },
+      },
+      aliases: ["The Wandering Earth"],
+    });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: sequentialModel([
+        '{"candidateId":"c1","reasoning":"选 c1"}', // 选片仲裁(primary 两 A)
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c1 off-target
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c2 off-target
+      ]),
+      target: aliasTarget,
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual(["MOVIE"]);
+    // 兜底池独立预算:primary 试穷后兜底仍有配额转 c3。
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+    expect(searches.length).toBe(2); // primary 预搜 1 + 兜底重搜 1
   });
 });
 

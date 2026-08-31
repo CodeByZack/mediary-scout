@@ -1,7 +1,11 @@
 import { episodeCodeFromFileName, episodeDateConflict } from "../../episode-code.js";
 import { arbitrateSelection } from "../../acquisition-v2/arbitrator.js";
 import { gradeCandidates, summarizeGrading } from "../../acquisition-v2/candidate-grader.js";
-import { MAX_DEAD_LINK_RETRIES, MAX_TRANSFER_ATTEMPTS } from "./budgets.js";
+import {
+  MAX_DEAD_LINK_RETRIES,
+  MAX_FALLBACK_TRANSFER_ATTEMPTS,
+  MAX_TRANSFER_ATTEMPTS,
+} from "./budgets.js";
 import {
   aliasesFallbackReSearch,
   candidateSnapshotId,
@@ -38,8 +42,173 @@ export type { FastPathOptions, FastPathResult };
  * A clean run (unique A-grade that lands and digests cleanly) makes ZERO LLM
  * calls. Only genuine ambiguity — no unique A-grade, or a dirty/off-target
  * landing — escalates, and each escalation is one judgment call, not a loop.
+ *
+ * Two-stage candidate pools (PR #25): the PRIMARY pool (searched by title) is
+ * always tried FIRST — a unique A transfers blind, multiple A's go to the
+ * selection arbitrator. The aliases 兜底 pool only runs when the primary pool
+ * has NO A-grade at all, or the primary pool's transfer budget is exhausted
+ * without coverage. The two pools carry INDEPENDENT transfer budgets
+ * (MAX_TRANSFER_ATTEMPTS / MAX_FALLBACK_TRANSFER_ATTEMPTS), so a primary pool
+ * full of off-target packs can never starve the aliases' hits.
  */
 
+/** 一个候选池（primary 或兜底）的「选片 + 转存循环」回合。跨池共享 tried / deadRetries /
+ *  escalated；转存预算(attempted)按池独立记账 —— closeOutTvLanding 用哪个 set 就往哪个
+ *  set 加,循环上限(attemptBudget)由调用方传池自身的预算。 */
+interface TvPoolContext {
+  sandbox: FastPathOptions["sandbox"];
+  model: FastPathOptions["model"];
+  target: FastPathOptions["target"];
+  onProgress: FastPathOptions["onProgress"];
+  seasons: number[];
+  needCodes: string[];
+  onDiskCodes: Set<string>;
+  tried: Set<string>;
+  attempted: Set<string>;
+  deadRetries: number;
+  escalated: boolean;
+  /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD",可缺省)—— digest/finalize 共用的年守卫数据。 */
+  episodeAirDates?: Record<string, string>;
+}
+
+/** 阶段运行结果。done 非空 = 该池已收尾(入库或诚实终止)，直接返回；否则 caller 决定是否
+ *  进下一池。 */
+interface TvPhaseOutcome {
+  done: FastPathResult | null;
+  escalated: boolean;
+  deadRetries: number;
+}
+
+async function runTvCandidatePhase(
+  ctx: TvPoolContext,
+  view: EvidenceView,
+  grading: ReturnType<typeof gradeCandidates>,
+  attemptBudget: number,
+  poolLabel: string,
+): Promise<TvPhaseOutcome> {
+  const { sandbox, model, target, onProgress, seasons, needCodes, onDiskCodes } = ctx;
+  // 本池起点转存数:预算按「本池增量」独立计算(primary 与兜底互不挤占)。
+  const poolTransferBase = ctx.attempted.size;
+  // 2. Pick the first candidate: a unique A-grade transfers blind; otherwise the
+  //    selection arbitrator picks one (escalation #1).
+  let escalated = ctx.escalated;
+  let deadRetries = ctx.deadRetries;
+  let current: string | null;
+  if (grading.uniqueTopGrade && grading.top) {
+    current = grading.top.id;
+    const pickDetail = `${poolLabel}池唯一 A 盲转:候选 ${current}(${grading.top.title})`;
+    stepLog(sandbox, target.title, "选片", pickDetail);
+    emitStep(onProgress, "pickCandidate", "pick", pickDetail, { candidateId: current, title: grading.top.title });
+  } else {
+    escalated = true;
+    const arbitration = await arbitrateSelection({
+      model,
+      summary: summarizeGrading(grading),
+      title: target.title,
+      seasons,
+    });
+    current = arbitration.candidateId;
+    if (current === null) {
+      const declineDetail = `${poolLabel}池放弃:${arbitration.reasoning || "无可用候选"}`;
+      stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
+      const doneDetail = `暂无资源(${poolLabel}池仲裁放弃:${arbitration.reasoning || "无可用候选"})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "arbitrateSelection", "pick", declineDetail, {
+        pool: gradedCandidateEvidence(grading),
+        reasoning: arbitration.reasoning ?? null,
+        selected: null,
+      });
+      const declineCheckout = `转存 primary ${poolTransferBase}/${MAX_TRANSFER_ATTEMPTS} · 兜底转存 ${ctx.attempted.size - poolTransferBase}/${MAX_FALLBACK_TRANSFER_ATTEMPTS} · 死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · AI 升级:有(${poolLabel}池选片仲裁,放弃)`;
+      stepLog(sandbox, target.title, "结账", declineCheckout);
+      emitStep(onProgress, "runCheckout", "finalize", declineCheckout);
+      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+      return {
+        done: await concludeUncovered(sandbox, {
+          text: `${poolLabel}池仲裁放弃:${arbitration.reasoning || "无可用候选"}`,
+          steps: ctx.attempted.size,
+          escalated,
+          reason: arbitration.reasoning || "无可用候选",
+        }),
+        escalated,
+        deadRetries,
+      };
+    }
+    // Defense-in-depth: the model only sees the graded summary and may return a
+    // TITLE or a made-up id instead of a real candidate id. A bogus id must never
+    // reach transferCandidate's SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT throw and blow
+    // up the whole run — treat it like a declined arbitration (safe uncover).
+    if (!view.candidates.some((candidate) => candidate.id === current)) {
+      const badIdDetail = `${poolLabel}池返回非法候选 id:${current}`;
+      stepLog(sandbox, target.title, "仲裁", badIdDetail, "error");
+      const doneDetail = `暂无资源(${poolLabel}池仲裁返回非法候选:${current})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "arbitrateSelection", "pick", badIdDetail);
+      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+      return {
+        done: await concludeUncovered(sandbox, {
+          text: `${poolLabel}池仲裁返回非法候选:${current}`,
+          steps: ctx.attempted.size,
+          escalated,
+          reason: `仲裁返回非法候选 id（不在快照中）:${current}`,
+        }),
+        escalated,
+        deadRetries,
+      };
+    }
+    const pickedDetail = `${poolLabel}池选中候选 ${current}${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`;
+    stepLog(sandbox, target.title, "仲裁", pickedDetail);
+    emitStep(onProgress, "arbitrateSelection", "pick", pickedDetail, {
+      pool: gradedCandidateEvidence(grading),
+      reasoning: arbitration.reasoning ?? null,
+      selected: current,
+    });
+  }
+
+  // 3. Transfer → digest → finalize / diagnose, with limited retries for dead
+  //    links and off-target packs. A dead link (nothing landed) is a CHEAP
+  //    fail-loud probe — it must NOT consume the transfer-attempt budget, so it
+  //    is counted separately (MAX_DEAD_LINK_RETRIES) and only a real materialized
+  //    transfer (attempted) counts toward THIS pool's budget.
+  while (
+    current !== null &&
+    ctx.attempted.size - poolTransferBase < attemptBudget &&
+    deadRetries < MAX_DEAD_LINK_RETRIES
+  ) {
+    ctx.tried.add(current);
+    const transferDetail = `${poolLabel}池候选 ${current}(${ctx.attempted.size - poolTransferBase + 1}/${attemptBudget} 次转存)`;
+    stepLog(sandbox, target.title, "转存", transferDetail);
+    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current });
+    const transfer = await sandbox.transferCandidate({
+      snapshotId: candidateSnapshotId(view, current),
+      candidateId: current,
+    });
+    // ★ 落地回合交 landing.ts 的 LandingVerdict 状态机收口（design §5）。
+    const closed = await closeOutTvLanding({
+      sandbox,
+      model,
+      target,
+      onProgress,
+      seasons,
+      needCodes,
+      onDiskCodes,
+      grading,
+      tried: ctx.tried,
+      attempted: ctx.attempted,
+      current,
+      escalated,
+      deadRetries,
+      transfer,
+      ...(ctx.episodeAirDates !== undefined ? { episodeAirDates: ctx.episodeAirDates } : {}),
+    });
+    if (closed.done) {
+      return { done: closed.done, escalated: closed.escalated, deadRetries: closed.deadRetries };
+    }
+    escalated = closed.escalated;
+    deadRetries = closed.deadRetries;
+    current = closed.next;
+  }
+  return { done: null, escalated, deadRetries };
+}
 
 export async function runFastPathAcquisition(options: FastPathOptions): Promise<FastPathResult> {
   const { sandbox, model, target, isChineseNative, onProgress } = options;
@@ -136,16 +305,34 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     isChineseNative,
   });
 
+  // 共享记账：跨池共享 tried / deadRetries / escalated；attempted 是「当前做转存的池」的
+  // 真实转存集合(阶段1 primary 用 MAX_TRANSFER_ATTEMPTS;阶段2 兜底用 MAX_FALLBACK_TRANSFER_ATTEMPTS)。
+  // 两阶段各按自己的预算跑循环,互不挤占 —— primary 试穷不会让兜底无配额可转。
+  const tried = new Set<string>();
+  const attempted = new Set<string>();
+  let deadRetries = 0;
+  let escalated = false;
+  let fallbackRounds = 0;
+
+  // primary 池真实转存数(阶段1 结束时的 attempted.size);阶段2 结账行用它做差。
+  let primaryTransfers = 0;
+
+  const gradeCounts = { A: 0, B: 0, C: 0, D: 0 };
+  for (const candidate of grading.ranked) gradeCounts[candidate.grade] += 1;
+  const primaryHasA = gradeCounts.A > 0;
+
   stepLog(
     sandbox,
     target.title,
     "评分决策",
     `${gradeDistribution(grading)} → ${
       grading.uniqueTopGrade
-        ? "唯一 A,可盲转"
-        : target.aliases.length > 0
-          ? "无唯一 A,转别名兜底(预算 ≤3 轮)"
-          : "无唯一 A 且无别名,直接进入选片"
+        ? "唯一 A,primary 池盲转"
+        : primaryHasA
+          ? `有 A 但非唯一(${gradeCounts.A} 个),primary 池优先仲裁;转存不足才走别名兜底`
+          : target.aliases.length > 0
+            ? "无 A 候选,直接转入别名兜底(预算 ≤3 轮)"
+            : "无 A 且无别名,直接进入选片"
     }`,
   );
   if (grading.ranked.length > 0) {
@@ -155,20 +342,78 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     onProgress,
     "gradingDecision",
     "search",
-    `uniqueA=${grading.uniqueTopGrade ? "yes" : "no"}(${gradeDistribution(grading)})`,
+    `uniqueA=${grading.uniqueTopGrade ? "yes" : "no"} A=${gradeCounts.A}(${gradeDistribution(grading)})`,
     { candidates: gradedCandidateEvidence(grading), uniqueTopGrade: grading.uniqueTopGrade },
   );
 
-  // 1b. Aliases 兜底重搜: the primary search recalled by target.title ONLY — when
-  //     it comes back empty, or grades without a unique A (the 泰德·拉索 case: the
-  //     title search drowns in unrelated hits while the aliases' 足球教练 never
-  //     gets searched), re-search with each alias until a unique A-grade appears
-  //     or the budget (≤3 rounds) runs out. primeRawSnapshot OVERWRITES the
-  //     snapshot, so grading/arbitration/transfer after a fallback read the NEW
-  //     evidence — unless the whole fallback fails AND primary had candidates
-  //     (§E: restore the primary evidence instead of discarding it).
-  let fallbackRounds = 0;
-  if ((raw.candidates.length === 0 || !grading.uniqueTopGrade) && target.aliases.length > 0) {
+  // primary 空且无别名:无任何证据可转 → 零 LLM 诚实终止(旧行为;空池但有别名时,
+  // 阶段2 的 aliasesFallbackReSearch 会去兜底「搜得到」的新证据,不在此处终止)。
+  if (grading.ranked.length === 0 && target.aliases.length === 0) {
+    const doneDetail = "暂无资源(快照为空)";
+    stepLog(sandbox, target.title, "结论", doneDetail);
+    emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+    return concludeUncovered(sandbox, {
+      text: "无候选(raw snapshot 为空)",
+      steps: 0,
+      escalated: false,
+      reason: "raw snapshot 为空",
+    });
+  }
+
+  // primary 池评分步骤(池非空才 emit;空池有别名时由阶段2 的评分步骤接管,序列不重复)。
+  if (grading.ranked.length > 0) {
+    const primaryGradingDetail = `A ${gradeCounts.A} / B ${gradeCounts.B} / C ${gradeCounts.C} / D ${gradeCounts.D}`;
+    stepLog(sandbox, target.title, "评分", primaryGradingDetail);
+    stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
+    emitStep(onProgress, "gradeCandidates", "search", primaryGradingDetail, {
+      candidates: gradedCandidateEvidence(grading),
+      uniqueTopGrade: grading.uniqueTopGrade,
+      fallbackRounds,
+    });
+  }
+
+  const ctx: TvPoolContext = {
+    sandbox,
+    model,
+    target,
+    onProgress,
+    seasons,
+    needCodes,
+    onDiskCodes,
+    tried,
+    attempted,
+    deadRetries,
+    escalated,
+    ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
+  };
+
+  // ★ 阶段1 —— primary 池:只要 primary 有 A 候选(或根本没有别名可兜底)就先转存 primary,
+  //    绝不在有 A 时提前跳兜底(PR #25:反「primary 14 个 A 却被兜底池替换」)。
+  if (primaryHasA || target.aliases.length === 0) {
+    const primaryOutcome = await runTvCandidatePhase(
+      ctx,
+      raw,
+      grading,
+      MAX_TRANSFER_ATTEMPTS,
+      "primary",
+    );
+    escalated = primaryOutcome.escalated;
+    deadRetries = primaryOutcome.deadRetries;
+    if (primaryOutcome.done) {
+      const checkoutDetail =
+        `转存 primary ${ctx.attempted.size}/${MAX_TRANSFER_ATTEMPTS} · 兜底转存 0/${MAX_FALLBACK_TRANSFER_ATTEMPTS} · ` +
+        `死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
+      stepLog(sandbox, target.title, "结账", checkoutDetail);
+      emitStep(onProgress, "runCheckout", "finalize", checkoutDetail);
+      return primaryOutcome.done;
+    }
+    primaryTransfers = ctx.attempted.size;
+    // primary 池试尽仍未覆盖 → 落到兜底池(若有别名)。
+  }
+
+  // ★ 阶段2 —— 兜底池:仅当 primary 无 A 候选、或 primary 转存预算耗尽仍未覆盖时启动。
+  //    独立的转存预算(MAX_FALLBACK_TRANSFER_ATTEMPTS),primary 试穷不影响兜底配额。
+  if (target.aliases.length > 0) {
     const fallback = await aliasesFallbackReSearch({
       sandbox,
       title: target.title,
@@ -184,179 +429,80 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
           isChineseNative,
         }),
     });
-    raw = fallback.view;
-    grading = fallback.grading;
     fallbackRounds = fallback.rounds;
+    const fallbackView = fallback.view;
+    grading = fallback.grading;
     if (fallback.restored) {
       stepLog(
         sandbox,
         target.title,
         "证据恢复",
-        `合并 primary+兜底 证据池 ${raw.candidates.length} 条候选(兜底共搜 ${fallback.rounds} 轮,零额外 PanSou 请求)继续仲裁`,
+        `合并 primary+兜底 证据池 ${fallbackView.candidates.length} 条候选(兜底共搜 ${fallback.rounds} 轮,零额外 PanSou 请求)继续仲裁`,
       );
     }
-  }
 
-  if (raw.candidates.length === 0) {
-    const doneDetail = "暂无资源(快照为空)";
-    stepLog(sandbox, target.title, "结论", doneDetail);
-    emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
-    return concludeUncovered(sandbox, {
-      text: "无候选(raw snapshot 为空)",
-      steps: 0,
-      escalated: false,
-      reason: "raw snapshot 为空",
-    });
-  }
-
-  const gradeCounts = { A: 0, B: 0, C: 0, D: 0 };
-  for (const candidate of grading.ranked) gradeCounts[candidate.grade] += 1;
-  const gradingDetail = `A ${gradeCounts.A} / B ${gradeCounts.B} / C ${gradeCounts.C} / D ${gradeCounts.D}`;
-  stepLog(sandbox, target.title, "评分", gradingDetail);
-  stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
-  emitStep(onProgress, "gradeCandidates", "search", gradingDetail, {
-    candidates: gradedCandidateEvidence(grading),
-    uniqueTopGrade: grading.uniqueTopGrade,
-    fallbackRounds,
-  });
-
-  // 2. Pick the first candidate: a unique A-grade transfers blind; otherwise the
-  //    selection arbitrator picks one (escalation #1).
-  let escalated = false;
-  let current: string | null;
-  if (grading.uniqueTopGrade && grading.top) {
-    current = grading.top.id;
-    const pickDetail = `唯一 A 盲转:候选 ${current}(${grading.top.title})`;
-    stepLog(sandbox, target.title, "选片", pickDetail);
-    emitStep(onProgress, "pickCandidate", "pick", pickDetail, { candidateId: current, title: grading.top.title });
-  } else {
-    escalated = true;
-    const arbitration = await arbitrateSelection({
-      model,
-      summary: summarizeGrading(grading),
-      title: target.title,
-      seasons,
-    });
-    current = arbitration.candidateId;
-    if (current === null) {
-      const declineDetail = `放弃:${arbitration.reasoning || "无可用候选"}`;
-      stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
-      const doneDetail = `暂无资源(仲裁放弃:${arbitration.reasoning || "无可用候选"})`;
+    if (fallbackView.candidates.length === 0) {
+      const doneDetail = "暂无资源(快照为空)";
       stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "arbitrateSelection", "pick", declineDetail, {
-        pool: gradedCandidateEvidence(grading),
-        reasoning: arbitration.reasoning ?? null,
-        selected: null,
-      });
-      const declineCheckout = `转存 0/${MAX_TRANSFER_ATTEMPTS} · 死链探测 0/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${
-        1 + fallbackRounds
-      } 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:有(选片仲裁,放弃)`;
-      stepLog(sandbox, target.title, "结账", declineCheckout);
-      emitStep(onProgress, "runCheckout", "finalize", declineCheckout);
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+      const exhaustedCheckout0 =
+        `转存 primary ${primaryTransfers}/${MAX_TRANSFER_ATTEMPTS} · 兜底转存 ${ctx.attempted.size - primaryTransfers}/${MAX_FALLBACK_TRANSFER_ATTEMPTS} · ` +
+        `死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
+      stepLog(sandbox, target.title, "结账", exhaustedCheckout0);
+      emitStep(onProgress, "runCheckout", "finalize", exhaustedCheckout0);
       return concludeUncovered(sandbox, {
-        text: `仲裁放弃:${arbitration.reasoning || "无可用候选"}`,
-        steps: 0,
+        text: "无候选(raw snapshot 为空)",
+        steps: ctx.attempted.size,
         escalated,
-        reason: arbitration.reasoning || "无可用候选",
+        reason: "raw snapshot 为空",
       });
     }
-    // Defense-in-depth: the model only sees the graded summary and may return a
-    // TITLE or a made-up id instead of a real candidate id. A bogus id must never
-    // reach transferCandidate's SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT throw and blow
-    // up the whole run — treat it like a declined arbitration (safe uncover).
-    if (!raw.candidates.some((candidate) => candidate.id === current)) {
-      const badIdDetail = `返回非法候选 id:${current}`;
-      stepLog(sandbox, target.title, "仲裁", badIdDetail, "error");
-      const doneDetail = `暂无资源(仲裁返回非法候选:${current})`;
-      stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "arbitrateSelection", "pick", badIdDetail);
-      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
-      return concludeUncovered(sandbox, {
-        text: `仲裁返回非法候选:${current}`,
-        steps: 0,
-        escalated,
-        reason: `仲裁返回非法候选 id（不在快照中）:${current}`,
-      });
-    }
-    const pickedDetail = `选中候选 ${current}${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`;
-    stepLog(sandbox, target.title, "仲裁", pickedDetail);
-    emitStep(onProgress, "arbitrateSelection", "pick", pickedDetail, {
-      pool: gradedCandidateEvidence(grading),
-      reasoning: arbitration.reasoning ?? null,
-      selected: current,
-    });
-  }
 
-  // 3. Transfer → digest → finalize / diagnose, with limited retries for dead
-  //    links and off-target packs. A dead link (nothing landed) is a CHEAP
-  //    fail-loud probe — it must NOT consume the transfer-attempt budget, so it
-  //    is counted separately (MAX_DEAD_LINK_RETRIES) and only a real materialized
-  //    transfer (attempted) counts toward MAX_TRANSFER_ATTEMPTS.
-  const attempted = new Set<string>();
-  const tried = new Set<string>();
-  let deadRetries = 0;
-  while (
-    current !== null &&
-    attempted.size < MAX_TRANSFER_ATTEMPTS &&
-    deadRetries < MAX_DEAD_LINK_RETRIES
-  ) {
-    tried.add(current);
-    const transferDetail = `候选 ${current}(第 ${attempted.size + 1}/${MAX_TRANSFER_ATTEMPTS} 次转存)`;
-    stepLog(sandbox, target.title, "转存", transferDetail);
-    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current });
-    const transfer = await sandbox.transferCandidate({
-      snapshotId: candidateSnapshotId(raw, current),
-      candidateId: current,
+    const fbCounts = { A: 0, B: 0, C: 0, D: 0 };
+    for (const candidate of grading.ranked) fbCounts[candidate.grade] += 1;
+    const fbDetail = `兜底池 A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D}`;
+    stepLog(sandbox, target.title, "评分", fbDetail);
+    stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
+    emitStep(onProgress, "gradeCandidates", "search", fbDetail, {
+      candidates: gradedCandidateEvidence(grading),
+      uniqueTopGrade: grading.uniqueTopGrade,
+      fallbackRounds,
     });
-    // ★ 落地回合交 landing.ts 的 LandingVerdict 状态机收口（design §5）。
-    const closed = await closeOutTvLanding({
-      sandbox,
-      model,
-      target,
-      onProgress,
-      seasons,
-      needCodes,
-      onDiskCodes,
+
+    const fallbackOutcome = await runTvCandidatePhase(
+      ctx,
+      fallbackView,
       grading,
-      tried,
-      attempted,
-      current,
-      escalated,
-      deadRetries,
-      transfer,
-      ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
-    });
-    if (closed.done) {
-      // 结账行的「AI 升级」以本轮真实值为准:done 分支此前用外层旧 escalated,
-      // 首轮落盘即经仲裁收尾(映射+诊断各一次)时会误报「无」。
+      MAX_FALLBACK_TRANSFER_ATTEMPTS,
+      "兜底",
+    );
+    escalated = fallbackOutcome.escalated;
+    deadRetries = fallbackOutcome.deadRetries;
+    if (fallbackOutcome.done) {
       const checkoutDetail =
-        `转存 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} · 死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · ` +
-        `PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated || closed.escalated ? "有" : "无"}`;
+        `转存 primary ${primaryTransfers}/${MAX_TRANSFER_ATTEMPTS} · 兜底转存 ${ctx.attempted.size - primaryTransfers}/${MAX_FALLBACK_TRANSFER_ATTEMPTS} · ` +
+        `死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
       stepLog(sandbox, target.title, "结账", checkoutDetail);
       emitStep(onProgress, "runCheckout", "finalize", checkoutDetail);
-      return closed.done;
+      return fallbackOutcome.done;
     }
-    escalated = closed.escalated;
-    deadRetries = closed.deadRetries;
-    current = closed.next;
   }
 
   // Candidates exhausted or attempt cap hit → wipe staging and report unmet.
   if ((await sandbox.inspectStaging()).length > 0) {
     await sandbox.discardStaging();
   }
-  const exhaustedDetail = `缺集(尝试 ${attempted.size} 次转存,扫过 ${tried.size} 个候选仍未覆盖)`;
+  const exhaustedDetail = `缺集(尝试 ${ctx.attempted.size} 次转存,扫过 ${tried.size} 个候选仍未覆盖)`;
   stepLog(sandbox, target.title, "结论", exhaustedDetail);
   emitStep(onProgress, "reportNoCoverage", "finalize", exhaustedDetail);
   const exhaustedCheckout =
-    `转存 ${attempted.size}/${MAX_TRANSFER_ATTEMPTS} · 死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · ` +
-    `PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
+    `转存 primary ${primaryTransfers}/${MAX_TRANSFER_ATTEMPTS} · 兜底转存 ${ctx.attempted.size - primaryTransfers}/${MAX_FALLBACK_TRANSFER_ATTEMPTS} · ` +
+    `死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
   stepLog(sandbox, target.title, "结账", exhaustedCheckout);
   emitStep(onProgress, "runCheckout", "finalize", exhaustedCheckout);
   return {
-    text: `fast path 未覆盖(尝试 ${attempted.size} 次转存)`,
-    steps: attempted.size,
+    text: `fast path 未覆盖(尝试 ${ctx.attempted.size} 次转存)`,
+    steps: ctx.attempted.size,
     coverage: await sandbox.finish(),
     escalated,
   };

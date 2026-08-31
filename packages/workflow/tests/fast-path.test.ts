@@ -471,7 +471,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     ]);
   });
 
-  it("标题搜索无唯一 A（两个 A 平级）时用 aliases 兜底，命中唯一 A 直接盲转", async () => {
+  it("primary 有 A(非唯一)→ 先在 primary 池仲裁转存，不提前跳兜底(PR #25)", async () => {
     let searches = 0;
     const fallbackTarget: TvAnimeTarget = {
       ...target,
@@ -480,12 +480,12 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     const { sandbox, s1, storage } = await createSetup({
       candidates: [
         { id: "c1", title: "狂飙.S01E01.1080p.中字" },
-        { id: "c2", title: "狂飙.S01E02.1080p.中字" }, // 两个 A → 无唯一 top → 触发兜底
+        { id: "c2", title: "狂飙.S01E02.1080p.中字" }, // 两个 A → 无唯一 top → primary 仲裁
       ],
       extraResults: {
         "the knockout": [{ id: "c3", title: "The Knockout.S01E01.1080p.中字" }],
       },
-      packs: { c3: { files: [{ path: "The Knockout.S01E01.mkv", sizeBytes: 1_000_000_000 }] } },
+      packs: { c1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1_000_000_000 }] } },
       onSearch: () => {
         searches += 1;
       },
@@ -493,15 +493,16 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
 
     const result = await runFastPathAcquisition({
       sandbox,
-      model: throwModel(),
+      model: textModel('{"candidateId":"c1","reasoning":"c1 正是缺集"}'),
       target: fallbackTarget,
       isChineseNative: false,
     });
 
-    expect(result.escalated).toBe(false); // 兜底命中唯一 A → 不再仲裁，零 LLM
+    // PR #25:primary 有 A 必须先自己仲裁转存;aliases 兜底只在无 A 或转存失败后才启动。
+    expect(result.escalated).toBe(true); // primary 池仲裁
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["S01E01"]);
-    expect(searches).toBe(2);
+    expect(searches).toBe(1); // 只有 primary 预搜,兜底没触发
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
     ]);
@@ -630,30 +631,31 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect(searches.length).toBe(3);
   });
 
-  it("兜底:primary 无唯一 A + alias 命中唯一 A → 直接转存(零 LLM)", async () => {
+  it("兜底:primary 有 A(非唯一)→ 先 primary 仲裁转存;兜底只在 primary 试尽后接棒(PR #25)", async () => {
     const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
       results: {
         狂飙: [
           { id: "c1", title: "狂飙.S01E01.1080p.中字" },
           { id: "c2", title: "狂飙.S01E02.1080p.中字" },
-        ], // 两个同题 A → 无唯一 top → 触发兜底
-        足球教练: [{ id: "c3", title: "狂飙.S01E01.1080p.中字" }], // 译名 → 唯一 A
+        ], // 两个同题 A → 无唯一 top → primary 池仲裁
+        足球教练: [{ id: "c3", title: "狂飙.S01E01.1080p.中字" }], // 兜底唯一 A(不会用到)
       },
-      packs: { c3: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
+      packs: { c1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
       aliases: ["足球教练"],
     });
 
     const result = await runFastPathAcquisition({
       sandbox,
-      model: throwModel(),
+      model: textModel('{"candidateId":"c1","reasoning":"c1 是缺集"}'),
       target: aliasTarget,
       isChineseNative: false,
     });
 
-    expect(result.escalated).toBe(false);
+    // PR #25:primary 有 A → 先自己仲裁转存,不提前跳兜底。
+    expect(result.escalated).toBe(true);
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["S01E01"]);
-    expect(searches.length).toBe(2); // 1 primary + 1 alias
+    expect(searches.length).toBe(1); // 只有 primary,兜底没触发
   });
 
   it("兜底预算 ≤3:只重搜 3 个 alias,仲裁基于最后一个快照", async () => {
@@ -763,14 +765,14 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect(searches.length).toBe(3); // primary + 失败轮 + 成功轮
   });
 
-  it("兜底全失败且 primary 有候选 → 恢复 primary 快照继续仲裁(不判暂无资源)(狂飙实证)", async () => {
+  it("primary 有 A 时兜底不再先于仲裁启动;primary 试尽后才接棒兜底(PR #25)", async () => {
     const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
       results: {
         狂飙: [
           { id: "c1", title: "狂飙.S01E01.1080p.中字" },
           { id: "c2", title: "狂飙.S01E02.1080p.中字" },
-        ], // 两个同题 A → 无唯一 top → 触发兜底
-        "The Knockout": [], // 兜底命中 0 → 旧行为:最后一个兜底快照为空覆盖 primary → 误报「暂无资源(快照为空)」
+        ], // 两个同题 A → primary 池直接仲裁,兜底无机会启动
+        "The Knockout": [], // 兜底结果(命中 0)根本不会被搜
       },
       packs: { c1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
       aliases: ["The Knockout"],
@@ -783,12 +785,12 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
       isChineseNative: false,
     });
 
-    expect(result.escalated).toBe(true); // 回到 primary 走仲裁(而非直接放弃)
-    expect(result.coverage.coverageMet).toBe(true); // 不是「暂无资源(快照为空)」
+    expect(result.escalated).toBe(true); // primary 仲裁
+    expect(result.coverage.coverageMet).toBe(true);
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
     ]);
-    expect(searches.length).toBe(2); // 1 primary + 1 兜底;合并证据池零额外搜索
+    expect(searches.length).toBe(1); // primary 直接仲裁成功,兜底(甚至搜索)都没启动
   });
 
   it("§E 合并池:兜底轮的好候选与 primary 一起进仲裁,转存回各自来源快照(母狮案)", async () => {
@@ -840,6 +842,49 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
       "狂飙.S01E01.mkv",
     ]);
     expect(searches.length).toBe(1); // 折叠不引入额外搜索
+  });
+
+  it("PR #25 预算分开:primary 3 次转存全废后,兜底池仍用自己的 3 次配额转存成功", async () => {
+    // primary 两个 A(c1/c2)都被诊断 reject(off-target)→ 各自占 1 次 primary 预算;
+    // 循环在预算(3)内会自然推进 nextCandidate,但本例 primary 只有 2 个候选 → 扫完
+    // 试尽后仍未覆盖 → 兜底池启动。兜底搜到唯一 A(c3) → 用兜底自己的预算盲转成功。
+    // 旧行为:兜底与 primary 共用 MAX_TRANSFER_ATTEMPTS=3,primary 2 次失败后兜底
+    // 只剩 1 次配额;新行为:兜底独立 3 次,primary 试穷也不挤占。
+    const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
+      results: {
+        狂飙: [
+          { id: "c1", title: "狂飙.S01E01.1080p.中字" },
+          { id: "c2", title: "狂飙.S01E02.1080p.中字" }, // 两个 A → primary 仲裁
+        ],
+        足球教练: [{ id: "c3", title: "狂飙.S01E01.1080p.中字" }], // 兜底唯一 A
+      },
+      packs: {
+        // c1/c2 都落成 off-target(季号错误)→ 诊断 reject_other → 换下一候选
+        c1: { files: [{ path: "狂飙.S02E01.mkv", sizeBytes: 1 }] },
+        c2: { files: [{ path: "狂飙.S02E01.mkv", sizeBytes: 1 }] },
+        c3: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] },
+      },
+      aliases: ["足球教练"],
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: sequentialModel([
+        '{"candidateId":"c1","reasoning":"选 c1"}', // 选片仲裁(primary 两 A)
+        '{"action":"retry_other","reasoning":"季号错"}', // c1 off-target
+        '{"action":"retry_other","reasoning":"季号错"}', // c2 off-target
+      ]),
+      target: aliasTarget,
+      isChineseNative: false,
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual(["S01E01"]);
+    // 兜底池独立预算:primary 2 次失败后兜底仍有配额转 c3。
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+    ]);
+    expect(searches.length).toBe(2); // primary 预搜 1 + 兜底重搜 1
   });
 });
 
@@ -894,7 +939,7 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect(steps[1]!.activity).toBe("候选 1 条");
     expect(steps[5]!.args.candidateId).toBe("c1");
     expect(steps[9]!.activity).toContain("入库");
-    expect(steps[10]!.activity).toContain("转存 1/3");
+    expect(steps[10]!.activity).toContain("转存 primary 1/3"); // 结账行两池分别记账(PR #25)
     expect(steps[10]!.activity).toContain("PanSou 搜索 1 次(primary 1 + 兜底 0)");
     // 可观测性增强(L1/L2/L4):决策与证据 payload 随事件走 agent_steps
     expect(steps[2]!.args.uniqueTopGrade).toBe(true);
