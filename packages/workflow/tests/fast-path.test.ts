@@ -844,25 +844,27 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect(searches.length).toBe(1); // 折叠不引入额外搜索
   });
 
-  it("PR #25 预算分开:primary 3 次转存全废后,兜底池仍用自己的 3 次配额转存成功", async () => {
-    // primary 两个 A(c1/c2)都被诊断 reject(off-target)→ 各自占 1 次 primary 预算;
-    // 循环在预算(3)内会自然推进 nextCandidate,但本例 primary 只有 2 个候选 → 扫完
-    // 试尽后仍未覆盖 → 兜底池启动。兜底搜到唯一 A(c3) → 用兜底自己的预算盲转成功。
-    // 旧行为:兜底与 primary 共用 MAX_TRANSFER_ATTEMPTS=3,primary 2 次失败后兜底
-    // 只剩 1 次配额;新行为:兜底独立 3 次,primary 试穷也不挤占。
+  it("PR #25 预算分开:primary 烧满 3/3 转存预算后,兜底池仍用自己的 3 次配额转存成功", async () => {
+    // primary 三个 A(c1/c2/c3)全部落 off-target(季号错)→ 诊断 reject_other 逐个换,
+    // primary 转存预算 **真烧满 3/3**(旧共享预算:烧完就没配额了,兜底无法再转) →
+    // 兜底池启动,兜底搜到唯一 A(c4) → 用兜底**独立**的 3 次配额盲转成功。
+    // 核心不变量:primary 试穷不挤占兜底配额(总上限 6)。
+    let checkout: string | null = null;
     const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
       results: {
         狂飙: [
           { id: "c1", title: "狂飙.S01E01.1080p.中字" },
-          { id: "c2", title: "狂飙.S01E02.1080p.中字" }, // 两个 A → primary 仲裁
+          { id: "c2", title: "狂飙.S01E02.1080p.中字" },
+          { id: "c3", title: "狂飙.S01E03.1080p.中字" }, // 三个 A → primary 仲裁
         ],
-        足球教练: [{ id: "c3", title: "狂飙.S01E01.1080p.中字" }], // 兜底唯一 A
+        足球教练: [{ id: "c4", title: "狂飙.S01E01.1080p.中字" }], // 兜底唯一 A
       },
       packs: {
-        // c1/c2 都落成 off-target(季号错误)→ 诊断 reject_other → 换下一候选
+        // c1/c2/c3 都落成 off-target(季号错误)→ 诊断 reject_other → 换下一候选
         c1: { files: [{ path: "狂飙.S02E01.mkv", sizeBytes: 1 }] },
         c2: { files: [{ path: "狂飙.S02E01.mkv", sizeBytes: 1 }] },
-        c3: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] },
+        c3: { files: [{ path: "狂飙.S02E01.mkv", sizeBytes: 1 }] },
+        c4: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] },
       },
       aliases: ["足球教练"],
     });
@@ -870,21 +872,75 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     const result = await runFastPathAcquisition({
       sandbox,
       model: sequentialModel([
-        '{"candidateId":"c1","reasoning":"选 c1"}', // 选片仲裁(primary 两 A)
-        '{"action":"retry_other","reasoning":"季号错"}', // c1 off-target
-        '{"action":"retry_other","reasoning":"季号错"}', // c2 off-target
+        '{"candidateId":"c1","reasoning":"选 c1"}', // 选片仲裁(primary 三 A)
+        '{"action":"retry_other","reasoning":"季号错"}', // c1 → c2
+        '{"action":"retry_other","reasoning":"季号错"}', // c2 → c3
+        '{"action":"retry_other","reasoning":"季号错"}', // c3 → 试尽 → 兜底
       ]),
       target: aliasTarget,
       isChineseNative: false,
+      onProgress: (event) => {
+        if (event.toolName === "runCheckout") checkout = event.activity;
+      },
     });
 
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["S01E01"]);
-    // 兜底池独立预算:primary 2 次失败后兜底仍有配额转 c3。
+    // 兜底池独立预算:primary 3/3 全废后兜底仍转成 c4。
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
     ]);
     expect(searches.length).toBe(2); // primary 预搜 1 + 兜底重搜 1
+    // 结账行两池分别记账:primary 3/3、兜底 1/3。
+    expect(checkout).toContain("转存 primary 3/3");
+    expect(checkout).toContain("兜底转存 1/3");
+  });
+
+  it("PR #25 死链探测跨两阶段共享:primary 死链 + 兜底死链累计 10 次上限后诚实终止(P1-1)", async () => {
+    // 旧 bug:TV 阶段2 从 stale ctx(deadRetries=0)起算 → 死链总探测可达 20(+自身 10 再 +阶段1 10)。
+    // 修复后:阶段2 继承阶段1 的 deadRetries,全 run 累计 10 次上限。
+    // 场景:primary 先探 3 次死链(3 个 A 候选,未到 10)→ 预算未耗(死链不占)但池耗尽 → 兜底;
+    //       兜底 8 个死链候选 → 从 3 起算,第 7 个兜底候选时累计 10 → 终止,不探第 8 个。
+    // 若旧 bug(阶段2 从 0 起算),兜底会探满自己的 10 次 → 总 13 次 > 10 红线。
+    let deadProbes = 0;
+    const { sandbox, aliasTarget, searches } = await createAliasSetup({
+      results: {
+        狂飙: [
+          { id: "c1", title: "狂飙.S01E01.1080p.中字" },
+          { id: "c2", title: "狂飙.S01E02.1080p.中字" },
+          { id: "c3", title: "狂飙.S01E03.1080p.中字" }, // 3 个 A → primary 仲裁选 c1
+        ],
+        足球教练: [
+          { id: "f1", title: "狂飙.S01E01.1080p.中字" },
+          { id: "f2", title: "狂飙.S01E02.1080p.中字" },
+          { id: "f3", title: "狂飙.S01E03.1080p.中字" },
+          { id: "f4", title: "狂飙.S01E04.1080p.中字" },
+          { id: "f5", title: "狂飙.S01E05.1080p.中字" },
+          { id: "f6", title: "狂飙.S01E06.1080p.中字" },
+          { id: "f7", title: "狂飙.S01E07.1080p.中字" },
+          { id: "f8", title: "狂飙.S01E08.1080p.中字" }, // 兜底 8 个(全死链 → 累计 10 上限)
+        ],
+      },
+      packs: {}, // 无任何包 → 全部死链
+      aliases: ["足球教练"],
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: textModel('{"candidateId":"c1","reasoning":"选 c1"}'),
+      target: aliasTarget,
+      isChineseNative: false,
+      onProgress: (event) => {
+        if (event.toolName === "transferCandidate" && event.activity?.includes("死链")) {
+          deadProbes += 1;
+        }
+      },
+    });
+
+    // 全 run 死链探测累计 10 次上限(primary 3 + 兜底 7),诚实无覆盖。
+    expect(deadProbes).toBe(10);
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.text).toContain("未覆盖");
   });
 });
 

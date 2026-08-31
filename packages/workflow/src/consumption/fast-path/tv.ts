@@ -118,9 +118,7 @@ async function runTvCandidatePhase(
         reasoning: arbitration.reasoning ?? null,
         selected: null,
       });
-      const declineCheckout = `转存 primary ${poolTransferBase}/${MAX_TRANSFER_ATTEMPTS} · 兜底转存 ${ctx.attempted.size - poolTransferBase}/${MAX_FALLBACK_TRANSFER_ATTEMPTS} · 死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · AI 升级:有(${poolLabel}池选片仲裁,放弃)`;
-      stepLog(sandbox, target.title, "结账", declineCheckout);
-      emitStep(onProgress, "runCheckout", "finalize", declineCheckout);
+      // 结账行由主流程 done 分支统一 emit(此处不再重复;旧代码此路径单条结账,P1-2 修复)。
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return {
         done: await concludeUncovered(sandbox, {
@@ -470,7 +468,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     });
 
     const fallbackOutcome = await runTvCandidatePhase(
-      ctx,
+      { ...ctx, deadRetries, escalated },
       fallbackView,
       grading,
       MAX_FALLBACK_TRANSFER_ATTEMPTS,

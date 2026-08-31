@@ -624,20 +624,22 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect(searches.length).toBe(2); // 1 primary + 1 兜底;恢复 primary 零额外搜索
   });
 
-  it("PR #25 预算分开:primary 转存预算耗尽后,兜底池仍用自己的配额转存成功(movie twin)", async () => {
-    // primary 两个 A(c1/c2)都被诊断 reject(off-target)→ 各自占 1 次 primary 预算;
-    // primary 试尽后仍未覆盖 → 兜底池启动,兜底搜到唯一 A(c3) → 用兜底自己的预算盲转成功。
-    // 旧行为:兜底与 primary 共用 MAX_TRANSFER_ATTEMPTS=3,primary 失败后兜底配额被挤占。
+  it("PR #25 预算分开:primary 烧满 3/3 转存预算后,兜底池仍用自己的配额转存成功(movie twin)", async () => {
+    // primary 三个 A(c1/c2/c3)全部落「非单部正片/脏包」(两张视频碟)→ 诊断 reject_other
+    // 逐个换,primary 转存预算 **真烧满 3/3**(旧共享预算:烧完就没配额了,兜底无法再转) →
+    // 兜底池启动,兜底搜到唯一 A(c4) → 用兜底**独立**的 3 次配额盲转成功。
+    // 核心不变量:primary 试穷不挤占兜底配额。
     const { sandbox, movieDir, storage, aliasTarget, searches } = await createMovieAliasSetup({
       results: {
         流浪地球: [
           { id: "c1", title: "流浪地球.2019.4K.中字" },
-          { id: "c2", title: "流浪地球.2019.1080P.中字" }, // 两个 A → primary 仲裁
+          { id: "c2", title: "流浪地球.2019.1080P.中字" },
+          { id: "c3", title: "流浪地球.2019.BluRay.中字" }, // 三个 A → primary 仲裁
         ],
-        "The Wandering Earth": [{ id: "c3", title: "The Wandering Earth.2019.4K.中字" }], // 兜底唯一 A
+        "The Wandering Earth": [{ id: "c4", title: "The Wandering Earth.2019.4K.中字" }], // 兜底唯一 A
       },
       packs: {
-        // c1/c2 都落成「非单部正片/脏包」(两张视频碟)→ 诊断 reject_other → primary 试尽
+        // c1/c2/c3 都落成「非单部正片/脏包」(两张视频碟)→ 诊断 reject_other → primary 试尽
         c1: {
           files: [
             { path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 },
@@ -650,7 +652,13 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
             { path: "流浪地球.2019.1080p.Extra.mkv", sizeBytes: 1_000_000_000 },
           ],
         },
-        c3: { files: [{ path: "The Wandering Earth.2019.4K.mkv", sizeBytes: 2_000_000_000 }] },
+        c3: {
+          files: [
+            { path: "流浪地球.2019.BluRay.mkv", sizeBytes: 2_000_000_000 },
+            { path: "流浪地球.2019.BluRay.Extra.mkv", sizeBytes: 1_000_000_000 },
+          ],
+        },
+        c4: { files: [{ path: "The Wandering Earth.2019.4K.mkv", sizeBytes: 2_000_000_000 }] },
       },
       aliases: ["The Wandering Earth"],
     });
@@ -658,16 +666,17 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
     const result = await runMovieFastPathAcquisition({
       sandbox,
       model: sequentialModel([
-        '{"candidateId":"c1","reasoning":"选 c1"}', // 选片仲裁(primary 两 A)
-        '{"action":"retry_other","reasoning":"多影片脏包"}', // c1 off-target
-        '{"action":"retry_other","reasoning":"多影片脏包"}', // c2 off-target
+        '{"candidateId":"c1","reasoning":"选 c1"}', // 选片仲裁(primary 三 A)
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c1 → c2
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c2 → c3
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c3 → 试尽 → 兜底
       ]),
       target: aliasTarget,
     });
 
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["MOVIE"]);
-    // 兜底池独立预算:primary 试穷后兜底仍有配额转 c3。
+    // 兜底池独立预算:primary 3/3 全废后兜底仍转成 c4。
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);
