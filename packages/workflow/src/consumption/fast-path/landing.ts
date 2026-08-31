@@ -34,10 +34,10 @@ import {
  *   - "passed": 映射重建 digest 通过 → 调用方应像干净落地一样 finalize;
  *   - "unmapped-but-clean": 映射唯一且合法,但重建后不覆盖 need → 不是脏包,
  *     换下一个候选;
- *   - "no" / "failed": 无 unparsed、非单季、映射失败或校验不通过 → 走诊断仲裁。
+ *   - "no" / "failed": 非单季、代码已覆盖全部缺集、或映射失败/校验不通过 → 走诊断仲裁。
  *
  * 校验规则(代码,不信任 AI 输出):
- *   1. 文件名必须在本次落盘的 unparsed 清单里(防幻觉文件名);
+ *   1. 文件名必须在本次落盘的全部视频清单里(防幻觉文件名);
  *   2. code 必须 SxxExx 形状且季与任务匹配(单季任务强制赛季一致);
  *   3. 一个集数最多被映射一次(冲突 → 整体放弃该映射,回落仲裁);
  *   4. 映射后的文件必须落在任务的 need/已收集范围内(防 AI 编造不存在的集数)。
@@ -57,32 +57,59 @@ export async function tryEpisodeMapping(options: {
   onMapping?: (clean: Record<string, string>) => void;
   /** 必填但可为 undefined — 便于 exactOptionalPropertyTypes 下直接传 FastPathOptions.onProgress */
   onProgress: ((event: AgentToolEvent) => void) | undefined;
+  /** TMDB 各集播出日(SxxExx → "YYYY-MM-DD")。用于给 AI 推导真实集数范围:
+   * 综艺「第N期」在 TMDB 可能一节拆多集(第10期= E19/E20 而非 E10),机械 E(N)
+   * 会系统性错位;把全部落盘文件交 AI 重映射时,知道整季真实集号范围才能对齐。 */
+  episodeAirDates?: Record<string, string>;
 }): Promise<"passed" | "unmapped-but-clean" | "no" | "failed"> {
   const { digest } = options;
-  // 仅 TV 单季且有 unparsed 视频才值得让 AI 映射;movie / 多季 / 无 unparsed → no.
-  if (
-    options.seasons.length !== 1 ||
-    digest.unparsedVideos.length === 0 ||
-    digest.unparsedVideos.every((name) => /(sample|样本|广告|花絮|预告|trailer)/i.test(name))
-  ) {
+  // 仅 TV 单季值得让 AI 映射;movie / 多季 → no。
+  if (options.seasons.length !== 1) {
     return "no";
   }
 
-  const model = options.model;
-  const unparsed = digest.unparsedVideos.filter((n) => !/(sample|样本|广告|花絮|预告|trailer)/i.test(n));
-  if (unparsed.length === 0) return "no";
+  // ★ 触发条件(2026-08-31 地球超新鲜案修正):不再要求「有 unparsed 才让 AI」——
+  // 代码解析可能**错误**(综艺「第N期」被机械解析成 SxxEN,而 TMDB 一期拆多集时
+  // 第10期 = E19 而非 E10),解析结果不覆盖 need 时就把**全部视频文件**交给 AI
+  // 重新判断,而不是只给「代码解析失败名单」(那样第10期·正片永远从 AI 视野消失)。
+  const needSet = new Set(options.needCodes);
+  const codeParsedAllNeeds = options.needCodes.every((code) => digest.episodeCodes.includes(code));
+  if (codeParsedAllNeeds) {
+    return "no"; // 代码已覆盖全部缺集 → 无需 AI。
+  }
 
-  const knownRange = computeKnownEpisodeRange(options.needCodes);
+  const model = options.model;
+  // AI 看到的文件 = 全部落盘视频(含代码"已解析"的)减去确认的衍生内容
+  // (彩蛋/直拍/加更/预告/广告等——它们本就不该有集号,交给 AI 只会浪费 token)。
+  const DERIVATIVE = /(sample|样本|广告|花絮|预告|trailer|彩蛋|直拍|加更|幕后|专访|宣传|前瞻|总宣|花絮|特辑)/i;
+  const allFiles = digest.videos
+    .map((v) => v.path.split("/").pop() ?? v.path)
+    .filter((name) => !DERIVATIVE.test(name));
+  if (allFiles.length === 0) {
+    return "no"; // 全是衍生内容 → 无正片可映射。
+  }
+
+  // 真实集数范围:优先从 TMDB 播出日表推导(E# 的最大值),没有则退回 needCodes。
+  const airRanges = options.episodeAirDates
+    ? Object.keys(options.episodeAirDates)
+        .map((code) => /^S\d{2}E(\d{1,4})$/.exec(code)?.[1])
+        .map((n) => (n ? Number(n) : NaN))
+        .filter((n) => !Number.isNaN(n))
+    : [];
+  const knownRange =
+    airRanges.length > 0
+      ? { min: 1, max: Math.max(...airRanges) }
+      : computeKnownEpisodeRange(options.needCodes);
   const arbitration = await arbitrateEpisodeMapping({
     model,
-    unparsedFiles: unparsed,
+    unparsedFiles: allFiles,
     title: options.targetTitle,
     seasons: options.seasons,
     knownEpisodeRange: knownRange,
   });
 
   // 校验映射(代码,不信任 AI)。
-  const allowed = new Set(unparsed);
+  const allowed = new Set(allFiles);
   const seenCodes = new Set<string>();
   const clean: Record<string, string> = {};
   let valid = true;
@@ -495,6 +522,7 @@ export async function closeOutTvLanding(options: {
       seasons,
       targetTitle: target.title,
       needCodes,
+      ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
       ram: (overrides) =>
         digestStaging({
           files: transfer.staging,

@@ -275,6 +275,50 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
       "末日地堡.S03E08.mkv",
     ]);
   });
+  it("2026-08-31 综艺「第N期」错位修复:代码解析不覆盖缺集时,把全部正片交 AI 重映射(第10期→S01E19)", async () => {
+    // 地球超新鲜案:TMDB 一季拆多集、综艺每期 2 集(第1期=E01/E02 … 第10期=E19/E20),
+    // 但代码把「第N期」机械解析成 S01EN(第10期上→S01E10,错)。缺集 S01E19 的
+    // 「第10期上」被代码"成功"解析成 S01E10 → 旧逻辑无 unparsed 不触发 AI → 不覆盖 need → 整包放弃。
+    // 修复后:代码解析未覆盖 need 时把全部正片交 AI,AI 据整季范围(播出日表 1..20)对齐出 S01E19。
+    const { sandbox, storage, seasonDirIds } = await createSetup({
+      candidates: [{ id: "c1", title: "地球超新鲜 全集 4K 中字" }],
+      seasons: [1],
+      need: ["S01E19"],
+      title: "地球超新鲜",
+      packs: {
+        c1: {
+          files: [
+            { path: "2026.07.01_第1期上_4K.mp4", sizeBytes: 1_000_000_000 },
+            { path: "2026.07.02_第1期下_4K.mp4", sizeBytes: 1_000_000_000 },
+            { path: "2026.07.08_第2期上_4K.mp4", sizeBytes: 1_000_000_000 },
+            { path: "2026.07.09_第2期下_4K.mp4", sizeBytes: 1_000_000_000 },
+            { path: "2026.08.28_第10期上_4K.mp4", sizeBytes: 1_000_000_000 },
+            { path: "2026.08.29_第10期下_4K.mp4", sizeBytes: 1_000_000_000 },
+          ],
+        },
+      },
+    });
+    const s1 = seasonDirIds[1]!;
+
+    // 唯一 A 盲转不耗 AI;转存后代码解析 E01..E10 不覆盖 E19 → 全量正片交 AI → AI 对齐。
+    const seen: string[] = [];
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: sequentialModel([
+        '{"mapping":{"2026.08.28_第10期上_4K.mp4":"S01E19","2026.08.29_第10期下_4K.mp4":"S01E20"},"unmapped":[],"reasoning":"第10期上/下对应 TMDB S01E19/E20"}',
+      ]),
+      target: { ...target, title: "地球超新鲜", seasons: [1], missingEpisodes: ["S01E19"] },
+      isChineseNative: false,
+      onProgress: (event) => {
+        if (event.toolName === "arbitrateEpisodeMapping") seen.push(event.activity ?? "");
+      },
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toContain("S01E19");
+    // AI 映射确实被触发(代码解析未覆盖 need)。
+    expect(seen.length).toBeGreaterThan(0);
+  });
 
   it("retries the next candidate when the diagnostic arbitrator says retry_other", async () => {
     const { sandbox, s1, storage } = await createSetup({
