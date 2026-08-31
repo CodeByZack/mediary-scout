@@ -1582,10 +1582,10 @@ export async function runScheduledType3(options?: {
 function tmdbSeasonMetadataSync(): SeasonMetadataSync | undefined {
   // 2026-08-31 放开门闩:此前仅 MEDIA_TRACK_SEARCH_PROVIDER=tmdb 才注入 TMDB 播出日
   // 同步。数据源(pansou/prowlarr 等)与 TMDB 元数据是两回事——搜索源决不影响「该季
-  // 各集何时播出」(年守卫数据)。配了 TMDB 就同步;没配 TMDB 时才 undefined。
-  if (!process.env.MEDIA_TRACK_TMDB_API_KEY && !process.env.TMDB_PROXY_BASE_URL) {
-    return undefined;
-  }
+  // 各集何时播出」(年守卫数据)。getTmdbAccesses 的 proxy 通道永远保底
+  // (env.TMDB_PROXY_BASE_URL || 默认托管域名),TMDB 元数据恒可用——无需任何环境
+  // 变量闸门;搜索 provider 门闩/环境变量门闩两版都误伤了仅配默认 proxy 的部署
+  // (airDate 全 null、年守卫惰性、Part 锚定无数据)。
   return async ({ tmdbId, seasonNumber }) => {
     const target = await prepareTrackingTarget({
       tmdbId,
