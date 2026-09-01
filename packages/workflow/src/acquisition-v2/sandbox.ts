@@ -942,7 +942,7 @@ export class TaskSandbox {
    *  the viewResourceSnapshot document. */
   rawSnapshotView(): {
     snapshotId: string;
-    candidates: Array<{ id: string; title: string }>;
+    candidates: Array<{ id: string; title: string; url?: string }>;
   } | null {
     if (!this.rawSnapshot) {
       return null;
@@ -952,6 +952,7 @@ export class TaskSandbox {
       candidates: this.rawSnapshot.candidates.map((candidate) => ({
         id: candidate.id,
         title: candidate.title,
+        ...(candidate.url !== undefined ? { url: candidate.url } : {}),
       })),
     };
   }

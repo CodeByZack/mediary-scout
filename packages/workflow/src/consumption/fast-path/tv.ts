@@ -70,6 +70,8 @@ interface TvPoolContext {
   escalated: boolean;
   /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD",可缺省)—— digest/finalize 共用的年守卫数据。 */
   episodeAirDates?: Record<string, string>;
+  /** issue #29:候选 id→分享链接映射(用户拍板透出到活动页)。 */
+  urlById?: Record<string, string>;
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")—— 综艺「第N期」Part 锚定。 */
   episodeNames?: Record<string, string>;
 }
@@ -89,7 +91,7 @@ async function runTvCandidatePhase(
   attemptBudget: number,
   poolLabel: string,
 ): Promise<TvPhaseOutcome> {
-  const { sandbox, model, target, onProgress, seasons, needCodes, onDiskCodes } = ctx;
+  const { sandbox, model, target, onProgress, seasons, needCodes, onDiskCodes, urlById } = ctx;
   // 本池起点转存数:预算按「本池增量」独立计算(primary 与兜底互不挤占)。
   const poolTransferBase = ctx.attempted.size;
   // 2. Pick the first candidate: a unique A-grade transfers blind; otherwise the
@@ -106,6 +108,7 @@ async function runTvCandidatePhase(
       candidateId: current,
       title: grading.top.title,
       decidedBy: "code",
+      ...(ctx.urlById?.[current] !== undefined ? { linkUrl: ctx.urlById[current] } : {}),
     });
   } else {
     escalated = true;
@@ -192,7 +195,9 @@ async function runTvCandidatePhase(
       decidedBy: grading.uniqueTopGrade ? "code" : "ai",
       transferIndex: ctx.attempted.size - poolTransferBase + 1,
     };
-    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current, ...transferMeta });
+    // issue #29:转存步骤带标题+链接(用户拍板展示;标题来自当前分级候选,链接来自 urlById)。
+    const currentTitle = grading.ranked.find((c) => c.id === current)?.title ?? "";
+    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current, ...(currentTitle ? { title: currentTitle } : {}), ...transferMeta, ...(ctx.urlById?.[current] !== undefined ? { linkUrl: ctx.urlById[current] } : {}) });
     const transfer = await sandbox.transferCandidate({
       snapshotId: candidateSnapshotId(view, current),
       candidateId: current,
@@ -311,8 +316,15 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     raw.candidates.length === 0 ? "候选 0 条(快照为空)" : `候选 ${raw.candidates.length} 条`;
   stepLog(sandbox, target.title, "预搜快照", snapshotDetail, raw.candidates.length === 0 ? "warn" : "log");
   emitStep(onProgress, "viewResourceSnapshot", "search", snapshotDetail, {
-    candidates: candidateTitleEvidence(raw.candidates),
+    // issue #29 用户拍板:候选列表只在评分步骤展示一次,预搜快照只报数量。
   });
+
+  // issue #29 用户拍板:链接透出到活动页(全部候选可点)。评分后的 GradedCandidate 不带
+  // providerPayload,这里在评分前从 raw(带 url)另建 id→url 映射,供评级列表/pick/转存注入链接。
+  const urlById: Record<string, string> = {};
+  for (const c of raw.candidates) {
+    if (c.url) urlById[c.id] = c.url;
+  }
 
   let grading = gradeCandidates(raw.candidates, {
     title: target.title,
@@ -359,7 +371,8 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     "gradingDecision",
     "search",
     `uniqueA=${grading.uniqueTopGrade ? "yes" : "no"} A=${gradeCounts.A}(${gradeDistribution(grading)})`,
-    { candidates: gradedCandidateEvidence(grading), uniqueTopGrade: grading.uniqueTopGrade },
+    // issue #29 用户拍板:候选列表只在 gradeCandidates 步骤展示一次,决策摘要不再带列表。
+    { uniqueTopGrade: grading.uniqueTopGrade },
   );
 
   // primary 空且无别名:无任何证据可转 → 零 LLM 诚实终止(旧行为;空池但有别名时,
@@ -382,7 +395,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     stepLog(sandbox, target.title, "评分", primaryGradingDetail);
     stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
     emitStep(onProgress, "gradeCandidates", "search", primaryGradingDetail, {
-      candidates: gradedCandidateEvidence(grading),
+      candidates: gradedCandidateEvidence(grading, urlById),
       uniqueTopGrade: grading.uniqueTopGrade,
       fallbackRounds,
     });
@@ -408,7 +421,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   //    绝不在有 A 时提前跳兜底(PR #25:反「primary 14 个 A 却被兜底池替换」)。
   if (primaryHasA || target.aliases.length === 0) {
     const primaryOutcome = await runTvCandidatePhase(
-      ctx,
+      { ...ctx, urlById },
       raw,
       grading,
       MAX_TRANSFER_ATTEMPTS,
@@ -449,6 +462,11 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     fallbackRounds = fallback.rounds;
     const fallbackView = fallback.view;
     grading = fallback.grading;
+    // issue #29:兜底合并证据池同样透传链接(候选带 url,fallbackView 与 raw 同形状)。
+    const fbUrlById: Record<string, string> = {};
+    for (const c of fallbackView.candidates) {
+      if (c.url) fbUrlById[c.id] = c.url;
+    }
     if (fallback.restored) {
       stepLog(
         sandbox,
@@ -481,13 +499,13 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     stepLog(sandbox, target.title, "评分", fbDetail);
     stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
     emitStep(onProgress, "gradeCandidates", "search", fbDetail, {
-      candidates: gradedCandidateEvidence(grading),
+      candidates: gradedCandidateEvidence(grading, fbUrlById),
       uniqueTopGrade: grading.uniqueTopGrade,
       fallbackRounds,
     });
 
     const fallbackOutcome = await runTvCandidatePhase(
-      { ...ctx, deadRetries, escalated },
+      { ...ctx, deadRetries, escalated, urlById: fbUrlById },
       fallbackView,
       grading,
       MAX_FALLBACK_TRANSFER_ATTEMPTS,

@@ -182,11 +182,14 @@ interface EvidenceCandidate {
   reasons: string[];
   seasons?: number[];
   quality?: string;
+  /** issue #29 用户拍板:分享链接(可选,来自 rawSnapshotView 透传)。 */
+  url?: string;
 }
 
 /** L2 证据 payload(预算化):紧凑评级列表,供活动页展开。 */
 export function gradedCandidateEvidence(
   grading: ReturnType<typeof gradeCandidates>,
+  urlById?: Record<string, string>,
 ): EvidenceCandidate[] {
   const rows = grading.ranked.map((candidate) => ({
     id: shortCandidateId(candidate.id),
@@ -195,6 +198,7 @@ export function gradedCandidateEvidence(
     reasons: candidate.reasons.slice(0, 2).map((reason) => reason.slice(0, 70)),
     ...(candidate.seasonNumbers.length > 0 ? { seasons: candidate.seasonNumbers } : {}),
     ...(candidate.quality !== null ? { quality: candidate.quality } : {}),
+    ...(urlById?.[candidate.id] !== undefined ? { url: urlById[candidate.id] } : {}),
   }));
   return pushWithinBudget([], rows);
 }

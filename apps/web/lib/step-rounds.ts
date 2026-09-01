@@ -58,22 +58,7 @@ export function poolLabel(value: "primary" | "fallback" | undefined): string {
 }
 
 /** 从一组步骤里找第一个非 undefined 的 pool(卡头展示;避免锚点退化时谎报)。 */
-function firstPoolOf(steps: ActivityStepView[]): "primary" | "fallback" | undefined {
-  for (const s of steps) {
-    const p = poolOf(s);
-    if (p !== undefined) return p;
-  }
-  return undefined;
-}
 
-/** 从一组步骤里找第一个非 undefined 的 decidedBy。 */
-function firstDecidedByOf(steps: ActivityStepView[]): "code" | "ai" | undefined {
-  for (const s of steps) {
-    const d = decidedByOf(s);
-    if (d !== undefined) return d;
-  }
-  return undefined;
-}
 
 /** 轮次卡的最终判定(B1 三态):pass=digest 通过或最终归位;fail=digest 未通过且未归位;
  *  unknown=args 被 trace-sink 塌缩(无 passes);空=无 digest(非转存卡)。 */
@@ -115,7 +100,8 @@ export function groupStepsIntoRounds(steps: ActivityStepView[]): StepRoundCard[]
       let card = cards.find((c) => c.kind === "transfer" && c.round === round);
       if (!card) {
         // 新轮:先把已攒的决策链 flush(内容在轮之前),再开轮卡。
-        flush(decisionSteps, "decision", "决策链");
+        // issue #29 用户反馈:「决策链」难懂 → 「搜索与选片」。
+        flush(decisionSteps, "decision", "搜索与选片");
         flush(closingSteps, "closing", "收尾");
         card = { round, kind: "transfer", heading: "", steps: [] };
         cards.push(card);
@@ -127,7 +113,7 @@ export function groupStepsIntoRounds(steps: ActivityStepView[]): StepRoundCard[]
     // 无 round。老数据回退:transferCandidate 独立成轮;结果步骤就近归当前轮;
     // 收尾步骤(finalize/finish)归收尾卡;其余 pre-transfer 步骤归决策链。
     if (step.toolName === "transferCandidate") {
-      flush(decisionSteps, "decision", "决策链");
+      flush(decisionSteps, "decision", "搜索与选片");
       flush(closingSteps, "closing", "收尾");
       fallbackRoundSeq -= 1; // L1:老数据序号与真实轮号撞车——用负序号避开真实轮号(1..6)。
       const card = { round: fallbackRoundSeq, kind: "transfer" as const, heading: "", steps: [step] };
@@ -154,14 +140,15 @@ export function groupStepsIntoRounds(steps: ActivityStepView[]): StepRoundCard[]
   for (const card of cards) {
     if (card.kind !== "transfer") continue;
     const transfer = card.steps.find((s) => s.toolName === "transferCandidate");
-    const pool = firstPoolOf(card.steps);
-    const decided = firstDecidedByOf(card.steps);
     // B1 单一事实来源:判定走 roundVerdict(badge 消费),标题不含 verdict。
     const candidate = transfer?.args?.["candidateId"] ?? "";
     const shortId = typeof candidate === "string" && candidate.length > 28 ? "…" + candidate.slice(-20) : String(candidate ?? "");
-    const roundLabel = card.round > 0 ? `第 ${card.round} 轮` : "老数据轮";
-    // L5:verdict 不放进标题(由卡片 badge 展示),标题只含轮次/池/决策者/候选。
-    card.heading = `${roundLabel} · ${poolLabel(pool)} · ${decidedByLabel(decided)}${shortId && shortId !== "undefined" ? ` · ${shortId}` : ""}`.trim();
+    const roundLabel = card.round > 0 ? `第 ${card.round} 次转存` : "未记录轮次";
+    // issue #29 用户反馈:标题要直白——「第 N 次转存 · 《候选标题》」;
+    // pool/决策者不进标题(黑话),转由卡片 meta 区展示(⚙️代码/🤖AI 文字标记)。
+    const candidateTitle = typeof transfer?.args?.["title"] === "string" && transfer.args["title"].length > 0 ? transfer.args["title"] : "";
+    const headTitle = candidateTitle ? `《${candidateTitle.slice(0, 26)}${candidateTitle.length > 26 ? "…" : ""}》` : (shortId && shortId !== "undefined" ? `候选 ${shortId}` : "转存");
+    card.heading = `${roundLabel} · ${headTitle}`;
   }
   return cards;
 }

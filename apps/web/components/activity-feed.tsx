@@ -17,7 +17,7 @@ import {
   stepDetailView,
   type StepDetailView as StepEvidenceView,
 } from "../lib/step-args-text";
-import { groupStepsIntoRounds, hasRoundStructure, roundVerdict, type StepRoundCard } from "../lib/step-rounds";
+import { groupStepsIntoRounds, hasRoundStructure, roundVerdict, poolLabel, decidedByLabel, type StepRoundCard } from "../lib/step-rounds";
 import { isDemoModeClient } from "../lib/demo-mode";
 import { demoCompletedItems, demoInProgressActivityItems } from "../lib/demo-session";
 import { useDemoAcquisitions, useDemoInProgress } from "../lib/use-demo-session";
@@ -187,12 +187,18 @@ function RoundCard({ card }: { card: StepRoundCard }) {
   // B1:判定三态(单一事实来源 roundVerdict)——pass=digest 通过或最终归位;
   // fail=未通过且未归位;unknown=args 被塌缩。
   const verdict = roundVerdict(card);
+  const transferStep = card.steps.find((s) => s.toolName === "transferCandidate");
+  const decidedBy = transferStep?.args?.["decidedBy"] as "code" | "ai" | undefined;
+  const pool = transferStep?.args?.["pool"] as "primary" | "fallback" | undefined;
+  // issue #29:决策来源用文字标记(⚙️代码/🤖AI)+ 池;标题已通俗化,黑话挪到这里。
+  const decidedMeta = [decidedByLabel(decidedBy), poolLabel(pool)].filter((x) => x && x !== "—").join(" · ") || undefined;
   const digest = card.steps.find((s) => s.toolName === "stagingDigest");
   const videoCount = typeof digest?.args?.["videoCount"] === "number" ? digest.args["videoCount"] : undefined;
   return (
     <div className={"act-round act-round-transfer" + (verdict === "pass" ? " act-round-pass" : verdict === "fail" ? " act-round-fail" : "")}>
       <div className="act-round-head act-round-toggle" role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e as unknown as ReactMouseEvent<HTMLDivElement>); } }}>
         <span className="act-round-title">{card.heading}</span>
+        {decidedMeta ? <span className="act-round-meta">{decidedMeta}</span> : null}
         {videoCount !== undefined ? <span className="act-round-meta">{videoCount} 个文件</span> : null}
         {verdict === "pass" ? <span className="act-round-badge act-round-badge-pass">✓ 命中</span> : verdict === "fail" ? <span className="act-round-badge act-round-badge-fail">✗ 未命中</span> : verdict === "unknown" ? <span className="act-round-badge act-round-badge-unknown">? 判定未知</span> : null}
         <ExpandChevron open={open} />
@@ -247,14 +253,15 @@ function StepEvidence({ detail }: { detail: NonNullable<StepEvidenceView> }) {
           {row.grade ? (
             <span className={`act-ev-grade act-ev-${row.grade.toLowerCase()}`}>{row.grade}</span>
           ) : null}
-          <span className="act-ev-title" title={row.title}>
-            {row.title}
-          </span>
-          {row.reasons.length > 0 ? (
-            <span className="act-ev-reason" title={row.reasons.join("；")}>
-              {row.reasons.join("；")}
+          {row.url ? (
+            <a className="act-ev-title act-ev-link" href={row.url} target="_blank" rel="noopener noreferrer" title={row.title}>
+              {row.title}
+            </a>
+          ) : (
+            <span className="act-ev-title" title={row.title}>
+              {row.title}
             </span>
-          ) : null}
+          )}
         </div>
       ))}
     </div>

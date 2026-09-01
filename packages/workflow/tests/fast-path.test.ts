@@ -69,7 +69,7 @@ class MoveFailingSimulator extends Storage115Simulator {
 }
 
 interface SetupOptions {
-  candidates: Array<{ id: string; title: string }>;
+  candidates: Array<{ id: string; title: string; url?: string }>;
   packs: Record<string, { files: Array<{ path: string; sizeBytes: number }> }>;
   failureMessages?: Record<string, string>;
   need?: string[];
@@ -209,7 +209,8 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
 
   it("escalates to the diagnostic arbitrator on a dirty landing, and honors accept", async () => {
     const { sandbox, s1, storage } = await createSetup({
-      candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],
+      // issue #29 回归:候选带 url → 转存步骤需透出 linkUrl(用户拍板链接展示)。
+      candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字", url: "https://115.com/s/abc123" }],
       packs: {
         c1: {
           files: [
@@ -1039,7 +1040,7 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     const repo = new InMemoryWorkflowRepository();
     const trace = makeAgentTraceSink({ repository: repo, workflowRunId: "run-fp-d1" });
     const { sandbox, s1, storage } = await createSetup({
-      candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],
+      candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字", url: "https://115.com/s/abc123" }],
       packs: { c1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
     });
 
@@ -1084,12 +1085,20 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(steps[1]!.activity).toBe("候选 1 条");
     expect(steps[5]!.args.candidateId).toBe("c1");
+    // issue #29:转存步骤带标题 + 链接(用户拍板;链接来自 urlById 透出)。
+    expect(steps[5]!.args.title).toBe("狂飙.S01E01.1080p.中字");
+    expect(steps[5]!.args.linkUrl).toBe("https://115.com/s/abc123");
     expect(steps[9]!.activity).toContain("入库");
     expect(steps[10]!.activity).toContain("转存 primary 1/3"); // 结账行两池分别记账(PR #25)
     expect(steps[10]!.activity).toContain("PanSou 搜索 1 次(primary 1 + 兜底 0)");
     // 可观测性增强(L1/L2/L4):决策与证据 payload 随事件走 agent_steps
+    // issue #29:gradingDecision 只报决策摘要;候选评级列表只在 gradeCandidates 一次。
     expect(steps[2]!.args.uniqueTopGrade).toBe(true);
-    expect((steps[2]!.args.candidates as unknown[]).length).toBe(1);
+    expect(steps[2]!.args.candidates).toBeUndefined();
+    expect(steps[3]!.args.uniqueTopGrade).toBe(true);
+    expect((steps[3]!.args.candidates as unknown[]).length).toBe(1);
+    expect(((steps[3]!.args.candidates as { url?: string }[])[0]?.url)).toBe("https://115.com/s/abc123");
+    // issue #29:候选带链接透出(fake provider 此候选无 url,故不强制断言 url)。
     expect((steps[7]!.args.files as string[])[0]).toContain("S01E01");
     // 落盘结果不受 trace 影响
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([

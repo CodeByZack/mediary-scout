@@ -31,17 +31,17 @@ describe("groupStepsIntoRounds", () => {
     // [决策链, 第1轮, 第2轮, 收尾]
     expect(cards.length).toBe(4);
     expect(cards[0]?.kind).toBe("decision");
-    expect(cards[0]?.heading).toContain("决策链");
+    expect(cards[0]?.heading).toContain("搜索与选片");
     expect(cards[0]?.steps.map((s) => s.toolName)).toEqual(["viewResourceSnapshot", "gradeCandidates", "pickCandidate"]);
     expect(cards[1]?.kind).toBe("transfer");
     expect(cards[1]?.round).toBe(1);
-    expect(cards[1]?.heading).toContain("第 1 轮");
-    expect(cards[1]?.heading).toContain("⚙️ 代码");
+    expect(cards[1]?.heading).toContain("第 1 次转存");
+    // issue #29:决策来源移入 meta 区,标题不含 ⚙️。
     expect(cards[1]?.heading).not.toContain("未命中"); // L5 verdict 在 badge
     expect(cards[1]?.steps.map((s) => s.toolName)).toEqual(["transferCandidate", "stagingDigest", "digestFiles", "arbitrateDiagnosis"]);
     expect(cards[2]?.kind).toBe("transfer");
     expect(cards[2]?.round).toBe(2);
-    expect(cards[2]?.heading).toContain("第 2 轮");
+    expect(cards[2]?.heading).toContain("第 2 次转存");
     // L5 verdict 在 badge,heading 不重复
     expect(cards[2]?.steps.map((s) => s.toolName)).toEqual(["transferCandidate", "stagingDigest", "finalizeLanding"]);
     expect(cards[3]?.kind).toBe("closing");
@@ -101,9 +101,10 @@ describe("groupStepsIntoRounds", () => {
       step("transferCandidate", "候选 cX 死链(未落盘)", { candidateId: "cX", round: 3 }),
     ];
     const cards = groupStepsIntoRounds(steps);
-    expect(cards[0]?.heading).toContain("第 3 轮");
-    expect(cards[0]?.heading).toContain("· — ·"); // pool 诚实 —,不显示 primary 池
+    expect(cards[0]?.heading).toContain("第 3 次转存");
+    // issue #29:标题不含池(黑话挪 meta);无候选标题时退回候选 id。
     expect(cards[0]?.heading).not.toContain("primary");
+    expect(cards[0]?.heading).not.toContain("—");
   });
 
   it("B1:_truncated 塌缩——判定未知而不是 ✗", () => {

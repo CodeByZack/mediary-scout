@@ -38,15 +38,16 @@ describe("RealResourceProviderV2 — pansou → ResourceProviderV2 adapter", () 
 
     const snapshot = await adapter.search("莉可丽丝 全集");
 
-    // V2 shape: id/keyword/candidates with only the fields the agent judges from.
+    // V2 shape: id/keyword/candidates;share url 随 issue #29 用户拍板透出(展示用),
+    // 完整 providerPayload(receiveCode 等)仍只在 registry,不进 agent 视图。
     expect(snapshot.id).toBe("snap_real_1");
     expect(snapshot.candidates).toEqual([
-      { id: "cand_a", title: "莉可丽丝 全集 1080p" },
+      { id: "cand_a", title: "莉可丽丝 全集 1080p", url: "https://115.com/s/abc" },
     ]);
     // The run id is threaded so content-addressed snapshots don't collide across runs.
     expect(calls[0]).toEqual({ keyword: "莉可丽丝 全集", workflowRunId: "run-1" });
     // The real candidate (with its share payload) is recorded so the storage
-    // adapter can transfer it later by id — the agent never sees the raw url.
+    // adapter can transfer it later by id — 完整载荷不进 agent 视图(receiveCode 不外泄)。
     const recorded = registry.get("cand_a");
     expect(recorded?.providerPayload).toEqual({ url: "https://115.com/s/abc", receiveCode: "x1" });
   });
@@ -169,7 +170,7 @@ describe("RealResourceProviderV2 — pansou → ResourceProviderV2 adapter", () 
     expect(registry.get("dead_share")).toBeUndefined();
   });
 
-  it("agent-facing candidate exposes only id and title (no hints) — Task 3", async () => {
+  it("agent-facing candidate exposes id/title and share url when present (issue #29 用户拍板;链接只进展示,不进 LLM) — Task 3", async () => {
     const provider: ResourceProvider = { search: async () => realSnapshot() };
     const registry = new CandidateRegistry();
     const adapter = new RealResourceProviderV2({ provider, registry, workflowRunId: "run-1" });
@@ -177,8 +178,9 @@ describe("RealResourceProviderV2 — pansou → ResourceProviderV2 adapter", () 
     const snapshot = await adapter.search("莉可丽丝 全集");
 
     const candidate = snapshot.candidates[0]!;
-    expect(Object.keys(candidate).sort()).toEqual(["id", "title"]);
     expect(candidate.id).toBe("cand_a");
     expect(candidate.title).toBe("莉可丽丝 全集 1080p");
+    const keys = Object.keys(candidate).sort();
+    expect(keys.every((k) => ["id", "title", "url"].includes(k))).toBe(true);
   });
 });

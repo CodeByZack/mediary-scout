@@ -109,7 +109,8 @@ export function stepArgsText(step: ActivityStepView): string | null {
 export interface StepEvidenceRow {
   title: string;
   grade: string | null;
-  reasons: string[];
+  /** issue #29 用户拍板:分享链接(有则渲染为可点击);无则纯文本标题。 */
+  url?: string;
 }
 
 export type StepDetailView =
@@ -132,14 +133,10 @@ export function stepDetailView(step: ActivityStepView): StepDetailView {
       typeof args.keyword === "string" && args.keyword.trim() ? args.keyword.trim() : null;
     const rows = evidence.map((item) => {
       const record = (item ?? {}) as Record<string, unknown>;
-      const rawReasons: unknown[] = Array.isArray(record.reasons) ? record.reasons : [];
-      const reasons = rawReasons.filter(
-        (reason): reason is string => typeof reason === "string" && reason.length > 0,
-      );
       return {
         title: typeof record.title === "string" ? record.title : "?",
         grade: typeof record.grade === "string" ? record.grade : null,
-        reasons,
+        ...(typeof record.url === "string" && record.url.length > 0 ? { url: record.url } : {}),
       };
     });
     return { kind: "candidates", keyword, rows };

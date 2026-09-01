@@ -446,6 +446,17 @@ CI 全绿后 squash 合并。issue #21 验收单(奇异新世界3.全集 C/C/A�
   landed 排除 ok:false——诊断 accept+归位失败场景不再显示 ✓ 命中(假入库红线)。
 - B1 单一事实来源：step-rounds.ts 标题循环内联的 verdict/passes/landed/truncated 死代码段删除(badge 唯一消费)。
 - 死 CSS .act-round-list-inline 移除;M6 二次截断双「未列」行消除(stdout 已有计数)。
+**用户实测反馈修订(commit 待补)**:
+- 链接透出(用户拍板):`Sandbox.rawSnapshotView` / `SimResourceCandidate` / real-provider-adapter 增加
+  url 字段——**分享链接全链透出到 agent_steps**(fake/real 统一支持),只走代码链路、不进 LLM prompt
+  (summarizeGrading 仍无 url)。fast path 建 urlById 映射,gradeCandidates 候选列表带 url、
+  transferCandidate/pickCandidate 带 linkUrl + title。
+- 候选列表去重:viewResourceSnapshot 只报数量、gradingDecision 只报决策摘要(uniqueA/计数),
+  **候选评级列表只在 gradeCandidates 出现一次**。
+- 判因不上 UI:`StepEvidenceRow` 移除 reasons(评分怎么评的 abcd 不展示),评级徽章保留。
+- 标题通俗化:transfer 卡「第 N 次转存 · 《候选标题》」、决策链→「搜索与选片」;
+  pool/决策者(⚙️/🤖)挪到卡头 meta 区(文字标记,不用颜色块)。
+- 前端标题可点击(有 url 时 `<a target=_blank>`);无 url 回退纯文本。
 **验证**：workflow-check tsc 0 错；fast-path.test.ts（30 例，含新增「预算分开：primary 3 次转存全废后
 兜底仍用自己的 3 次配额转存成功」）、movie-fast-path.test.ts（25 例，同款新增用例）、variety-episode-landing /
 consumption-evidence / finalize-landing / v2-run-tv / v2-orchestrator / v2-full-chain / search-view 相关文件全绿。

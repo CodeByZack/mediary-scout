@@ -43,12 +43,12 @@ describe("stepArgsText — 活动页 args 一行摘要", () => {
 });
 
 describe("stepDetailView — 结构化证据行(§23)", () => {
-  it("candidates 全量行:标题/评级/判因/keyword,不截条", () => {
+  it("candidates 全量行:标题/评级/链接/keyword,不截条(判因不上 UI)", () => {
     const d = stepDetailView(
       step({
         keyword: "龍之家族",
         candidates: [
-          { id: "a", title: "龙之家族 4K 更至10集 最新", grade: "D", reasons: ["标题不匹配目标"] },
+          { id: "a", title: "龙之家族 4K 更至10集 最新", grade: "D", url: "https://pan.example/s/abc" },
           { id: "b", title: "沧元图", grade: "D" },
         ],
       }),
@@ -59,9 +59,10 @@ describe("stepDetailView — 结构化证据行(§23)", () => {
     expect(d.rows[0]).toEqual({
       title: "龙之家族 4K 更至10集 最新",
       grade: "D",
-      reasons: ["标题不匹配目标"],
+      url: "https://pan.example/s/abc",
     });
-    expect(d.rows[1]?.reasons).toEqual([]);
+    // 无 url 的候选不带 url 字段(exactOptionalPropertyTypes)。
+    expect(d.rows[1]).toEqual({ title: "沧元图", grade: "D" });
   });
 
   it("files 行直出;_truncated/无关 args → null(组件回退一行摘要)", () => {
