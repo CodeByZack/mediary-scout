@@ -81,6 +81,8 @@ interface SetupOptions {
   extraResults?: Record<string, Array<{ id: string; title: string }>>;
   /** Counts every provider.search call (primary prime + fallback rounds). */
   onSearch?: () => void;
+  /** TMDB 各集原始 name(SxxExx→"Episode N (Part X)")——综艺「第N期」Part 锚定/期号一致性校验数据。 */
+  episodeNames?: Record<string, string>;
 }
 
 async function createSetup(options: SetupOptions) {
@@ -318,6 +320,50 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     expect(result.coverage.obtained).toContain("S01E19");
     // AI 映射确实被触发(代码解析未覆盖 need)。
     expect(seen.length).toBeGreaterThan(0);
+  });
+  it("2026-08-31 假集号防线:AI 把「第4期上」映射成 S02E19(期号不符)→ 拒绝,不假入库", async () => {
+    // 地球超新鲜 s2:TMDB E19=Episode 10 (Part 1)。包里正片只到第4期(第4期上/下),
+    // AI 全量重映射若无期号一致性校验,会把「第4期上」硬安成 S02E19(迎合缺集)→ 假入库。
+    // 有 episodeNames 时校验反查:第4期 ≠ Episode 10 → 该映射作废 → 回落诊断仲裁。
+    const { sandbox, storage, seasonDirIds } = await createSetup({
+      candidates: [{ id: "c1", title: "地球超新鲜 全集 4K 中字" }],
+      seasons: [1],
+      need: ["S01E19"],
+      title: "地球超新鲜",
+      episodeNames: {
+        S01E19: "Episode 10 (Part 1)",
+        S01E20: "Episode 10 (Part 2)",
+      },
+      packs: {
+        c1: {
+          files: [
+            { path: "2026.07.18_第4期上_4K.mp4", sizeBytes: 1_000_000_000 },
+            { path: "2026.07.19_第4期下_4K.mp4", sizeBytes: 1_000_000_000 },
+          ],
+        },
+      },
+    });
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: sequentialModel([
+        '{"mapping":{"2026.07.18_第4期上_4K.mp4":"S01E19"},"unmapped":[],"reasoning":"第4期上映射到 E19"}',
+        '{"action":"abandon","reasoning":"包内无第10期正片"}',
+      ]),
+      target: {
+        ...target,
+        title: "地球超新鲜",
+        seasons: [1],
+        missingEpisodes: ["S01E19"],
+        episodeNames: {
+          S01E19: "Episode 10 (Part 1)",
+          S01E20: "Episode 10 (Part 2)",
+        },
+      },
+      isChineseNative: false,
+    });
+    // 期号不一致 → 映射被拒 → 诊断仲裁 abandon → 无覆盖、E19 未入库。
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.coverage.obtained ?? []).not.toContain("S01E19");
   });
 
   it("retries the next candidate when the diagnostic arbitrator says retry_other", async () => {

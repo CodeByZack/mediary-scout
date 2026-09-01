@@ -125,6 +125,25 @@ export async function tryEpisodeMapping(options: {
       valid = false;
       break;
     }
+    // ★ 期号一致性校验(2026-08-31 地球超新鲜假集号案修复):AI 可能把不存在的期硬
+    // 安上最新集号(S02E19/E20)迎合 need。当有 episodeNames(TMDB 每集原始 name)时
+    // 反查该集号对应的期号 N(TMDB name "Episode N");若文件名里有「第M期」且 M≠N,
+    // 说明文件与集号对不上 → 该条映射不采信(整表作废,回落诊断仲裁)。
+    if (options.episodeNames) {
+      const filePeriod = /第\s*(\d{1,4})\s*期/.exec(fileName)?.[1];
+      const tmdbName = options.episodeNames[code];
+      const tmdbPeriod = tmdbName ? /Episode\s*(\d{1,4})\b/i.exec(tmdbName)?.[1] : undefined;
+      if (
+        filePeriod !== undefined &&
+        tmdbPeriod !== undefined &&
+        Number(filePeriod) !== Number(tmdbPeriod)
+      ) {
+        const mismatch = `映射期号不符:${fileName}(第${filePeriod}期) → ${code}(TMDB Episode ${tmdbPeriod})`;
+        stepLog(options.sandbox, options.targetTitle, "集数映射", mismatch, "warn");
+        valid = false;
+        break;
+      }
+    }
     seenCodes.add(code);
     clean[fileName] = code;
   }
