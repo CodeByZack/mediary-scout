@@ -3006,6 +3006,75 @@ select.setting-control {
   overflow-y: auto;
 }
 
+
+/* ★ 轮次卡片化(issue #29):转存链路按 round 分组,默认折叠,点开展开该轮步骤。 */
+.act-round-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  padding-left: 70px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-card);
+  max-height: 420px;
+  overflow-y: auto;
+}
+.act-round {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-elevated, var(--bg-card));
+}
+.act-round-pass {
+  border-color: rgba(34, 197, 94, 0.5);
+}
+.act-round-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.act-round-toggle:hover {
+  background: var(--bg-hover, rgba(128, 128, 128, 0.06));
+}
+.act-round-title {
+  font-weight: 600;
+  font-size: 13px;
+  min-width: 0;
+}
+.act-round-meta {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+.act-round-count {
+  font-size: 12px;
+  color: var(--text-soft);
+  margin-left: auto;
+}
+.act-round-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+  font-weight: 600;
+}
+.act-round-body {
+  border-top: 1px solid var(--border-soft);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.act-round-decision .act-round-title {
+  color: var(--text-soft);
+  font-weight: 500;
+}
+
 .act-step {
   display: flex;
   gap: 8px;

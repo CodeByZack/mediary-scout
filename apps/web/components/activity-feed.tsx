@@ -17,6 +17,7 @@ import {
   stepDetailView,
   type StepDetailView as StepEvidenceView,
 } from "../lib/step-args-text";
+import { decidedByLabel, groupStepsIntoRounds, poolLabel, type StepRoundCard } from "../lib/step-rounds";
 import { isDemoModeClient } from "../lib/demo-mode";
 import { demoCompletedItems, demoInProgressActivityItems } from "../lib/demo-session";
 import { useDemoAcquisitions, useDemoInProgress } from "../lib/use-demo-session";
@@ -142,6 +143,60 @@ export function StepStatusIcon({ status }: { status: ActivityStepView["stepStatu
 
 /** The expandable step list under a row header: one line per agent tool call,
  *  status icon + 中文 activity + toolName + localized time + key args. */
+/** 单条步骤行(扁平列表内)。 */
+function StepRow({ step }: { step: ActivityStepView }) {
+  const detail = stepDetailView(step);
+  const argsText = stepArgsText(step);
+  return (
+    <div className="act-step" key={step.ordinal}>
+      <StepStatusIcon status={step.stepStatus} />
+      <div className="act-step-main">
+        <div className="act-step-head">
+          <span className="act-step-activity">{step.activity}</span>
+          <span className="act-step-tool">{step.toolName}</span>
+          <span className="act-step-at">{new Date(step.at).toLocaleString("zh-CN")}</span>
+        </div>
+        {step.failReason ? <div className="act-step-fail">{step.failReason}</div> : null}
+        {detail ? <StepEvidence detail={detail} /> : argsText ? <div className="act-step-args">{argsText}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+/** 轮次卡片:默认折叠,点开展开该轮的全部步骤。issue #29。 */
+function RoundCard({ round, card }: { round: number; card: StepRoundCard }) {
+  const [open, setOpen] = useState(false);
+  if (round === 0) {
+    return (
+      <div className="act-round act-round-decision">
+        <div className="act-round-head act-round-toggle" onClick={() => setOpen((v) => !v)}>
+          <span className="act-round-title">{card.heading}</span>
+          <span className="act-round-count">{card.steps.length} 步</span>
+          <ExpandChevron open={open} />
+        </div>
+        {open ? <div className="act-round-body">{card.steps.map((s) => <StepRow key={s.ordinal} step={s} />)}</div> : null}
+      </div>
+    );
+  }
+  const digest = card.steps.find((s) => s.toolName === "stagingDigest");
+  const transfer = card.steps.find((s) => s.toolName === "transferCandidate");
+  const passes = digest?.args?.["passes"] === true;
+  const videoCount = typeof digest?.args?.["videoCount"] === "number" ? digest.args["videoCount"] : undefined;
+  const maybeLink = (card.steps[0] as any)?.args?.["linkUrl"];
+  return (
+    <div className={"act-round" + (passes ? " act-round-pass" : "")}>
+      <div className="act-round-head act-round-toggle" onClick={() => setOpen((v) => !v)}>
+        <span className="act-round-title">{card.heading}</span>
+        {videoCount !== undefined ? <span className="act-round-meta">{videoCount} 个视频</span> : null}
+        {passes ? <span className="act-round-badge act-round-badge-pass">✓ 命中</span> : null}
+        <ExpandChevron open={open} />
+      </div>
+      {open ? <div className="act-round-body">{card.steps.map((s) => <StepRow key={s.ordinal} step={s} />)}</div> : null}
+    </div>
+  );
+}
+
+/** 汇总「轮次卡片化」的步骤列表:有结构化 round 的转存步骤 → 卡片;纯老数据 → 扁平。 */
 export function StepList({ steps }: { steps: ActivityStepView[] }) {
   if (steps.length === 0) {
     return (
@@ -150,35 +205,22 @@ export function StepList({ steps }: { steps: ActivityStepView[] }) {
       </div>
     );
   }
+  const hasRounds = steps.some((s) => s.toolName === "transferCandidate" && typeof s.args?.["round"] === "number");
+  if (!hasRounds) {
+    // 老数据:无轮次信息,保持原有扁平列表(行为不变)。
+    return (
+      <div className="act-step-list">
+        {steps.map((step) => <StepRow key={step.ordinal} step={step} />)}
+      </div>
+    );
+  }
+  const cards = groupStepsIntoRounds(steps);
   return (
-    <div className="act-step-list">
-      {steps.map((step) => {
-        const detail = stepDetailView(step);
-        const argsText = stepArgsText(step);
-        return (
-          <div className="act-step" key={step.ordinal}>
-            <StepStatusIcon status={step.stepStatus} />
-            <div className="act-step-main">
-              <div className="act-step-head">
-                <span className="act-step-activity">{step.activity}</span>
-                <span className="act-step-tool">{step.toolName}</span>
-                <span className="act-step-at">{new Date(step.at).toLocaleString("zh-CN")}</span>
-              </div>
-              {step.failReason ? <div className="act-step-fail">{step.failReason}</div> : null}
-              {detail ? (
-                <StepEvidence detail={detail} />
-              ) : argsText ? (
-                <div className="act-step-args">{argsText}</div>
-              ) : null}
-            </div>
-          </div>
-        );
-      })}
+    <div className="act-round-list">
+      {cards.map((card) => <RoundCard key={String(card.round) + "-" + card.steps[0]?.ordinal} round={card.round} card={card} />)}
     </div>
   );
 }
-
-/** §23:候选证据/逐文件解析的结构化展开行(数据源 stepDetailView,纯函数可测)。 */
 function StepEvidence({ detail }: { detail: NonNullable<StepEvidenceView> }) {
   if (detail.kind === "files") {
     return (
