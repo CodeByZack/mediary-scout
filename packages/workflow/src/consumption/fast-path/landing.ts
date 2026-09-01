@@ -12,6 +12,7 @@ import {
   compactCodeList,
   compactMapping,
   concludeUncovered,
+  pushWithinBudget,
   emitStep,
   evidenceDigestLine,
   gradeDistribution,
@@ -476,7 +477,11 @@ export async function closeOutTvLanding(options: {
     const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates);
     if (parseRows.length > 0) {
       stepLog(sandbox, target.title, "解析明细", parseRows.join(" / "));
-      emitStep(onProgress, "digestFiles", "verify", `逐文件解析 ${parseRows.length} 条`, { files: parseRows, round: attempted.size });
+      // M6:stepLog 的 parseRows 已按 1850 预算(stdout),但进 args 时被 {files,round} 包裹,
+      // 距 agent-trace-sink 的 2000 字符整体塌缩只剩 ~150——args 侧单独收紧到 1300。
+      const argsFiles = pushWithinBudget<string>([], parseRows, 1300);
+      if (argsFiles.length < parseRows.length) argsFiles.push(`…另有 ${parseRows.length - argsFiles.length} 条未列`);
+      emitStep(onProgress, "digestFiles", "verify", `逐文件解析 ${parseRows.length} 条`, { files: argsFiles, round: attempted.size });
     }
     {
       const candidate = grading.ranked.find((c) => c.id === current);
@@ -649,7 +654,7 @@ export async function closeOutTvLanding(options: {
       const next = nextCandidate(grading, tried);
       const retryDetail = `映射未覆盖目标:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
       stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size + 1 });
+      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size });
       return { verdict: "retry_other", done: null, next, escalated, deadRetries };
     }
 
@@ -718,7 +723,7 @@ export async function closeOutTvLanding(options: {
       stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
       const doneDetail = `暂无资源(仲裁 abandon:${diagnosis.reasoning})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail, { round: attempted.size + 1 });
+      emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail, { round: attempted.size });
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return { verdict: "abandon", done: await concludeUncovered(sandbox, {
         text: `仲裁 abandon:${diagnosis.reasoning}`,
@@ -743,6 +748,6 @@ export async function closeOutTvLanding(options: {
     const next = aiNext ?? nextCandidate(grading, tried);
     const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}${aiNext ? "(仲裁指定)" : ""}`;
     stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-    emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail, { round: attempted.size + 1 });
+    emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail, { round: attempted.size });
     return { verdict: "retry_other", done: null, next, escalated, deadRetries };
 }

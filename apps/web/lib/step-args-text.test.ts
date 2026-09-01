@@ -74,3 +74,25 @@ describe("stepDetailView — 结构化证据行(§23)", () => {
     expect(stepDetailView(step({}))).toBeNull();
   });
 });
+describe("B6(issue #29)紧凑集号/AI 映射消费", () => {
+  function st(args: Record<string, unknown>): ActivityStepView {
+    return { ordinal: 1, toolName: "stagingDigest", activity: "a", phase: "verify", at: "2026-09-01T00:00:00Z", args, stepStatus: "success" };
+  }
+  it("missingCodes {count,sample} → '还缺 N 集(样本…)'", () => {
+    const out = stepArgsText(st({ coveredCodes: { count: 1, sample: ["S02E06"] }, missingCodes: { count: 2, sample: ["S02E19", "S02E20"] } }));
+    expect(out).toContain("还缺 2 集");
+    expect(out).toContain("S02E19");
+  });
+  it("coveredCodes {count:0} → null(无遗漏,不显示)", () => {
+    expect(stepArgsText(st({ coveredCodes: { count: 0, sample: [] }, missingCodes: { count: 0, sample: [] } }))).toBeNull();
+  });
+  it("mapping compact → 'AI 映射: file → code'", () => {
+    const out = stepArgsText(st({ aiUsed: true, mapping: [{ file: "01.mp4", code: "S02E19" }] }));
+    expect(out).toContain("AI 映射");
+    expect(out).toContain("S02E19");
+  });
+  it("老形状数组 coveredCodes 兼容", () => {
+    const out = stepArgsText(st({ coveredCodes: ["S02E06"], missingCodes: [] }));
+    expect(out).toContain("命中 1 集");
+  });
+});

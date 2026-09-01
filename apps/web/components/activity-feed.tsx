@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import Link from "next/link";
 import { CheckCircle2, ChevronDown, ChevronRight, Clock3, Loader2, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { showHref } from "@media-track/workflow/scope";
@@ -17,7 +17,7 @@ import {
   stepDetailView,
   type StepDetailView as StepEvidenceView,
 } from "../lib/step-args-text";
-import { decidedByLabel, groupStepsIntoRounds, poolLabel, type StepRoundCard } from "../lib/step-rounds";
+import { groupStepsIntoRounds, hasRoundStructure, roundVerdict, type StepRoundCard } from "../lib/step-rounds";
 import { isDemoModeClient } from "../lib/demo-mode";
 import { demoCompletedItems, demoInProgressActivityItems } from "../lib/demo-session";
 import { useDemoAcquisitions, useDemoInProgress } from "../lib/use-demo-session";
@@ -148,7 +148,7 @@ function StepRow({ step }: { step: ActivityStepView }) {
   const detail = stepDetailView(step);
   const argsText = stepArgsText(step);
   return (
-    <div className="act-step" key={step.ordinal}>
+    <div className="act-step">
       <StepStatusIcon status={step.stepStatus} />
       <div className="act-step-main">
         <div className="act-step-head">
@@ -164,12 +164,18 @@ function StepRow({ step }: { step: ActivityStepView }) {
 }
 
 /** 轮次卡片:默认折叠,点开展开该轮的全部步骤。issue #29。 */
-function RoundCard({ round, card }: { round: number; card: StepRoundCard }) {
+function RoundCard({ card }: { card: StepRoundCard }) {
   const [open, setOpen] = useState(false);
-  if (round === 0) {
+  // B5:卡头点击需阻止冒泡——RoutineCardWrapper 的 <li onClick> 会包住整个步骤区,
+  // 不 stop 的话点卡片会先折叠整条巡检项、卡片被卸载。
+  const toggle = (e: ReactMouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    setOpen((v) => !v);
+  };
+  if (card.kind !== "transfer") {
     return (
-      <div className="act-round act-round-decision">
-        <div className="act-round-head act-round-toggle" onClick={() => setOpen((v) => !v)}>
+      <div className={"act-round act-round-" + card.kind}>
+        <div className="act-round-head act-round-toggle" role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e as unknown as ReactMouseEvent<HTMLDivElement>); } }}>
           <span className="act-round-title">{card.heading}</span>
           <span className="act-round-count">{card.steps.length} 步</span>
           <ExpandChevron open={open} />
@@ -178,16 +184,17 @@ function RoundCard({ round, card }: { round: number; card: StepRoundCard }) {
       </div>
     );
   }
+  // B1:判定三态(单一事实来源 roundVerdict)——pass=digest 通过或最终归位;
+  // fail=未通过且未归位;unknown=args 被塌缩。
+  const verdict = roundVerdict(card);
   const digest = card.steps.find((s) => s.toolName === "stagingDigest");
-  const transfer = card.steps.find((s) => s.toolName === "transferCandidate");
-  const passes = digest?.args?.["passes"] === true;
   const videoCount = typeof digest?.args?.["videoCount"] === "number" ? digest.args["videoCount"] : undefined;
   return (
-    <div className={"act-round" + (passes ? " act-round-pass" : "")}>
-      <div className="act-round-head act-round-toggle" onClick={() => setOpen((v) => !v)}>
+    <div className={"act-round act-round-transfer" + (verdict === "pass" ? " act-round-pass" : verdict === "fail" ? " act-round-fail" : "")}>
+      <div className="act-round-head act-round-toggle" onClick={toggle}>
         <span className="act-round-title">{card.heading}</span>
-        {videoCount !== undefined ? <span className="act-round-meta">{videoCount} 个视频</span> : null}
-        {passes ? <span className="act-round-badge act-round-badge-pass">✓ 命中</span> : null}
+        {videoCount !== undefined ? <span className="act-round-meta">{videoCount} 个文件</span> : null}
+        {verdict === "pass" ? <span className="act-round-badge act-round-badge-pass">✓ 命中</span> : verdict === "fail" ? <span className="act-round-badge act-round-badge-fail">✗ 未命中</span> : verdict === "unknown" ? <span className="act-round-badge act-round-badge-unknown">? 判定未知</span> : null}
         <ExpandChevron open={open} />
       </div>
       {open ? <div className="act-round-body">{card.steps.map((s) => <StepRow key={s.ordinal} step={s} />)}</div> : null}
@@ -204,7 +211,7 @@ export function StepList({ steps }: { steps: ActivityStepView[] }) {
       </div>
     );
   }
-  const hasRounds = steps.some((s) => s.toolName === "transferCandidate" && typeof s.args?.["round"] === "number");
+  const hasRounds = hasRoundStructure(steps);
   if (!hasRounds) {
     // 老数据:无轮次信息,保持原有扁平列表(行为不变)。
     return (
@@ -216,7 +223,7 @@ export function StepList({ steps }: { steps: ActivityStepView[] }) {
   const cards = groupStepsIntoRounds(steps);
   return (
     <div className="act-round-list">
-      {cards.map((card) => <RoundCard key={String(card.round) + "-" + card.steps[0]?.ordinal} round={card.round} card={card} />)}
+      {cards.map((card) => <RoundCard key={String(card.round) + "-" + card.kind + "-" + card.steps[0]?.ordinal} card={card} />)}
     </div>
   );
 }

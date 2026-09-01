@@ -68,6 +68,30 @@ export function stepArgsText(step: ActivityStepView): string | null {
       return `解析: ${rows.slice(0, 2).join(" ｜ ")}`;
     }
   }
+  // B6(issue #29):stagingDigest 的紧凑集号证据——{count,sample} 形状,页面可见「还缺什么」。
+  const covered = compactCodes(args.coveredCodes);
+  const missing = compactCodes(args.missingCodes);
+  if (missing !== null && missing.count > 0) {
+    const sample = missing.sample.length > 0 ? missing.sample.slice(0, 4).join(",") : "";
+    return `还缺 ${missing.count} 集${sample ? `(${sample}…)` : ""}${covered !== null ? ` · 已有 ${covered.count} 集` : ""}`;
+  }
+  if (covered !== null && covered.count > 0) {
+    return `命中 ${covered.count} 集${covered.sample.length > 0 ? `(${covered.sample.slice(0, 4).join(",")}…)` : ""}`;
+  }
+  // B6:AI 集数映射(mapping compact 形状 [{'file','code'}] 或旧数组 [file,code]? 新形状)。
+  const mapping = Array.isArray(args.mapping) ? args.mapping : null;
+  if (mapping && mapping.length > 0) {
+    const pairs = mapping.map((row) => {
+      const record = (row ?? {}) as Record<string, unknown>;
+      const file = typeof record.file === "string" ? record.file : "?";
+      const code = typeof record.code === "string" ? record.code : "?";
+      return `${file} → ${code}`;
+    });
+    return `AI 映射: ${pairs.slice(0, 3).join(" ｜ ")}${pairs.length > 3 ? ` 等 ${pairs.length} 条` : ""}`;
+  }
+  if (args.aiUsed === true) {
+    return "AI 已介入集数映射";
+  }
   if (keyword) {
     return `关键词: ${keyword}`;
   }
@@ -128,4 +152,17 @@ export function stepDetailView(step: ActivityStepView): StepDetailView {
     }
   }
   return null;
+}
+
+/** 读取 stagingDigest 的紧凑集号形状 {count,sample};老形状数组也兼容。 */
+function compactCodes(value: unknown): { count: number; sample: string[] } | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const count = typeof record.count === "number" ? record.count : null;
+  const sample = Array.isArray(record.sample) ? record.sample.filter((x): x is string => typeof x === "string") : [];
+  // 老形状:直接数组(codes: ["S02E06"])。
+  if (count === null && Array.isArray(value)) {
+    return { count: value.length, sample: value.filter((x): x is string => typeof x === "string") };
+  }
+  return count === null ? null : { count, sample };
 }

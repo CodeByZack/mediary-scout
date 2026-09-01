@@ -3016,17 +3016,27 @@ select.setting-control {
   padding-left: 70px;
   border-top: 1px solid var(--border-soft);
   background: var(--bg-card);
-  max-height: 420px;
+  /* M5:外层只留一档滚动(卡片内部不再各自滚动,避免三层滚轮链);
+     max-height 由外层容器控制,这里不做内层滚动。 */
   overflow-y: auto;
+}
+/* M5:例行巡检卡内没有海报列,70px 对齐无意义——收窄回 12px。 */
+.routine-step-list .act-round-list,
+.act-round-list-inline {
+  padding-left: 12px;
 }
 .act-round {
   border: 1px solid var(--border-soft);
   border-radius: 8px;
   overflow: hidden;
-  background: var(--bg-elevated, var(--bg-card));
+  /* M4:--bg-elevated 不存在,改用 --bg-raised(主题深灰高于 --bg-card)。 */
+  background: var(--bg-raised);
 }
 .act-round-pass {
-  border-color: rgba(34, 197, 94, 0.5);
+  border-color: var(--accent, #16a34a);
+}
+.act-round-fail {
+  border-color: rgba(220, 38, 38, 0.6);
 }
 .act-round-head {
   display: flex;
@@ -3037,7 +3047,8 @@ select.setting-control {
   flex-wrap: wrap;
 }
 .act-round-toggle:hover {
-  background: var(--bg-hover, rgba(128, 128, 128, 0.06));
+  /* M4:--bg-hover 不存在,用通用浅灰。 */
+  background: rgba(128, 128, 128, 0.08);
 }
 .act-round-title {
   font-weight: 600;
@@ -3057,9 +3068,20 @@ select.setting-control {
   font-size: 11px;
   padding: 1px 7px;
   border-radius: 999px;
-  background: rgba(34, 197, 94, 0.15);
-  color: #16a34a;
   font-weight: 600;
+}
+/* M4:命中/未命中/未知三分,颜色对齐主题 accent 与失败红,不再混 Tailwind 绿。 */
+.act-round-badge-pass {
+  background: rgba(30, 215, 96, 0.16);
+  color: var(--accent);
+}
+.act-round-badge-fail {
+  background: rgba(220, 38, 38, 0.14);
+  color: #ef4444;
+}
+.act-round-badge-unknown {
+  background: rgba(128, 128, 128, 0.16);
+  color: var(--text-soft);
 }
 .act-round-body {
   border-top: 1px solid var(--border-soft);
@@ -3067,13 +3089,13 @@ select.setting-control {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 300px;
-  overflow-y: auto;
+  /* M5:去掉内层 max-height/overflow,滚动统一交给外层 .act-round-list。 */
 }
-.act-round-decision .act-round-title {
+.act-round-decision .act-round-title, .act-round-closing .act-round-title {
   color: var(--text-soft);
   font-weight: 500;
 }
+
 
 .act-step {
   display: flex;
