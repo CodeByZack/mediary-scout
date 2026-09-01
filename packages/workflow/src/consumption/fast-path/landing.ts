@@ -151,7 +151,7 @@ export async function tryEpisodeMapping(options: {
     clean[fileName] = code;
   }
   if (!valid) {
-    const failDetail = `集数映射校验失败(文件名幻觉/集数冲突),回落诊断仲裁`;
+    const failDetail = `AI 补认结果与文件名对不上,交给诊断仲裁`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
     emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "failed";
@@ -168,7 +168,8 @@ export async function tryEpisodeMapping(options: {
   const re = options.ram(clean);
   options.onDigest(re);
   if (re.passes) {
-    const mapDetail = `集数映射 ${Object.entries(clean).length} 个文件 → ${Object.values(clean).join(",")},重建 digest 通过`;
+        // issue #29 用户反馈:人话——AI 根据文件名补认了哪些集,结果如何。
+    const mapDetail = `AI 补认:${Object.values(clean).join(",")},目标集数已齐`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "log");
     emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "passed";
@@ -181,7 +182,8 @@ export async function tryEpisodeMapping(options: {
     return "unmapped-but-clean";
   }
   // 重建后仍脏(映射不完整/失败) → 回落诊断仲裁。
-  const failDetail = `集数映射后仍不通过(${re.summary.split("\n").join(" / ")}),回落诊断仲裁`;
+    // issue #29 用户反馈:人话——AI 补认后结果如何、为什么要去诊断。
+  const failDetail = `AI 补认后仍不完整(${re.summary.split("\n").join(" / ")}),交给诊断仲裁`;
   stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
   emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
   return "failed";
@@ -458,9 +460,11 @@ export async function closeOutTvLanding(options: {
       ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
       ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
     });
+    // issue #29 用户反馈:activity 人话化——通过=「转存内容完整」,未通过= summary 结论本身
+    // (summary 已是一句人话),不再包裹「未通过(脏包)」这类内部判定前缀。
     const digestDetail = digest.passes
-      ? `干净落地,覆盖 ${digest.coveredCodes.join(",") || "-"}`
-      : `未通过(${digest.isDirtyPack ? "脏包" : "未覆盖目标"}):${digest.summary.split("\n").join(" / ")}`;
+      ? `转存内容完整,认出 ${digest.coveredCodes.join(",") || "-"}`
+      : digest.summary;
     stepLog(
       sandbox,
       target.title,
@@ -487,7 +491,7 @@ export async function closeOutTvLanding(options: {
       // M6(修正):args 侧只截断、不加「未列」汇总行——stdout 的 parseRows 已有总计数,
       // 二次截断再加会双条「未列」且把 stdout 汇总行计入。总数在 activity 文案里已有。
       const argsFiles = pushWithinBudget<string>([], parseRows, 1300);
-      emitStep(onProgress, "digestFiles", "verify", `逐文件解析 ${parseRows.length} 条`, { files: argsFiles, round: attempted.size });
+      emitStep(onProgress, "digestFiles", "verify", `逐文件识别 ${parseRows.length} 条`, { files: argsFiles, round: attempted.size });
     }
     {
       const candidate = grading.ranked.find((c) => c.id === current);
@@ -526,7 +530,9 @@ export async function closeOutTvLanding(options: {
           (finalized.skippedNotNeeded.length > 0
             ? ` / 非缺集跳过 ${finalized.skippedNotNeeded.length} 件`
             : "");
-        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
+                // issue #29 用户反馈:finalizeLanding 是「真正落到网盘」的一步(rename→move→mark),
+        // 文案点明归位到 Season 目录 + 结果,不再用「标记/移动/清理」割裂的内部词。
+        const organizeDetail = `归位到 Season 目录:${finalized.marked.join(",") || "-"}${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
         emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, { ok: true });
       } catch (error) {
@@ -551,7 +557,8 @@ export async function closeOutTvLanding(options: {
           reason: error instanceof Error ? error.message : String(error),
         }), next: null, escalated, deadRetries };
       }
-      const doneDetail = `入库(obtained=${digest.coveredCodes.join(",") || "-"})`;
+            // issue #29 用户反馈:finish 人话——不再「入库(obtained=…)」,直接说收到了哪几集。
+      const doneDetail = `已完成:${digest.coveredCodes.join(",") || "-"} 已入库`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return { verdict: "clean", done: {
@@ -641,7 +648,8 @@ export async function closeOutTvLanding(options: {
           reason: error instanceof Error ? error.message : String(error),
         }), next: null, escalated, deadRetries };
       }
-      const doneDetail = `入库(集数映射:${landingDigest.coveredCodes.join(",") || "-"})`;
+            // issue #29:人话——AI 补认后这几集已入库。
+      const doneDetail = `已完成:${landingDigest.coveredCodes.join(",") || "-"} 已入库(AI 补认)`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return { verdict: "mapped_clean", done: {
@@ -658,7 +666,8 @@ export async function closeOutTvLanding(options: {
         await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
       }
       const next = nextCandidate(grading, tried);
-      const retryDetail = `映射未覆盖目标:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
+      // issue #29:换候选不显示 ID(人话)。
+      const retryDetail = `这轮转存没拿到需要的集:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
       stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
       emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size });
       return { verdict: "retry_other", done: null, next, escalated, deadRetries };
@@ -713,11 +722,12 @@ export async function closeOutTvLanding(options: {
           reason: error instanceof Error ? error.message : String(error),
         }), next: null, escalated, deadRetries };
       }
-      const doneDetail = `入库(仲裁 accept:${diagnosis.reasoning})`;
+            // issue #29:人话——仲裁同意后这几集已入库,理由附后。
+      const doneDetail = `已完成:${landingDigest.coveredCodes.length > 0 ? landingDigest.coveredCodes.join(",") : ""} 已入库(${diagnosis.reasoning})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return { verdict: "accept", done: {
-        text: `仲裁 accept:${diagnosis.reasoning}`,
+        text: `${diagnosis.reasoning}`,
         steps: attempted.size,
         coverage: await sandbox.finish(),
         escalated,
@@ -727,7 +737,7 @@ export async function closeOutTvLanding(options: {
       await sandbox.discardStaging();
       const declineDetail = `放弃:${diagnosis.reasoning}`;
       stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
-      const doneDetail = `暂无资源(仲裁 abandon:${diagnosis.reasoning})`;
+      const doneDetail = `放弃:${diagnosis.reasoning}`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail, { round: attempted.size });
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);

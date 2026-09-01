@@ -100,7 +100,8 @@ async function runTvCandidatePhase(
   let current: string | null;
   if (grading.uniqueTopGrade && grading.top) {
     current = grading.top.id;
-    const pickDetail = `${poolLabel}池唯一 A 盲转:候选 ${current}(${grading.top.title})`;
+    // issue #29 用户反馈:不显示候选 ID,只留标题;动作人话化(唯一 A 级,代码直选)。
+    const pickDetail = `选中:《${grading.top.title}》(评级 A,代码直选)`;
     stepLog(sandbox, target.title, "选片", pickDetail);
     // issue #29:盲转=代码决策(code);供前端标记「谁选的」。
     emitStep(onProgress, "pickCandidate", "pick", pickDetail, {
@@ -119,9 +120,9 @@ async function runTvCandidatePhase(
     });
     current = arbitration.candidateId;
     if (current === null) {
-      const declineDetail = `${poolLabel}池放弃:${arbitration.reasoning || "无可用候选"}`;
+      const declineDetail = `放弃:${arbitration.reasoning || "没有合适的资源"}`;
       stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
-      const doneDetail = `暂无资源(${poolLabel}池仲裁放弃:${arbitration.reasoning || "无可用候选"})`;
+      const doneDetail = `暂无资源:${arbitration.reasoning || "没有合适的资源"}`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "arbitrateSelection", "pick", declineDetail, {
         // issue #29 用户拍板:候选列表只在 gradeCandidates 展示一次,仲裁结果不带全表。
@@ -132,7 +133,7 @@ async function runTvCandidatePhase(
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return {
         done: await concludeUncovered(sandbox, {
-          text: `${poolLabel}池仲裁放弃:${arbitration.reasoning || "无可用候选"}`,
+          text: `暂无资源:${arbitration.reasoning || "没有合适的资源"}`,
           steps: ctx.attempted.size,
           escalated,
           reason: arbitration.reasoning || "无可用候选",
@@ -163,7 +164,9 @@ async function runTvCandidatePhase(
         deadRetries,
       };
     }
-    const pickedDetail = `${poolLabel}池选中候选 ${current}${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`;
+        // issue #29:Ai 仲裁选片:不显示候选 ID;标题从当前评级找(找不到退「候选」)。
+    const pickedTitle = grading.ranked.find((c) => c.id === current)?.title ?? "候选";
+    const pickedDetail = `选中:《${pickedTitle}》${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`;
     stepLog(sandbox, target.title, "仲裁", pickedDetail);
     emitStep(onProgress, "arbitrateSelection", "pick", pickedDetail, {
       // issue #29:仲裁结果不带候选全表(gradeCandidates 已展示);只带结论与 AI 决策标记。
@@ -185,7 +188,10 @@ async function runTvCandidatePhase(
     deadRetries < MAX_DEAD_LINK_RETRIES
   ) {
     ctx.tried.add(current);
-    const transferDetail = `${poolLabel}池候选 ${current}(${ctx.attempted.size - poolTransferBase + 1}/${attemptBudget} 次转存)`;
+    // issue #29 用户反馈:转存文案人话化——动作(转存到暂存区)+ 第几次,不显示候选 ID;
+    // 链接在 args.linkUrl(前端展示可点),标题在 args.title。
+    const currentTitle = grading.ranked.find((c) => c.id === current)?.title ?? "";
+    const transferDetail = `转存《${currentTitle || "候选"}》到暂存区(${ctx.attempted.size - poolTransferBase + 1}/${attemptBudget} 次转存)`;
     stepLog(sandbox, target.title, "转存", transferDetail);
     // issue #29:转存步骤的结构化证据(卡片化)。round 跨池单调递增,给前端「第几轮转存」。
     const transferMeta: TransferStepMeta = {
@@ -195,7 +201,6 @@ async function runTvCandidatePhase(
       transferIndex: ctx.attempted.size - poolTransferBase + 1,
     };
     // issue #29:转存步骤带标题+链接(用户拍板展示;标题来自当前分级候选,链接来自 urlById)。
-    const currentTitle = grading.ranked.find((c) => c.id === current)?.title ?? "";
     emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current, ...(currentTitle ? { title: currentTitle } : {}), ...transferMeta, ...(ctx.urlById?.[current] !== undefined ? { linkUrl: ctx.urlById[current] } : {}) });
     const transfer = await sandbox.transferCandidate({
       snapshotId: candidateSnapshotId(view, current),
@@ -429,11 +434,16 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     escalated = primaryOutcome.escalated;
     deadRetries = primaryOutcome.deadRetries;
     if (primaryOutcome.done) {
-      const checkoutDetail =
-        `转存 primary ${ctx.attempted.size}/${MAX_TRANSFER_ATTEMPTS} · 兜底转存 0/${MAX_FALLBACK_TRANSFER_ATTEMPTS} · ` +
-        `死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
-      stepLog(sandbox, target.title, "结账", checkoutDetail);
-      emitStep(onProgress, "runCheckout", "finalize", checkoutDetail);
+      // issue #29 用户反馈:结账行人话——activity 只讲结果,统计细节放 args(前端展示)。
+      const primaryDoneDetail = `转存 ${ctx.attempted.size} 次完成${escalated ? ",AI 介入" : ""}`;
+      stepLog(sandbox, target.title, "结账", primaryDoneDetail);
+      emitStep(onProgress, "runCheckout", "finalize", primaryDoneDetail, {
+        transfers: ctx.attempted.size,
+        fallbackTransfers: 0,
+        deadLinkRetries: deadRetries,
+        searches: 1 + fallbackRounds,
+        aiEscalated: escalated,
+      });
       return primaryOutcome.done;
     }
     primaryTransfers = ctx.attempted.size;
@@ -479,11 +489,16 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       const doneDetail = "暂无资源(快照为空)";
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
-      const exhaustedCheckout0 =
-        `转存 primary ${primaryTransfers}/${MAX_TRANSFER_ATTEMPTS} · 兜底转存 ${ctx.attempted.size - primaryTransfers}/${MAX_FALLBACK_TRANSFER_ATTEMPTS} · ` +
-        `死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
+      // issue #29 用户反馈:结账行不解释内部配额,一句话人话 + 统计进 args。
+      const exhaustedCheckout0 = `转存 ${ctx.attempted.size} 次后仍未拿到目标集${escalated ? "(AI 介入)" : ""}`;
       stepLog(sandbox, target.title, "结账", exhaustedCheckout0);
-      emitStep(onProgress, "runCheckout", "finalize", exhaustedCheckout0);
+      emitStep(onProgress, "runCheckout", "finalize", exhaustedCheckout0, {
+        transfers: ctx.attempted.size,
+        fallbackTransfers: ctx.attempted.size - primaryTransfers,
+        deadLinkRetries: deadRetries,
+        searches: 1 + fallbackRounds,
+        aiEscalated: escalated,
+      });
       return concludeUncovered(sandbox, {
         text: "无候选(raw snapshot 为空)",
         steps: ctx.attempted.size,
@@ -529,11 +544,16 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   const exhaustedDetail = `缺集(尝试 ${ctx.attempted.size} 次转存,扫过 ${tried.size} 个候选仍未覆盖)`;
   stepLog(sandbox, target.title, "结论", exhaustedDetail);
   emitStep(onProgress, "reportNoCoverage", "finalize", exhaustedDetail);
-  const exhaustedCheckout =
-    `转存 primary ${primaryTransfers}/${MAX_TRANSFER_ATTEMPTS} · 兜底转存 ${ctx.attempted.size - primaryTransfers}/${MAX_FALLBACK_TRANSFER_ATTEMPTS} · ` +
-    `死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
+  // issue #29:同上人话结账。
+  const exhaustedCheckout = `转存 ${ctx.attempted.size} 次后仍未拿到目标集${escalated ? "(AI 介入)" : ""}`;
   stepLog(sandbox, target.title, "结账", exhaustedCheckout);
-  emitStep(onProgress, "runCheckout", "finalize", exhaustedCheckout);
+  emitStep(onProgress, "runCheckout", "finalize", exhaustedCheckout, {
+    transfers: ctx.attempted.size,
+    fallbackTransfers: ctx.attempted.size - primaryTransfers,
+    deadLinkRetries: deadRetries,
+    searches: 1 + fallbackRounds,
+    aiEscalated: escalated,
+  });
   return {
     text: `fast path 未覆盖(尝试 ${ctx.attempted.size} 次转存)`,
     steps: ctx.attempted.size,

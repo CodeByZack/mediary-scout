@@ -167,27 +167,27 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
 }
 
 function summarizeDigest(d: Omit<StagingDigest, "summary">): string {
-  const lines: string[] = [];
-  lines.push(`视频 ${d.videos.length} 个 / 字幕 ${d.subtitles.length} 个`);
-  if (d.episodeCodes.length > 0) {
-    lines.push(`解析出集数: ${d.episodeCodes.join(", ")}`);
+  // issue #29 用户反馈:不要内部术语(脏包/判定/覆盖目标),写一句人话结论:
+  // 转存后检查 → 认出哪几集 / 有几个文件看不出 / 暂时缺哪几集 / 日期拒收说明。
+  const parts: string[] = [];
+  const known = d.episodeCodes.length > 0 ? d.episodeCodes.join(",") : "无";
+  // 日期拒收的文件不算「看不出集数」(原因不同:文件名有日期但与播出日矛盾)。
+  const unparsedCount = d.unparsedVideos.filter((v) => !d.dateRejectedVideos.includes(v)).length;
+  if (d.passes) {
+    parts.push(`转存内容完整:认出 ${known}${d.subtitles.length > 0 ? `,含字幕 ${d.subtitles.length} 个` : ""}`);
+  } else {
+    const unparsedNote = unparsedCount > 0 ? `${unparsedCount} 个文件看不出集数` : "";
+    const missingNote = d.missingCodes.length > 0 ? `,还缺 ${d.missingCodes.join(",")}` : "";
+    parts.push(`认出 ${known}${unparsedNote ? ",另有 " + unparsedNote + missingNote : missingNote}`);
+    if (d.dateRejectedVideos.length > 0) {
+      // 年守卫:文件自带日期与该集播出日矛盾 → 不采信。保留可见(PR #24 契约,测试断言)。
+      parts.push(`季份日期不符剔除 ${d.dateRejectedVideos.join("、")}`);
+    }
+    if (d.junkSignals.length > 0) {
+      parts.push(`含多余文件(${d.junkSignals.join("、")})`);
+    }
   }
-  if (d.dateRejectedVideos.length > 0) {
-    lines.push(`季份日期不符剔除: ${d.dateRejectedVideos.join(" / ")}`);
-  }
-  if (d.unparsedVideos.length > 0) {
-    lines.push(`无法解析集数的视频: ${d.unparsedVideos.join(" / ")}`);
-  }
-  if (d.outOfSeasonCodes.length > 0) {
-    lines.push(`季外集数: ${d.outOfSeasonCodes.join(", ")}`);
-  }
-  if (d.junkSignals.length > 0) {
-    lines.push(`脏包信号: ${d.junkSignals.join(" / ")}`);
-  }
-  lines.push(`覆盖目标: ${d.coveredCodes.length > 0 ? d.coveredCodes.join(", ") : "无"}`);
-  lines.push(`仍缺: ${d.missingCodes.length > 0 ? d.missingCodes.join(", ") : "无"}`);
-  lines.push(`判定: ${d.passes ? "符合，可归位标记" : d.isDirtyPack ? "脏包，需诊断" : "未覆盖目标，需诊断"}`);
-  return lines.join("\n");
+  return parts.join("；");
 }
 
 /**

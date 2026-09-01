@@ -321,7 +321,7 @@ async function runMovieCandidatePhase(
 
     const digestDetail = digest.passes
       ? `一部正片(视频 ${digest.videos.length} / 字幕 ${digest.subtitles.length})`
-      : `未通过(${digest.isDirtyPack ? "非单部正片/脏包" : "无视频"}):${digest.summary.split("\n").join(" / ")}`;
+      : digest.summary;
     stepLog(
       sandbox,
       target.title,

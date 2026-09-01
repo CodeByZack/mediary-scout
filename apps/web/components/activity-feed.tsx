@@ -17,7 +17,7 @@ import {
   stepDetailView,
   type StepDetailView as StepEvidenceView,
 } from "../lib/step-args-text";
-import { groupStepsIntoRounds, hasRoundStructure, roundVerdict, poolLabel, decidedByLabel, type StepRoundCard } from "../lib/step-rounds";
+import { groupStepsIntoRounds, hasRoundStructure, type StepRoundCard } from "../lib/step-rounds";
 import { isDemoModeClient } from "../lib/demo-mode";
 import { demoCompletedItems, demoInProgressActivityItems } from "../lib/demo-session";
 import { useDemoAcquisitions, useDemoInProgress } from "../lib/use-demo-session";
@@ -144,6 +144,15 @@ export function StepStatusIcon({ status }: { status: ActivityStepView["stepStatu
 /** The expandable step list under a row header: one line per agent tool call,
  *  status icon + 中文 activity + toolName + localized time + key args. */
 /** 单条步骤行(扁平列表内)。 */
+/** issue #29 用户拍板:转存步骤展示分享链接(可点击)。链接来自 args.linkUrl。 */
+function transferLink(step: ActivityStepView): React.ReactNode | null {
+  if (step.toolName !== "transferCandidate") return null;
+  const url = step.args?.["linkUrl"];
+  if (typeof url !== "string" || url.length === 0) return null;
+  return (
+    <a className="act-ev-link" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}> 🔗分享链接</a>
+  );
+}
 function StepRow({ step }: { step: ActivityStepView }) {
   const detail = stepDetailView(step);
   const argsText = stepArgsText(step);
@@ -152,7 +161,7 @@ function StepRow({ step }: { step: ActivityStepView }) {
       <StepStatusIcon status={step.stepStatus} />
       <div className="act-step-main">
         <div className="act-step-head">
-          <span className="act-step-activity">{step.activity}</span>
+          <span className="act-step-activity">{step.activity}{transferLink(step)}</span>
           <span className="act-step-tool">{step.toolName}</span>
           <span className="act-step-at">{new Date(step.at).toLocaleString("zh-CN")}</span>
         </div>
@@ -184,23 +193,15 @@ function RoundCard({ card }: { card: StepRoundCard }) {
       </div>
     );
   }
-  // B1:判定三态(单一事实来源 roundVerdict)——pass=digest 通过或最终归位;
-  // fail=未通过且未归位;unknown=args 被塌缩。
-  const verdict = roundVerdict(card);
-  const transferStep = card.steps.find((s) => s.toolName === "transferCandidate");
-  const decidedBy = transferStep?.args?.["decidedBy"] as "code" | "ai" | undefined;
-  const pool = transferStep?.args?.["pool"] as "primary" | "fallback" | undefined;
-  // issue #29:决策来源用文字标记(⚙️代码/🤖AI)+ 池;标题已通俗化,黑话挪到这里。
-  const decidedMeta = [decidedByLabel(decidedBy), poolLabel(pool)].filter((x) => x && x !== "—").join(" · ") || undefined;
+  // issue #29 用户拍板:去掉 ✓✗ 判定徽章与 ⚙️⚖️决策 meta——成功与否看内容(归位/失败步骤),
+  // 卡内步骤本身说明一切,不再用红绿框/徽章断言误导(此前 AI 映射成功却显示未命中)。
   const digest = card.steps.find((s) => s.toolName === "stagingDigest");
   const videoCount = typeof digest?.args?.["videoCount"] === "number" ? digest.args["videoCount"] : undefined;
   return (
-    <div className={"act-round act-round-transfer" + (verdict === "pass" ? " act-round-pass" : verdict === "fail" ? " act-round-fail" : "")}>
+    <div className="act-round act-round-transfer">
       <div className="act-round-head act-round-toggle" role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e as unknown as ReactMouseEvent<HTMLDivElement>); } }}>
         <span className="act-round-title">{card.heading}</span>
-        {decidedMeta ? <span className="act-round-meta">{decidedMeta}</span> : null}
         {videoCount !== undefined ? <span className="act-round-meta">{videoCount} 个文件</span> : null}
-        {verdict === "pass" ? <span className="act-round-badge act-round-badge-pass">✓ 命中</span> : verdict === "fail" ? <span className="act-round-badge act-round-badge-fail">✗ 未命中</span> : verdict === "unknown" ? <span className="act-round-badge act-round-badge-unknown">? 判定未知</span> : null}
         <ExpandChevron open={open} />
       </div>
       {open ? <div className="act-round-body">{card.steps.map((s) => <StepRow key={s.ordinal} step={s} />)}</div> : null}

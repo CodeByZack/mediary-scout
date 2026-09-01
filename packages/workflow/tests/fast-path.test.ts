@@ -1088,9 +1088,18 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     // issue #29:转存步骤带标题 + 链接(用户拍板;链接来自 urlById 透出)。
     expect(steps[5]!.args.title).toBe("狂飙.S01E01.1080p.中字");
     expect(steps[5]!.args.linkUrl).toBe("https://115.com/s/abc123");
-    expect(steps[9]!.activity).toContain("入库");
-    expect(steps[10]!.activity).toContain("转存 primary 1/3"); // 结账行两池分别记账(PR #25)
-    expect(steps[10]!.activity).toContain("PanSou 搜索 1 次(primary 1 + 兜底 0)");
+    // issue #29 用户拍板:finish 人话化(「已完成:…已入库」);runCheckout 结账行也人话化,
+    // activity 只讲结果,统计细节进 args(transfers/searches/aiEscalated)。
+    expect(steps[9]!.activity).toContain("已完成:");
+    expect(steps[9]!.activity).toContain("已入库");
+    expect(steps[10]!.activity).toContain("转存 1 次完成");
+    expect(steps[10]!.args.transfers).toBe(1);
+    expect(steps[10]!.args.searches).toBe(1);
+    // issue #29 用户拍板:digest 人话化——activity 不再报「未通过(脏包)…判定」,
+    // 而是一句人话(如「认出 S01E01,还有…」);逐文件识别在 digestFiles 展示一次。
+    expect(steps[6]!.activity).not.toContain("脏包");
+    expect(steps[6]!.activity).not.toContain("判定");
+    expect(steps[7]!.activity).toContain("逐文件识别 1 条");
     // 可观测性增强(L1/L2/L4):决策与证据 payload 随事件走 agent_steps
     // issue #29:gradingDecision 只报决策摘要;候选评级列表只在 gradeCandidates 一次。
     expect(steps[2]!.args.uniqueTopGrade).toBe(true);

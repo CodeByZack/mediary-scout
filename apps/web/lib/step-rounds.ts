@@ -118,7 +118,7 @@ export function groupStepsIntoRounds(steps: ActivityStepView[]): StepRoundCard[]
       }
     }
     // 收尾步骤(finalizeLanding/finish/reportNoCoverage/conclude)归收尾卡,其余归决策链。
-    const closingTools = ["finish", "reportNoCoverage", "concludeUncovered"];
+    const closingTools = ["finish", "reportNoCoverage", "concludeUncovered", "runCheckout"];
     if (closingTools.includes(step.toolName)) closingSteps.push(step);
     else decisionSteps.push(step);
   }
@@ -130,13 +130,11 @@ export function groupStepsIntoRounds(steps: ActivityStepView[]): StepRoundCard[]
     if (card.kind !== "transfer") continue;
     const transfer = card.steps.find((s) => s.toolName === "transferCandidate");
     // B1 单一事实来源:判定走 roundVerdict(badge 消费),标题不含 verdict。
-    const candidate = transfer?.args?.["candidateId"] ?? "";
-    const shortId = typeof candidate === "string" && candidate.length > 28 ? "…" + candidate.slice(-20) : String(candidate ?? "");
     const roundLabel = card.round > 0 ? `第 ${card.round} 次转存` : "未记录轮次";
     // issue #29 用户反馈:标题要直白——「第 N 次转存 · 《候选标题》」;
-    // pool/决策者不进标题(黑话),转由卡片 meta 区展示(⚙️代码/🤖AI 文字标记)。
+    // 不显示候选 ID(用户明确不想要);无标题时退「转存」,不再露出短 ID。
     const candidateTitle = typeof transfer?.args?.["title"] === "string" && transfer.args["title"].length > 0 ? transfer.args["title"] : "";
-    const headTitle = candidateTitle ? `《${candidateTitle.slice(0, 26)}${candidateTitle.length > 26 ? "…" : ""}》` : (shortId && shortId !== "undefined" ? `候选 ${shortId}` : "转存");
+    const headTitle = candidateTitle ? `《${candidateTitle.slice(0, 26)}${candidateTitle.length > 26 ? "…" : ""}》` : "转存";
     card.heading = `${roundLabel} · ${headTitle}`;
   }
   return cards;

@@ -102,7 +102,7 @@ describe("groupStepsIntoRounds", () => {
     ];
     const cards = groupStepsIntoRounds(steps);
     expect(cards[0]?.heading).toContain("第 3 次转存");
-    // issue #29:标题不含池(黑话挪 meta);无候选标题时退回候选 id。
+    // issue #29:标题不含池;无候选标题时退回「转存」(也绝不显示候选 ID)。
     expect(cards[0]?.heading).not.toContain("primary");
     expect(cards[0]?.heading).not.toContain("—");
   });

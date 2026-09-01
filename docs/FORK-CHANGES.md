@@ -548,6 +548,30 @@ name 的期号 N，文件名「第M期」M≠N → 该条映射作废（整表�
 **待后续**：转存链接 URL 的沙盒透传（rawSnapshotView 与合并兜底池都拿不到 providerPayload，非一行调用）。
 
 ---
+## 30. issue #29 活动页人话化二期(用户实测二轮反馈,commit 待补)
+
+用户实测「绿灯军团」run 后反映:候选 ID 上 UI 没意义;「脏包/未通过/判定」等内部术语看不懂且与逐文件列表重复;
+AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」卡其实是 runCheckout 结账统计;整条链路看不到「真正转存
+(rename 归位)发生的地方」。本轮修订(全部为用户拍板):
+
+- **候选 ID 全链不上 UI**:pickCandidate/transferCandidate/arbitrateSelection 的 activity 一律只留标题,
+  不再拼候选 ID(日志 detail 保留 ID 供排障;transfer 卡无标题时退回「转存」而非短 ID)。
+- **stagingDigest 人话化**:summarizeDigest 重写——不再报「未通过(脏包)…判定:需诊断」,改一句人话
+  (「认出 S01E01,还有 2 个文件看不出集数,还缺 S01E02…」);通过=「转存内容完整」。movie 分支同步。
+- **去重复**:stagingDigest 只留结论,逐文件识别(digestFiles)只出现一次(用户嫌两边都列文件)。
+- **arbitrateEpisodeMapping 说明**:文案直说「AI 补认:…,目标集数已齐/仍不完整,交给诊断仲裁」——
+  用户此前分不清那步是不是 AI 在解析(是)。
+- **finalizeLanding 点明「真正落库」**:文案改为「归位到 Season 目录:…,移动 N 个文件…」——
+  这正是 rename→move→mark 那一步,用户理解的「真正落到网盘」;失败仍 wipe staging 诚实终止。
+- **去掉 ✓✗ 徽章与红绿框**:用户认为判定误导(映射成功却显示未命中)——成功与否现在看卡内步骤本身
+  (有归位/入库步骤=成了),不再有徽章断言;同时删掉卡头 meta 的「⚙️代码 · primary 池」黑话。
+- **runCheckout 归入收尾**:结账统计不再占一张「搜索与选片」卡;activity 一句话人话
+  (「转存 N 次完成/仍未拿到目标集」),统计细节进 args(transfers/searches/aiEscalated),前端按需展示。
+- **finish 人话化**:「入库(obtained=…)」→「已完成:S01E01 已入库」;abandon→「放弃:…」;accept 理由去前缀。
+- **前端**:StepRow 的 transferCandidate 步骤渲染分享链接(args.linkUrl,新窗口打开);
+  /vol1/1000/download 测试包已重打待实测(commit 号回填在本段)。
+- 附:.feed 容器 CSS 删除 max-width:760px(用户侧布局调整,非功能)。
+
 ## 注意事项
 
 - `.gitignore`：追加 `*_TODO.md`、`deploy/fpk/app/server/`、`deploy/fpk/dist/`

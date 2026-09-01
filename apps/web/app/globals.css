@@ -1342,7 +1342,6 @@ p {
   display: flex;
   flex-direction: column;
   gap: 40px;
-  max-width: 760px;
 }
 
 .feed-day-header {
