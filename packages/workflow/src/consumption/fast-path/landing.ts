@@ -479,8 +479,9 @@ export async function closeOutTvLanding(options: {
       stepLog(sandbox, target.title, "解析明细", parseRows.join(" / "));
       // M6:stepLog 的 parseRows 已按 1850 预算(stdout),但进 args 时被 {files,round} 包裹,
       // 距 agent-trace-sink 的 2000 字符整体塌缩只剩 ~150——args 侧单独收紧到 1300。
+      // M6(修正):args 侧只截断、不加「未列」汇总行——stdout 的 parseRows 已有总计数,
+      // 二次截断再加会双条「未列」且把 stdout 汇总行计入。总数在 activity 文案里已有。
       const argsFiles = pushWithinBudget<string>([], parseRows, 1300);
-      if (argsFiles.length < parseRows.length) argsFiles.push(`…另有 ${parseRows.length - argsFiles.length} 条未列`);
       emitStep(onProgress, "digestFiles", "verify", `逐文件解析 ${parseRows.length} 条`, { files: argsFiles, round: attempted.size });
     }
     {
@@ -522,7 +523,7 @@ export async function closeOutTvLanding(options: {
             : "");
         const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
-        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, { ok: true });
       } catch (error) {
         // A rename/move guard refused, or storage failed mid-landing — nothing was
         // reliably placed. Wipe staging and surface honest no-coverage (never a
@@ -534,7 +535,7 @@ export async function closeOutTvLanding(options: {
         }
         const organizeFailDetail = error instanceof Error ? error.message : String(error);
         stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
-        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
         const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
         stepLog(sandbox, target.title, "结论", doneDetail);
         emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
@@ -615,7 +616,7 @@ export async function closeOutTvLanding(options: {
             : "");
         const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
-        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, { ok: true });
       } catch (error) {
         try {
           await sandbox.discardStaging();
@@ -624,7 +625,7 @@ export async function closeOutTvLanding(options: {
         }
         const organizeFailDetail = error instanceof Error ? error.message : String(error);
         stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
-        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
         const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
         stepLog(sandbox, target.title, "结论", doneDetail);
         emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
@@ -696,7 +697,7 @@ export async function closeOutTvLanding(options: {
         }
         const organizeFailDetail = error instanceof Error ? error.message : String(error);
         stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
-        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
         const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
         stepLog(sandbox, target.title, "结论", doneDetail);
         emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);

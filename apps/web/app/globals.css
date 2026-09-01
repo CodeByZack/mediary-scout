@@ -3021,15 +3021,14 @@ select.setting-control {
   overflow-y: auto;
 }
 /* M5:例行巡检卡内没有海报列,70px 对齐无意义——收窄回 12px。 */
-.routine-step-list .act-round-list,
-.act-round-list-inline {
+.routine-step-list .act-round-list {
   padding-left: 12px;
 }
 .act-round {
   border: 1px solid var(--border-soft);
   border-radius: 8px;
   overflow: hidden;
-  /* M4:--bg-elevated 不存在,改用 --bg-raised(主题深灰高于 --bg-card)。 */
+  /* M4:--bg-elevated 不存在,改用 --bg-raised(#1f1f1f,比 --bg-card 更暗,卡片与容器同深色系)。 */
   background: var(--bg-raised);
 }
 .act-round-pass {

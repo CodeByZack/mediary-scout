@@ -428,6 +428,24 @@ CI 全绿后 squash 合并。issue #21 验收单(奇异新世界3.全集 C/C/A�
 **Budgets 接口扩展**：`Budgets` 增加 `maxFallbackTransferAttempts` 字段（当前无外部调用方，扩展安全），
 `DEFAULT_BUDGETS` 同步。
 
+**展示层 review2 修订(commit 0131db5,REQUEST_CHANGES 全闭环)**：
+- B1 判定三态：新增 `roundVerdict` 纯函数——digest passes=true 或卡内 finalizeLanding/finish（ok!==false）→ pass;
+  args 被 trace-sink 塌缩(未知)→ unknown;未通过未归位 → fail。映射救回不再假 ✗、塌缩不再假 ✗。
+- B2 轮次语义：landing.ts 三处 retry/abandon/retry_other 的 round 从 attempted.size+1 改 attempted.size
+  （在 attempted.add 之后求值,原为「下一轮」→ 造出只含一条仲裁的幻影卡/丢失败解释/顺序倒挂）。
+- B3 pool 诚实回退：poolLabel(undefined)→「—」而非谎报 primary;firstPoolOf/firstDecidedByOf 扫全卡第一个非空。
+- B4 卡片种类：StepRoundCard 加 kind(transfer/decision/closing),决策链与收尾分卡,不再两张同名「决策链」。
+- B5 冒泡修复：RoundCard 卡头 onClick stopPropagation(阻断 RoutineCardWrapper 的 li 折叠)+ role/tabIndex/
+  aria-expanded/onKeyDown(键盘可达性,transfer 卡也覆盖)。
+- B6 证据消费：stepArgsText 消费 coveredCodes{count,sample}/missingCodes/mapping——展开行可见「还缺 N 集」/「AI 映射」。
+- M4/M5/M6：CSS 用 --bg-raised 换不存在变量、badge 三分;routine 12px 缩进 + 去内层滚动;digestFiles
+  args 侧 1300 预算二次收紧(防 sink 塌缩)。L3/L4/L5：StepRow 内 key 移除、a11y、标题去重复 verdict。
+
+**复核修复(commit 待补,subagent 复核 0131db5)**:
+- Bug#1「归位失败假阳性」：finalizeLanding emit 补 ok 标记(成功 ok:true/失败 ok:false),roundVerdict 的
+  landed 排除 ok:false——诊断 accept+归位失败场景不再显示 ✓ 命中(假入库红线)。
+- B1 单一事实来源：step-rounds.ts 标题循环内联的 verdict/passes/landed/truncated 死代码段删除(badge 唯一消费)。
+- 死 CSS .act-round-list-inline 移除;M6 二次截断双「未列」行消除(stdout 已有计数)。
 **验证**：workflow-check tsc 0 错；fast-path.test.ts（30 例，含新增「预算分开：primary 3 次转存全废后
 兜底仍用自己的 3 次配额转存成功」）、movie-fast-path.test.ts（25 例，同款新增用例）、variety-episode-landing /
 consumption-evidence / finalize-landing / v2-run-tv / v2-orchestrator / v2-full-chain / search-view 相关文件全绿。

@@ -60,6 +60,25 @@ describe("groupStepsIntoRounds", () => {
     expect(roundVerdict(cards[0]!)).toBe("pass"); // B1 三态:最终归位 → pass
   });
 
+
+  it("Bug#1:归位失败(ok:false)的 finalizeLanding 不算 landed——不误判 ✓", () => {
+    const steps: ActivityStepView[] = [
+      step("transferCandidate", "primary池候选 cX(1/3 次转存)", { candidateId: "cX", round: 1, pool: "primary" }),
+      step("stagingDigest", "未通过(未覆盖目标)", { round: 1, passes: false, videoCount: 8 }),
+      step("finalizeLanding", "归位失败:转移异常", { ok: false }),
+    ];
+    const cards = groupStepsIntoRounds(steps);
+    expect(roundVerdict(cards[0]!)).toBe("fail"); // 归位失败 → ✗,不是 ✓
+  });
+  it("Bug#1:归位成功(ok:true)算 landed → pass", () => {
+    const steps: ActivityStepView[] = [
+      step("transferCandidate", "primary池候选 cX(1/3 次转存)", { candidateId: "cX", round: 1, pool: "primary" }),
+      step("stagingDigest", "未通过(未覆盖目标)", { round: 1, passes: false }),
+      step("finalizeLanding", "改名归位 1 个文件", { ok: true }),
+    ];
+    const cards = groupStepsIntoRounds(steps);
+    expect(roundVerdict(cards[0]!)).toBe("pass");
+  });
   it("B2:abandon 后无下一转存——不造幻影卡,仲裁归死于当前轮,收尾卡承接结论", () => {
     const steps: ActivityStepView[] = [
       step("transferCandidate", "primary池候选 cX(1/3 次转存)", { candidateId: "cX", round: 1, pool: "primary" }),

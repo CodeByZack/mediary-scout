@@ -191,7 +191,7 @@ function RoundCard({ card }: { card: StepRoundCard }) {
   const videoCount = typeof digest?.args?.["videoCount"] === "number" ? digest.args["videoCount"] : undefined;
   return (
     <div className={"act-round act-round-transfer" + (verdict === "pass" ? " act-round-pass" : verdict === "fail" ? " act-round-fail" : "")}>
-      <div className="act-round-head act-round-toggle" onClick={toggle}>
+      <div className="act-round-head act-round-toggle" role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e as unknown as ReactMouseEvent<HTMLDivElement>); } }}>
         <span className="act-round-title">{card.heading}</span>
         {videoCount !== undefined ? <span className="act-round-meta">{videoCount} 个文件</span> : null}
         {verdict === "pass" ? <span className="act-round-badge act-round-badge-pass">✓ 命中</span> : verdict === "fail" ? <span className="act-round-badge act-round-badge-fail">✗ 未命中</span> : verdict === "unknown" ? <span className="act-round-badge act-round-badge-unknown">? 判定未知</span> : null}

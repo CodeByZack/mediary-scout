@@ -79,7 +79,8 @@ function firstDecidedByOf(steps: ActivityStepView[]): "code" | "ai" | undefined 
  *  unknown=args 被 trace-sink 塌缩(无 passes);空=无 digest(非转存卡)。 */
 export function roundVerdict(card: StepRoundCard): "pass" | "fail" | "unknown" | "" {
   const digest = card.steps.find((s) => s.toolName === "stagingDigest");
-  const landed = card.steps.some((s) => s.toolName === "finalizeLanding" || s.toolName === "finish");
+  // 归位成功才算 landed:finalizeLanding/finish 带 ok:false(失败)不算(Bug#1 防假阳性)。
+  const landed = card.steps.some((s) => (s.toolName === "finalizeLanding" || s.toolName === "finish") && s.args?.["ok"] !== false);
   const digestPass = digest?.args?.["passes"] === true;
   const truncated = digest !== undefined && digest.args?.["_truncated"] === true;
   if (!digest) return "";
@@ -153,13 +154,9 @@ export function groupStepsIntoRounds(steps: ActivityStepView[]): StepRoundCard[]
   for (const card of cards) {
     if (card.kind !== "transfer") continue;
     const transfer = card.steps.find((s) => s.toolName === "transferCandidate");
-    const digest = card.steps.find((s) => s.toolName === "stagingDigest");
     const pool = firstPoolOf(card.steps);
     const decided = firstDecidedByOf(card.steps);
-    const passes = digest?.args?.["passes"] === true;
-    const landed = card.steps.some((s) => s.toolName === "finalizeLanding" || s.toolName === "finish");
-    const truncated = digest !== undefined && digest.args?.["_truncated"] === true;
-    const verdict = digest ? (passes || landed ? "✓ 命中" : truncated ? "? 判定未知" : "✗ 未命中") : "";
+    // B1 单一事实来源:判定走 roundVerdict(badge 消费),标题不含 verdict。
     const candidate = transfer?.args?.["candidateId"] ?? "";
     const shortId = typeof candidate === "string" && candidate.length > 28 ? "…" + candidate.slice(-20) : String(candidate ?? "");
     const roundLabel = card.round > 0 ? `第 ${card.round} 轮` : "老数据轮";
