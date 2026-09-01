@@ -147,15 +147,16 @@ async function runTvCandidatePhase(
     // reach transferCandidate's SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT throw and blow
     // up the whole run — treat it like a declined arbitration (safe uncover).
     if (!view.candidates.some((candidate) => candidate.id === current)) {
-      const badIdDetail = `${poolLabel}池返回非法候选 id:${current}`;
+      // issue #29 用户拍板:UI 不显示候选 ID(aI 幻觉防御分支也不露)。排障 ID 留在 reason 字段。
+      const badIdDetail = `仲裁返回了不存在的候选,按放弃处理`;
       stepLog(sandbox, target.title, "仲裁", badIdDetail, "error");
-      const doneDetail = `暂无资源(${poolLabel}池仲裁返回非法候选:${current})`;
+      const doneDetail = `暂无资源:仲裁结果异常(已按放弃)${current ? `(${current})` : ""}`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "arbitrateSelection", "pick", badIdDetail);
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return {
         done: await concludeUncovered(sandbox, {
-          text: `${poolLabel}池仲裁返回非法候选:${current}`,
+          text: `暂无资源:仲裁结果异常(已按放弃)${current ? `(${current})` : ""}`,
           steps: ctx.attempted.size,
           escalated,
           reason: `仲裁返回非法候选 id（不在快照中）:${current}`,
@@ -528,11 +529,16 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     escalated = fallbackOutcome.escalated;
     deadRetries = fallbackOutcome.deadRetries;
     if (fallbackOutcome.done) {
-      const checkoutDetail =
-        `转存 primary ${primaryTransfers}/${MAX_TRANSFER_ATTEMPTS} · 兜底转存 ${ctx.attempted.size - primaryTransfers}/${MAX_FALLBACK_TRANSFER_ATTEMPTS} · ` +
-        `死链探测 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} · PanSou 搜索 ${1 + fallbackRounds} 次(primary 1 + 兜底 ${fallbackRounds}) · AI 升级:${escalated ? "有" : "无"}`;
-      stepLog(sandbox, target.title, "结账", checkoutDetail);
-      emitStep(onProgress, "runCheckout", "finalize", checkoutDetail);
+      // issue #29:fallback 完成结账同样人话化(与 primary/耗尽路径一致),统计进 args。
+      const fallbackDoneDetail = `转存 ${ctx.attempted.size} 次完成(含兜底)${escalated ? ",AI 介入" : ""}`;
+      stepLog(sandbox, target.title, "结账", fallbackDoneDetail);
+      emitStep(onProgress, "runCheckout", "finalize", fallbackDoneDetail, {
+        transfers: ctx.attempted.size,
+        fallbackTransfers: ctx.attempted.size - primaryTransfers,
+        deadLinkRetries: deadRetries,
+        searches: 1 + fallbackRounds,
+        aiEscalated: escalated,
+      });
       return fallbackOutcome.done;
     }
   }

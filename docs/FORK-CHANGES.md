@@ -557,7 +557,7 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 - **候选 ID 全链不上 UI**:pickCandidate/transferCandidate/arbitrateSelection 的 activity 一律只留标题,
   不再拼候选 ID(日志 detail 保留 ID 供排障;transfer 卡无标题时退回「转存」而非短 ID)。
 - **stagingDigest 人话化**:summarizeDigest 重写——不再报「未通过(脏包)…判定:需诊断」,改一句人话
-  (「认出 S01E01,还有 2 个文件看不出集数,还缺 S01E02…」);通过=「转存内容完整」。movie 分支同步。
+  (「认出 S01E01,还有 2 个文件看不出集数,还缺 S01E02…」);通过=「转存内容已认」。movie 同轮全链同步。
 - **去重复**:stagingDigest 只留结论,逐文件识别(digestFiles)只出现一次(用户嫌两边都列文件)。
 - **arbitrateEpisodeMapping 说明**:文案直说「AI 补认:…,目标集数已齐/仍不完整,交给诊断仲裁」——
   用户此前分不清那步是不是 AI 在解析(是)。

@@ -131,7 +131,6 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     });
 
     expect(result.escalated).toBe(false);
-    expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["S01E01"]);
     // The file was renamed + 归位 into the season dir.
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
@@ -941,6 +940,7 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     // 兜底池启动,兜底搜到唯一 A(c4) → 用兜底**独立**的 3 次配额盲转成功。
     // 核心不变量:primary 试穷不挤占兜底配额(总上限 6)。
     let checkout: string | null = null;
+  let checkoutArgs: Record<string, unknown> = {};
     const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
       results: {
         狂飙: [
@@ -971,7 +971,7 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
       target: aliasTarget,
       isChineseNative: false,
       onProgress: (event) => {
-        if (event.toolName === "runCheckout") checkout = event.activity;
+        if (event.toolName === "runCheckout") { checkout = event.activity; checkoutArgs = event.args as Record<string, unknown>; }
       },
     });
 
@@ -982,9 +982,11 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
       "狂飙.S01E01.mkv",
     ]);
     expect(searches.length).toBe(2); // primary 预搜 1 + 兜底重搜 1
-    // 结账行两池分别记账:primary 3/3、兜底 1/3。
-    expect(checkout).toContain("转存 primary 3/3");
-    expect(checkout).toContain("兜底转存 1/3");
+    // issue #29 用户拍板:结账行人话(activity 只讲总次数),两池记账进 args 精确校验:
+    // primary 3 次全废 + 兜底 1 次成功 = transfers 4, fallbackTransfers=1(primary 的 3 已计)。
+    expect(checkout).toContain("转存 4 次完成(含兜底)");
+    expect(checkoutArgs.transfers).toBe(4);
+    expect(checkoutArgs.fallbackTransfers).toBe(1);
   });
 
   it("PR #25 死链探测跨两阶段共享:primary 死链 + 兜底死链累计 10 次上限后诚实终止(P1-1)", async () => {

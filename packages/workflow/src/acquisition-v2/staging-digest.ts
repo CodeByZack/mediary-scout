@@ -174,7 +174,9 @@ function summarizeDigest(d: Omit<StagingDigest, "summary">): string {
   // 日期拒收的文件不算「看不出集数」(原因不同:文件名有日期但与播出日矛盾)。
   const unparsedCount = d.unparsedVideos.filter((v) => !d.dateRejectedVideos.includes(v)).length;
   if (d.passes) {
-    parts.push(`转存内容完整:认出 ${known}${d.subtitles.length > 0 ? `,含字幕 ${d.subtitles.length} 个` : ""}`);
+    // 部分覆盖(passes 但还有缺集):不写「完整」,如实说认出哪些 + 还缺哪些(避免与 args「还缺 N 集」自相矛盾)。
+    const stillMissing = d.missingCodes.length > 0 ? `,还缺 ${d.missingCodes.join(",")}` : "";
+    parts.push(`转存内容已认:认出 ${known}${stillMissing}${d.subtitles.length > 0 ? `,含字幕 ${d.subtitles.length} 个` : ""}`);
   } else {
     const unparsedNote = unparsedCount > 0 ? `${unparsedCount} 个文件看不出集数` : "";
     const missingNote = d.missingCodes.length > 0 ? `,还缺 ${d.missingCodes.join(",")}` : "";

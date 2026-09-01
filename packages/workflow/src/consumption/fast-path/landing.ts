@@ -438,7 +438,9 @@ export async function closeOutTvLanding(options: {
     if (transfer.staging.length === 0) {
       deadRetries += 1;
       const next = nextCandidate(grading, tried);
-      const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",无下一候选"}`;
+      // issue #29:死链提示不显示候选 ID(AI 补认也可来自 grading.ranked 标题;找不到退「该候选」)。
+      const deadTitle = grading.ranked.find((c) => c.id === current)?.title ?? "该候选";
+      const deadDetail = `《${deadTitle}》死链(转存未落盘)${next ? `,重试换一条候选(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",没有可换的"}`;
       stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
       // issue #29 A3:dead 探针也归当前轮。
       emitStep(onProgress, "transferCandidate", "transfer", deadDetail, {
@@ -446,7 +448,7 @@ export async function closeOutTvLanding(options: {
         round: attempted.size + 1,
         decidedBy: grading.uniqueTopGrade ? "code" : "ai",
       });
-      const probeDetail = `候选 ${current} 转存返回 0 个落盘文件 → 判死链(探测第 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} 次,不占 3 次转存预算)${next ? "" : ";池内无下一候选"}`;
+      const probeDetail = `该候选转存返回 0 个落盘文件 → 判死链(探测第 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} 次,不占转存预算)${next ? "" : ";池内无下一候选"}`;
       stepLog(sandbox, target.title, "死链探测", probeDetail, "warn");
       return { verdict: "dead", done: null, next, escalated, deadRetries };
     }
@@ -626,7 +628,8 @@ export async function closeOutTvLanding(options: {
           (finalized.skippedNotNeeded.length > 0
             ? ` / 非缺集跳过 ${finalized.skippedNotNeeded.length} 件`
             : "");
-        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
+        // issue #29:与干净路径(:535)同款人话——归位到 Season 目录(真正落库)。
+        const organizeDetail = `归位到 Season 目录:${finalized.marked.join(",") || "-"}${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
         emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, { ok: true });
       } catch (error) {
@@ -723,7 +726,9 @@ export async function closeOutTvLanding(options: {
         }), next: null, escalated, deadRetries };
       }
             // issue #29:人话——仲裁同意后这几集已入库,理由附后。
-      const doneDetail = `已完成:${landingDigest.coveredCodes.length > 0 ? landingDigest.coveredCodes.join(",") : ""} 已入库(${diagnosis.reasoning})`;
+      // issue #29 用户拍板:finish 要人话 + 报出具体集数(有值时);空则只给理由。
+      const acceptCodes = landingDigest.coveredCodes.length > 0 ? landingDigest.coveredCodes.join(",") + " " : "";
+      const doneDetail = `已完成:${acceptCodes}已入库(${diagnosis.reasoning})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return { verdict: "accept", done: {
@@ -742,7 +747,7 @@ export async function closeOutTvLanding(options: {
       emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail, { round: attempted.size });
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return { verdict: "abandon", done: await concludeUncovered(sandbox, {
-        text: `仲裁 abandon:${diagnosis.reasoning}`,
+        text: `放弃:${diagnosis.reasoning}`,
         steps: attempted.size,
         escalated,
         reason: diagnosis.reasoning,
@@ -762,7 +767,8 @@ export async function closeOutTvLanding(options: {
         ? diagnosis.nextCandidateId
         : null;
     const next = aiNext ?? nextCandidate(grading, tried);
-    const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}${aiNext ? "(仲裁指定)" : ""}`;
+    // issue #29:中文人话 + 不显示候选 ID。
+    const retryDetail = `这轮内容不对:清掉暂存换一条候选${next ? "" : "(没有可换的,终止)"}${aiNext ? " (AI 指定)" : ""}`;
     stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
     emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail, { round: attempted.size });
     return { verdict: "retry_other", done: null, next, escalated, deadRetries };

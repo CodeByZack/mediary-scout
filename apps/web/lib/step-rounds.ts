@@ -51,6 +51,7 @@ export function poolLabel(value: "primary" | "fallback" | undefined): string {
 
 /** 轮次卡的最终判定(B1 三态):pass=digest 通过或最终归位;fail=digest 未通过且未归位;
  *  unknown=args 被 trace-sink 塌缩(无 passes);空=无 digest(非转存卡)。 */
+// ⚠️ 仅测试消费(badge 已删,保留以防将来复用);issue #29 后无生产调用方。
 export function roundVerdict(card: StepRoundCard): "pass" | "fail" | "unknown" | "" {
   const digest = card.steps.find((s) => s.toolName === "stagingDigest");
   // 归位成功才算 landed:finalizeLanding/finish 带 ok:false(失败)不算(Bug#1 防假阳性)。
@@ -125,11 +126,11 @@ export function groupStepsIntoRounds(steps: ActivityStepView[]): StepRoundCard[]
   flush(decisionSteps, "decision", "搜索与选片");
   flush(closingSteps, "closing", "收尾");
 
-  // 生成标题:decision/closing 用固定名;transfer 归纳 pool/decidedBy/candidate/verdict。
+  // 生成标题:decision/closing 用固定名;transfer 用候选标题(用户拍板不显示候选 ID/pool/verdict)。
   for (const card of cards) {
     if (card.kind !== "transfer") continue;
     const transfer = card.steps.find((s) => s.toolName === "transferCandidate");
-    // B1 单一事实来源:判定走 roundVerdict(badge 消费),标题不含 verdict。
+    // issue #29:标题不含判定(徽章已删,成功与否看卡内步骤)。
     const roundLabel = card.round > 0 ? `第 ${card.round} 次转存` : "未记录轮次";
     // issue #29 用户反馈:标题要直白——「第 N 次转存 · 《候选标题》」;
     // 不显示候选 ID(用户明确不想要);无标题时退「转存」,不再露出短 ID。

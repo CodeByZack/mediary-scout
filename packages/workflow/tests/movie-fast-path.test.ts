@@ -729,7 +729,8 @@ describe("runMovieFastPathAcquisition — 步骤写入 agent_steps（Task D）",
     // activity = stepLog 的 detail;序号连续;markObtained 的 MOVIE sentinel 不污染计数
     expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     expect(steps[1]!.activity).toBe("候选 1 条");
-    expect(steps[7]!.activity).toBe("入库(MOVIE)");
+    // issue #29 用户拍板:finish 人话化。
+    expect(steps[7]!.activity).toBe("完成:影片已入库");
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);

@@ -3030,12 +3030,6 @@ select.setting-control {
   /* M4:--bg-elevated 不存在,改用 --bg-raised(#1f1f1f,比 --bg-card 更暗,卡片与容器同深色系)。 */
   background: var(--bg-raised);
 }
-.act-round-pass {
-  border-color: var(--accent, #16a34a);
-}
-.act-round-fail {
-  border-color: rgba(220, 38, 38, 0.6);
-}
 .act-round-head {
   display: flex;
   align-items: center;
@@ -3061,25 +3055,6 @@ select.setting-control {
   font-size: 12px;
   color: var(--text-soft);
   margin-left: auto;
-}
-.act-round-badge {
-  font-size: 11px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-weight: 600;
-}
-/* M4:命中/未命中/未知三分,颜色对齐主题 accent 与失败红,不再混 Tailwind 绿。 */
-.act-round-badge-pass {
-  background: rgba(30, 215, 96, 0.16);
-  color: var(--accent);
-}
-.act-round-badge-fail {
-  background: rgba(220, 38, 38, 0.14);
-  color: #ef4444;
-}
-.act-round-badge-unknown {
-  background: rgba(128, 128, 128, 0.16);
-  color: var(--text-soft);
 }
 .act-round-body {
   border-top: 1px solid var(--border-soft);

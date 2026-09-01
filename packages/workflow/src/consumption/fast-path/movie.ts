@@ -159,6 +159,8 @@ async function landSubtitlesForMovie(options: {
  *  tried / deadRetries / escalated；转存预算按「本池增量」独立计算 —— primary 试穷
  *  不会挤占兜底配额(PR #25)。池内任一步收尾(入库/系统阻塞/归位失败/仲裁终止)即返回 done。 */
 interface MoviePoolContext {
+  /** issue #29:候选分享链接映射(展示用,不进 LLM prompt)。 */
+  urlById?: Record<string, string>;
   sandbox: TaskSandbox;
   model: LanguageModel;
   target: MovieTarget;
@@ -183,7 +185,7 @@ async function runMovieCandidatePhase(
   attemptBudget: number,
   poolLabel: string,
 ): Promise<MoviePhaseOutcome> {
-  const { sandbox, model, target, subtitle, onProgress } = ctx;
+  const { sandbox, model, target, subtitle, onProgress, urlById } = ctx;
   // 本池起点转存数:预算按「本池增量」独立计算(primary 与兜底互不挤占)。
   const poolTransferBase = ctx.attempted.size;
   let escalated = ctx.escalated;
@@ -194,7 +196,8 @@ async function runMovieCandidatePhase(
   let current: string | null;
   if (grading.uniqueTopGrade && grading.top) {
     current = grading.top.id;
-    const pickDetail = `${poolLabel}池唯一 A 盲转:候选 ${current}(${grading.top.title})`;
+        // issue #29 用户拍板:选片不显示候选 ID。
+    const pickDetail = `选中:《${grading.top.title}》(评级 A,代码直选)`;
     stepLog(sandbox, target.title, "选片", pickDetail);
     emitStep(onProgress, "pickCandidate", "pick", pickDetail);
   } else {
@@ -207,15 +210,15 @@ async function runMovieCandidatePhase(
     });
     current = arbitration.candidateId;
     if (current === null) {
-      const declineDetail = `${poolLabel}池放弃:${arbitration.reasoning || "无可用候选"}`;
+      const declineDetail = `放弃:${arbitration.reasoning || "没有合适的资源"}`;
       stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
-      const doneDetail = `暂无资源(${poolLabel}池仲裁放弃:${arbitration.reasoning || "无可用候选"})`;
+      const doneDetail = `暂无资源:${arbitration.reasoning || "没有合适的资源"}`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "arbitrateSelection", "pick", declineDetail);
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return {
         done: await concludeUncovered(sandbox, {
-          text: `${poolLabel}池仲裁放弃:${arbitration.reasoning || "无可用候选"}`,
+          text: `暂无资源:${arbitration.reasoning || "没有合适的资源"}`,
           steps: ctx.attempted.size,
           escalated,
           reason: arbitration.reasoning || "无可用候选",
@@ -229,15 +232,15 @@ async function runMovieCandidatePhase(
     // reach transferCandidate's SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT throw and blow
     // up the whole run — treat it like a declined arbitration (safe uncover).
     if (!view.candidates.some((candidate) => candidate.id === current)) {
-      const badIdDetail = `${poolLabel}池返回非法候选 id:${current}`;
+      const badIdDetail = `仲裁返回了不存在的候选,按放弃处理`;
       stepLog(sandbox, target.title, "仲裁", badIdDetail, "error");
-      const doneDetail = `暂无资源(${poolLabel}池仲裁返回非法候选:${current})`;
+      const doneDetail = `暂无资源:仲裁结果异常(已按放弃)${current ? `(${current})` : ""}`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "arbitrateSelection", "pick", badIdDetail);
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return {
         done: await concludeUncovered(sandbox, {
-          text: `${poolLabel}池仲裁返回非法候选:${current}`,
+          text: `暂无资源:仲裁结果异常(已按放弃)${current ? `(${current})` : ""}`,
           steps: ctx.attempted.size,
           escalated,
           reason: `仲裁返回非法候选 id（不在快照中）:${current}`,
@@ -246,7 +249,9 @@ async function runMovieCandidatePhase(
         deadRetries,
       };
     }
-    const pickedDetail = `${poolLabel}池选中候选 ${current}${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`;
+        // issue #29:仲裁选片不显示候选 ID。
+    const pickedTitle = grading.ranked.find((c) => c.id === current)?.title ?? "候选";
+    const pickedDetail = `选中:《${pickedTitle}》${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`;
     stepLog(sandbox, target.title, "仲裁", pickedDetail);
     emitStep(onProgress, "arbitrateSelection", "pick", pickedDetail);
   }
@@ -262,9 +267,11 @@ async function runMovieCandidatePhase(
     deadRetries < MAX_DEAD_LINK_RETRIES
   ) {
     ctx.tried.add(current);
-    const transferDetail = `${poolLabel}池候选 ${current}(${ctx.attempted.size - poolTransferBase + 1}/${attemptBudget} 次转存)`;
+        // issue #29:转存动作人话 + 不显示候选 ID;链接进 args.linkUrl(前端可点)。
+    const currentTitle = grading.ranked.find((c) => c.id === current)?.title ?? "";
+    const transferDetail = `转存《${currentTitle || "候选"}》到暂存区(第 ${ctx.attempted.size - poolTransferBase + 1} 次转存)`;
     stepLog(sandbox, target.title, "转存", transferDetail);
-    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current });
+    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current, ...(currentTitle ? { title: currentTitle } : {}), ...(urlById?.[current] !== undefined ? { linkUrl: urlById[current] } : {}) });
     const transfer = await sandbox.transferCandidate({
       snapshotId: candidateSnapshotId(view, current),
       candidateId: current,
@@ -294,7 +301,9 @@ async function runMovieCandidatePhase(
     if (transfer.staging.length === 0) {
       deadRetries += 1;
       const next = nextCandidate(grading, ctx.tried);
-      const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",无候选可换"}`;
+          // issue #29:死链不显示候选 ID。
+    const deadTitle = grading.ranked.find((c) => c.id === current)?.title ?? "该候选";
+    const deadDetail = `《${deadTitle}》死链(转存未落盘)${next ? `,重试换一条候选(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",没有可换的"}`;
       stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
       emitStep(onProgress, "transferCandidate", "transfer", deadDetail, { candidateId: current });
       current = next;
@@ -312,16 +321,20 @@ async function runMovieCandidatePhase(
     if (digest.videos.length === 0) {
       await clearMovieLanding(sandbox);
       const next = nextCandidate(grading, ctx.tried);
-      const noVideoDetail = `未落盘视频(仅字幕/杂项),清空后换候选 ${next ?? "无(终止)"}`;
+      const noVideoDetail = `没有落盘任何视频(仅字幕/杂项),清空后换一条候选${next ? "" : "(没有可换的,终止)"}`;
       stepLog(sandbox, target.title, "digest 验证", noVideoDetail, "warn");
       emitStep(onProgress, "stagingDigest", "verify", noVideoDetail);
       current = next;
       continue;
     }
 
+    // issue #29 用户拍板:activity 人话化——但 movie 的 digest.summary 同时是诊断仲裁 LLM 输入,
+    // 保持富信息(文件名单/脏包信号);UI 用 digestDetail 人话结论。
     const digestDetail = digest.passes
       ? `一部正片(视频 ${digest.videos.length} / 字幕 ${digest.subtitles.length})`
-      : digest.summary;
+      : digest.isDirtyPack
+        ? `不是单部正片(${digest.videos.length} 个视频文件${digest.junkSignals.length > 0 ? ",含广告/花絮等多余文件" : ""}),交给诊断仲裁`
+        : "没有落盘任何视频,换一条候选";
     stepLog(
       sandbox,
       target.title,
@@ -346,7 +359,7 @@ async function runMovieCandidatePhase(
       }
       try {
         const finalized = await finalizeMovieLanding({ sandbox, digest });
-        const organizeDetail = `flatten+标记 ${finalized.marked.join(",") || "-"}`;
+        const organizeDetail = `归位到媒体库:标为已入库(${finalized.marked.join(",") || "-"})`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
         emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
       } catch (error) {
@@ -368,12 +381,12 @@ async function runMovieCandidatePhase(
           deadRetries,
         };
       }
-      const doneDetail = "入库(MOVIE)";
+      const doneDetail = "完成:影片已入库";
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
         done: {
-          text: "fast path 归位标记:MOVIE",
+          text: "影片已入库",
           steps: ctx.attempted.size,
           coverage: await sandbox.finish(),
           escalated,
@@ -423,7 +436,7 @@ async function runMovieCandidatePhase(
           deadRetries,
         };
       }
-      const doneDetail = `入库(仲裁 accept:${diagnosis.reasoning})`;
+      const doneDetail = `已完成:影片已入库(${diagnosis.reasoning})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
@@ -441,13 +454,13 @@ async function runMovieCandidatePhase(
       await clearMovieLanding(sandbox);
       const declineDetail = `放弃:${diagnosis.reasoning}`;
       stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
-      const doneDetail = `暂无资源(仲裁 abandon:${diagnosis.reasoning})`;
+      const doneDetail = `放弃:${diagnosis.reasoning}`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail);
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return {
         done: await concludeUncovered(sandbox, {
-          text: `仲裁 abandon:${diagnosis.reasoning}`,
+          text: `放弃:${diagnosis.reasoning}`,
           steps: ctx.attempted.size,
           escalated,
           reason: diagnosis.reasoning,
@@ -459,7 +472,7 @@ async function runMovieCandidatePhase(
     // retry_other → clear the bad landing's files and try the next candidate.
     await clearMovieLanding(sandbox);
     const next = nextCandidate(grading, ctx.tried);
-    const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
+    const retryDetail = `这轮内容不对:清掉暂存换一条候选${next ? "" : "(没有可换的,终止)"}`;
     stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
     emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail);
     current = next;
@@ -478,15 +491,15 @@ export async function runMovieFastPathAcquisition(
   //    mid-flight), mark MOVIE obtained and finish — never re-search/re-transfer.
   const onDisk = await sandbox.inspectTargetDir();
   if (onDisk.some((file) => file.isVideo)) {
-    emitStep(onProgress, "inspectTargetDir", "search", "影片已在库(MOVIE)");
+    emitStep(onProgress, "inspectTargetDir", "search", "影片已在媒体库(无需重转)");
     await sandbox.markObtained({ codes: ["MOVIE"] });
-    emitStep(onProgress, "markObtained", "mark", "影片已入库(MOVIE)", { codes: ["MOVIE"] });
-    const doneDetail = "入库:已在库(MOVIE)";
-    stepLog(sandbox, target.title, "落点检查", "影片已在库(MOVIE)");
+    emitStep(onProgress, "markObtained", "mark", "影片已入库", { codes: ["MOVIE"] });
+    const doneDetail = "完成:影片已在媒体库";
+    stepLog(sandbox, target.title, "落点检查", "影片已在媒体库(无需重转)");
     stepLog(sandbox, target.title, "结论", doneDetail);
     emitStep(onProgress, "finish", "finalize", doneDetail);
     return {
-      text: "fast path 已在库:MOVIE",
+      text: "影片已在媒体库",
       steps: 0,
       coverage: await sandbox.finish(),
       escalated: false,
@@ -499,6 +512,11 @@ export async function runMovieFastPathAcquisition(
   // 1. Grade the primed raw-snapshot candidates (code, zero LLM): identity is
   //    title + release year.
   let raw: EvidenceView | null = sandbox.rawSnapshotView();
+  // issue #29:候选分享链接全链透出(展示用,不进 LLM);键=完整候选 id。
+  const mtUrlById: Record<string, string> = {};
+  for (const c of raw?.candidates ?? []) {
+    if (c.url) mtUrlById[c.id] = c.url;
+  }
   if (!raw) {
     const snapshotDetail = "无(搜索源未响应)";
     stepLog(sandbox, target.title, "预搜快照", snapshotDetail, "warn");
@@ -592,6 +610,7 @@ export async function runMovieFastPathAcquisition(
         attempted,
         deadRetries,
         escalated,
+        urlById: mtUrlById,
       },
       raw,
       grading,
@@ -661,6 +680,7 @@ export async function runMovieFastPathAcquisition(
         attempted,
         deadRetries,
         escalated,
+        urlById: mtUrlById,
       },
       fallbackView,
       grading,

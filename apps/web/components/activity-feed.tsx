@@ -141,9 +141,6 @@ export function StepStatusIcon({ status }: { status: ActivityStepView["stepStatu
   return <CheckCircle2 size={13} className="act-step-icon act-step-success" aria-hidden />;
 }
 
-/** The expandable step list under a row header: one line per agent tool call,
- *  status icon + 中文 activity + toolName + localized time + key args. */
-/** 单条步骤行(扁平列表内)。 */
 /** issue #29 用户拍板:转存步骤展示分享链接(可点击)。链接来自 args.linkUrl。 */
 function transferLink(step: ActivityStepView): React.ReactNode | null {
   if (step.toolName !== "transferCandidate") return null;
@@ -153,6 +150,8 @@ function transferLink(step: ActivityStepView): React.ReactNode | null {
     <a className="act-ev-link" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}> 🔗分享链接</a>
   );
 }
+/** 单条步骤行——每个 agent 工具调用一行:状态图标 + activity + 工具名 + 时间 + 关键参数。
+ *  (transferCandidate 步骤在 activity 后追加分享链接,见 transferLink。) */
 function StepRow({ step }: { step: ActivityStepView }) {
   const detail = stepDetailView(step);
   const argsText = stepArgsText(step);
