@@ -131,6 +131,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     });
 
     expect(result.escalated).toBe(false);
+    expect(result.coverage.coverageMet).toBe(true); // PR #24 假入库防线:必须真覆盖。
     expect(result.coverage.obtained).toEqual(["S01E01"]);
     // The file was renamed + 归位 into the season dir.
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([

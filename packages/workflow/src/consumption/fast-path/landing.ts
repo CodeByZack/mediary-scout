@@ -462,11 +462,10 @@ export async function closeOutTvLanding(options: {
       ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
       ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
     });
-    // issue #29 用户反馈:activity 人话化——通过=「转存内容完整」,未通过= summary 结论本身
-    // (summary 已是一句人话),不再包裹「未通过(脏包)」这类内部判定前缀。
-    const digestDetail = digest.passes
-      ? `转存内容完整,认出 ${digest.coveredCodes.join(",") || "-"}`
-      : digest.summary;
+    // issue #29 用户反馈:activity 人话化——直接复用 summarizeDigest 的人话结论
+    // (pass=「转存内容已认…」/ fail=「认出…还缺…」),与 args 的 missingCodes 一致,
+    // 不再自造「转存内容完整」双源文案(部分覆盖时曾谎报完整,复核揪出)。
+    const digestDetail = digest.summary;
     stepLog(
       sandbox,
       target.title,

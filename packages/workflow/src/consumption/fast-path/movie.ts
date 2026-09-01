@@ -234,7 +234,7 @@ async function runMovieCandidatePhase(
     if (!view.candidates.some((candidate) => candidate.id === current)) {
       const badIdDetail = `仲裁返回了不存在的候选,按放弃处理`;
       stepLog(sandbox, target.title, "仲裁", badIdDetail, "error");
-      const doneDetail = `暂无资源:仲裁结果异常(已按放弃)${current ? `(${current})` : ""}`;
+      const doneDetail = `暂无资源:仲裁结果异常(已按放弃)`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "arbitrateSelection", "pick", badIdDetail);
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
@@ -441,7 +441,7 @@ async function runMovieCandidatePhase(
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
         done: {
-          text: `仲裁 accept:${diagnosis.reasoning}`,
+          text: `${diagnosis.reasoning}`,
           steps: ctx.attempted.size,
           coverage: await sandbox.finish(),
           escalated,
@@ -642,6 +642,11 @@ export async function runMovieFastPathAcquisition(
     });
     fallbackRounds = fallback.rounds;
     const fallbackView = fallback.view;
+    // issue #29 用户拍板 + 复核:movie 兜底池合并 primary 表,补 fallbackView 新候选链接(照 TV fbUrlById)。
+    const mbUrlById: Record<string, string> = { ...mtUrlById };
+    for (const c of fallbackView.candidates) {
+      if (c.url) mbUrlById[c.id] = c.url;
+    }
     grading = fallback.grading;
     if (fallback.restored) {
       stepLog(
@@ -680,7 +685,7 @@ export async function runMovieFastPathAcquisition(
         attempted,
         deadRetries,
         escalated,
-        urlById: mtUrlById,
+        urlById: mbUrlById,
       },
       fallbackView,
       grading,

@@ -446,7 +446,7 @@ CI 全绿后 squash 合并。issue #21 验收单(奇异新世界3.全集 C/C/A�
   landed 排除 ok:false——诊断 accept+归位失败场景不再显示 ✓ 命中(假入库红线)。
 - B1 单一事实来源：step-rounds.ts 标题循环内联的 verdict/passes/landed/truncated 死代码段删除(badge 唯一消费)。
 - 死 CSS .act-round-list-inline 移除;M6 二次截断双「未列」行消除(stdout 已有计数)。
-**用户实测反馈修订(commit 70a92fc)+ review 闭环(appended)**:
+**用户实测反馈修订(commit 70a92fc)+ review 闭环(至 7f3e575)**:
 - 链接透出(用户拍板):`Sandbox.rawSnapshotView` / `SimResourceCandidate` / real-provider-adapter 增加
   url 字段——**分享链接全链透出到 agent_steps**(fake/real 统一支持),只走代码链路、不进 LLM prompt
   (summarizeGrading 仍无 url)。fast path 建 urlById 映射,gradeCandidates 候选列表带 url、
@@ -569,8 +569,17 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
   (「转存 N 次完成/仍未拿到目标集」),统计细节进 args(transfers/searches/aiEscalated),前端按需展示。
 - **finish 人话化**:「入库(obtained=…)」→「已完成:S01E01 已入库」;abandon→「放弃:…」;accept 理由去前缀。
 - **前端**:StepRow 的 transferCandidate 步骤渲染分享链接(args.linkUrl,新窗口打开);
-  /vol1/1000/download 测试包已重打待实测(commit 号回填在本段)。
+  /vol1/1000/download 测试包基于 166047f+标注修订(commit 7f3e575)。
 - 附:.feed 容器 CSS 删除 max-width:760px(用户侧布局调整,非功能)。
+**review 二轮(收窄,commit c39cd7a + 修订)** —— 同一 subagent 复核揪出的第二调用点遗漏全部补齐:
+- TV/movie 四处 runCheckout(**含兜底成功第 4 处**)统一人话 + args(transfers/fallbackTransfers/searches/aiEscalated);
+- landing 映射归位文案与干净路径对齐;deadDetail/probeDetail/off-target/abandon/仲裁 accept 去候选 ID 或人话;
+- **movie 全链同步人话化**:digest 失败 activity 用 UI 结论、`digest.summary` 保持富信息喂 LLM(诊断仲裁输入不变);
+  movie 兜底池 urlById 合并 fallbackView 新候选(照 TV fbUrlById)——「primary 试穷→兜底成功」的转存卡也有链接;
+- digestDetail **pass/fail 同源复用一个 summary**(修「部分覆盖仍谎报完整」双源矛盾);
+- 恢复 fast-path happy path 的 `coverageMet toBe(true)`(PR #24 假入库防线,复核检出被无由删除);
+- 清理:死 CSS(act-round-badge/pass/fail)、step-rounds 死导出标注、错位注释、badId doneDetail 去模型串。
+
 
 ## 注意事项
 

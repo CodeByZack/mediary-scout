@@ -150,7 +150,7 @@ async function runTvCandidatePhase(
       // issue #29 用户拍板:UI 不显示候选 ID(aI 幻觉防御分支也不露)。排障 ID 留在 reason 字段。
       const badIdDetail = `仲裁返回了不存在的候选,按放弃处理`;
       stepLog(sandbox, target.title, "仲裁", badIdDetail, "error");
-      const doneDetail = `暂无资源:仲裁结果异常(已按放弃)${current ? `(${current})` : ""}`;
+      const doneDetail = `暂无资源:仲裁结果异常(已按放弃)`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "arbitrateSelection", "pick", badIdDetail);
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);

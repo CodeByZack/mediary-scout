@@ -20,7 +20,7 @@ export interface StepRoundCard {
   /** transfer 的轮次号(N≥1);decision/closing 无轮次,round 为 0(哨兵)。 */
   round: number;
   kind: StepCardKind;
-  /** 卡片标题(含 pool/decidedBy/verdict 归纳)。 */
+  /** 卡片标题:decision/closing 固定名;transfer=「第 N 次转存 · 《标题》」(issue #29)。 */
   heading: string;
   steps: ActivityStepView[];
 }
@@ -32,6 +32,7 @@ function roundOf(step: ActivityStepView): number | undefined {
 }
 
 
+// ⚠️ 仅测试消费(badge/meta 已删);issue #29 后无生产调用方,保留供诊断/复用。
 /** 卡片标题的决策来源标记:⚙️ 代码 / 🤖 AI。 */
 export function decidedByLabel(value: "code" | "ai" | undefined): string {
   if (value === "ai") return "🤖 AI";
@@ -39,6 +40,7 @@ export function decidedByLabel(value: "code" | "ai" | undefined): string {
   return "—";
 }
 
+// ⚠️ 仅测试消费(badge/meta 已删);issue #29 后无生产调用方,保留供诊断/复用。
 /** primary/fallback 到中文标签。 */
 export function poolLabel(value: "primary" | "fallback" | undefined): string {
   if (value === "fallback") return "兜底池";
