@@ -182,7 +182,6 @@ function RoundCard({ round, card }: { round: number; card: StepRoundCard }) {
   const transfer = card.steps.find((s) => s.toolName === "transferCandidate");
   const passes = digest?.args?.["passes"] === true;
   const videoCount = typeof digest?.args?.["videoCount"] === "number" ? digest.args["videoCount"] : undefined;
-  const maybeLink = (card.steps[0] as any)?.args?.["linkUrl"];
   return (
     <div className={"act-round" + (passes ? " act-round-pass" : "")}>
       <div className="act-round-head act-round-toggle" onClick={() => setOpen((v) => !v)}>
