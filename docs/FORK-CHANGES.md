@@ -28,6 +28,10 @@
 | 2026-08-29 | feat | **PR #20 任务消费流水线重构**(七步主干+可观测性+预算闸+UI 证据+别名简体化/合并证据池/简繁折叠,§19-23);v1.0.0 重发布 |
 | 2026-08-29 | chore | 移除桌面版(Electron)与其发布流水线(§24) |
 | 2026-08-29 | chore | **仓库精简与上游断开**(§25):死文件/死依赖/过时文档清理,README 双版重写,站内链接指向自有仓库 |
+| 2026-08-30 | fix | **PR #24 中餐厅 S10E11 假入库四合一修复**(§26,关 issue #21):「第N期」解析+衍生黑名单、finalize 只补缺集、隐形季号闸门、TMDB 播出日全链落地年守卫 |
+| 2026-08-30 | fix | **PR #25 两阶段候选池重构**(§27):primary/兜底池独立转存预算、跨池共享死链/升级,结账行两池分别显示 |
+| 2026-08-30 | fix | **PR #25 追加:综艺「第N期」→ TMDB Part 锚定 + 期号一致性校验**(§28,关 issue 系列):门闩移除、Part 锚定、AI 假集号防线 |
+| 2026-09-01 | feat | **PR #25 追加:活动页/通知页转存轮次卡片化**(§29,issue #29):fast path 各步骤结构化字段(round/pool/decidedBy/…)+ StepList 升级为默认折叠的轮次卡片(⚙️代码/🤖AI/✓✗判定),活动页+通知页共用 |
 
 ---
 
@@ -468,6 +472,48 @@ name 的期号 N，文件名「第M期」M≠N → 该条映射作废（整表�
 **清理提醒**：run eaade691 已在线上把 S02E19/E20 假 mark obtained（绑定了第4期文件）。升级新包前
 或后需手动重置这两集（obtained=false、verifiedFileIds=[]、airDate 由巡检回填），否则下次巡检视为
 已入库、永远不找真第10期。
+
+
+### 29. 活动页/通知页转存轮次卡片化（PR #25 追加，issue #29）
+
+**用户需求**：活动页/通知页的步骤展开改成「按转存轮次卡片化」——每轮转存一张**默认折叠**的卡，
+讲清：第几轮搜索/搜索结果数/选中谁（代码选 or AI 选）/第几次转存/转存链接/链接含多少视频/
+代码解析集数结果/是否用 AI+AI 映射结果/这轮找到目标了吗。用户拍板：默认折叠、链接可点击、
+决策来源用文字标记（⚙️ 代码 / 🤖 AI）不用颜色块、活动页与通知页一起改。链接 URL（分享链）
+因沙盒隔离不在证据视图，暂记后续（卡片显示候选 id 代替）。
+
+**数据层（commit b4412e0 + review 修订 0f1c323）**：
+- `steps.ts`：新增 `TransferStepMeta`（round/pool/decidedBy/transferIndex/videoCount）+ `compactCodeList`、
+  `compactMapping` 预算化工具；导出 `pushWithinBudget`。
+- `tv.ts`：`pickCandidate`（盲转）标 `decidedBy:code`、`arbitrateSelection` 标 `ai`、
+  `transferCandidate` 注入 transferMeta（round/pool/decidedBy/transferIndex），`transferMeta` 标注类型。
+- `landing.ts`：4 处 `arbitrateEpisodeMapping` 注入 `aiUsed/mapping`（compact）；`stagingDigest` 注入
+  round/passes/videoCount/coveredCodes/missingCodes（compact）；`digestFiles`、systemic/dead、
+  诊断/映射 retry 补 round。
+
+**review 修复（subagent 复核，commit 0f1c323）**：
+- A1/A2：coveredCodes/missingCodes/mapping 直接平铺会撞 `agent-trace-sink` 的 2000 字符**整体塌缩**
+  闸（长片动漫整包 100+ 集、fansub 长文件名）→ 改发 count+sample / 截断，防止 `passes/round/aiUsed`
+  一起丢。
+- A3：`stagingDigest` 之外 `digestFiles`/systemic/dead/诊断 retry 原无 round，会在新数据 run 里被前端
+  误当「老数据」造出序号卡与真实轮次冲突 → 全部补 round（attempted.size+1 当前轮）。
+- A4：`decidedBy` 语义明确为「本池初始选片决策者」，诊断 retry 点名 aiNext 的选片来源由前端另行标注。
+
+**展示层（commit 3356091）**：
+- `step-rounds.ts`：纯函数 `groupStepsIntoRounds`——transferCandidate 为轮次锚点，同 round 的
+  digest/retry 并入，决策/结论步骤归「决策链」卡（round=0）；老数据无 round 字段回退「就近归并 +
+  序号卡」。
+- `activity-feed.tsx`：`StepList` 升级——有轮次信息 → 渲染默认折叠的 `.act-round` 卡（标题轮次/池/
+  ⚙️🤖/候选/✓✗ 判定 + 视频数），无轮次老数据 → 原扁平列表；`RoundCard` 每卡独立折叠。
+  活动页（ActivityFeed）+ 通知页（NotificationCardWrapper）+ 例行巡检（RoutineCardWrapper）共用，
+  一处升级三处生效。
+- `globals.css`：`.act-round` 系列样式。
+- `step-rounds.test.ts`：4 用例（轮次分组/判定标记、老数据回退、空数组、label 映射）。
+
+**验证**：workflow-check tsc 0 错；fast-path/staging-digest/finalize-landing/episode-code/variety 5 文件
+107 用例 + step-rounds 4 用例全绿；PR #25 CI 双 job green（build-and-test，head a0ba7ea，pull_request+push）。
+
+**待后续**：转存链接 URL 的沙盒透传（rawSnapshotView 与合并兜底池都拿不到 providerPayload，非一行调用）。
 
 ---
 ## 注意事项
