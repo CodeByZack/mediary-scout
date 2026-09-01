@@ -66,6 +66,29 @@ export function emitStep(
   }
 }
 
+/** 转存轮次的结构化证据(活动页卡片化,issue #29):前端按 round 分组、
+ *  按 decidedBy/pool/transferIndex/linkUrl/videoCount 渲染一张「本轮转存卡片」。
+ *  逐字保持 activity 文案不变,这些字段只进 args,不改变任何现有输出。 */
+export interface TransferStepMeta {
+  /** 第几轮转存循环(primary 从 1 起,兜底接续编号,跨池单调递增的转存序号)。 */
+  round: number;
+  /** 候选归属池:primary | fallback。 */
+  pool: "primary" | "fallback";
+  /** 选片决策来源:code=唯一A盲转(零 LLM);ai=仲裁器选片。 */
+  decidedBy: "code" | "ai";
+  /** 本池内第几次转存(1/3 或 1/1…)。 */
+  transferIndex: number;
+  /** 分享链接(providerPayload.url,stdout 红线:只进 args 不落日志)。 */
+  linkUrl?: string;
+  /** 转存成功后落盘视频文件数。 */
+  videoCount?: number;
+}
+
+/** 从候选池取分享链接(只用于 args,绝不打印到 stdout)。 */
+export function candidateLinkUrl(candidate: { providerPayload?: Record<string, unknown> } | undefined): string | undefined {
+  const url = candidate?.providerPayload?.["url"];
+  return typeof url === "string" && url.length > 0 ? url : undefined;
+}
 export interface FastPathOptions {
   sandbox: TaskSandbox;
   model: LanguageModel;

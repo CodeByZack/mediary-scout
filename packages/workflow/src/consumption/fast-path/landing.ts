@@ -150,7 +150,7 @@ export async function tryEpisodeMapping(options: {
   if (!valid) {
     const failDetail = `集数映射校验失败(文件名幻觉/集数冲突),回落诊断仲裁`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
-    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail);
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: Object.entries(arbitration.mapping) });
     return "failed";
   }
 
@@ -167,20 +167,20 @@ export async function tryEpisodeMapping(options: {
   if (re.passes) {
     const mapDetail = `集数映射 ${Object.entries(clean).length} 个文件 → ${Object.values(clean).join(",")},重建 digest 通过`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "log");
-    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail);
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: Object.entries(arbitration.mapping) });
     return "passed";
   }
   if (re.episodeCodes.length > 0 && !re.isDirtyPack) {
     // 映射上了但没覆盖 need(例如映射出的是别的集数)—— 回收干净但无用。
     const mapDetail = `集数映射生效但未覆盖目标(${re.episodeCodes.join(",")}),丢弃换候选`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "warn");
-    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail);
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: Object.entries(arbitration.mapping) });
     return "unmapped-but-clean";
   }
   // 重建后仍脏(映射不完整/失败) → 回落诊断仲裁。
   const failDetail = `集数映射后仍不通过(${re.summary.split("\n").join(" / ")}),回落诊断仲裁`;
   stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
-  emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail);
+  emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: Object.entries(arbitration.mapping) });
   return "failed";
 }
 
@@ -450,7 +450,15 @@ export async function closeOutTvLanding(options: {
       digestDetail,
       digest.passes ? "log" : "warn",
     );
-    emitStep(onProgress, "stagingDigest", "verify", digestDetail);
+    // issue #29:digest 步骤结构化证据(卡片化判定)。videoCount=落盘视频文件数;
+    // passes/coveredCodes/missingCodes 给前端红绿判定与「还缺什么」。
+    emitStep(onProgress, "stagingDigest", "verify", digestDetail, {
+      passes: digest.passes,
+      videoCount: transfer.staging.length,
+      coveredCodes: digest.coveredCodes,
+      missingCodes: digest.missingCodes,
+      round: attempted.size,
+    });
     const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates);
     if (parseRows.length > 0) {
       stepLog(sandbox, target.title, "解析明细", parseRows.join(" / "));

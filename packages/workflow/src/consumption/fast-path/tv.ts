@@ -100,7 +100,12 @@ async function runTvCandidatePhase(
     current = grading.top.id;
     const pickDetail = `${poolLabel}池唯一 A 盲转:候选 ${current}(${grading.top.title})`;
     stepLog(sandbox, target.title, "选片", pickDetail);
-    emitStep(onProgress, "pickCandidate", "pick", pickDetail, { candidateId: current, title: grading.top.title });
+    // issue #29:盲转=代码决策(code);供前端标记「谁选的」。
+    emitStep(onProgress, "pickCandidate", "pick", pickDetail, {
+      candidateId: current,
+      title: grading.top.title,
+      decidedBy: "code",
+    });
   } else {
     escalated = true;
     const arbitration = await arbitrateSelection({
@@ -161,6 +166,8 @@ async function runTvCandidatePhase(
       pool: gradedCandidateEvidence(grading),
       reasoning: arbitration.reasoning ?? null,
       selected: current,
+      // issue #29:仲裁选片=AI 决策(ai),供前端标记「谁选的」。
+      decidedBy: "ai",
     });
   }
 
@@ -177,7 +184,14 @@ async function runTvCandidatePhase(
     ctx.tried.add(current);
     const transferDetail = `${poolLabel}池候选 ${current}(${ctx.attempted.size - poolTransferBase + 1}/${attemptBudget} 次转存)`;
     stepLog(sandbox, target.title, "转存", transferDetail);
-    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current });
+    // issue #29:转存步骤的结构化证据(卡片化)。round 跨池单调递增,给前端「第几轮转存」。
+    const transferMeta = {
+      round: ctx.attempted.size + 1,
+      pool: poolLabel === "兜底" ? "fallback" : "primary",
+      decidedBy: grading.uniqueTopGrade ? "code" : "ai",
+      transferIndex: ctx.attempted.size - poolTransferBase + 1,
+    };
+    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current, ...transferMeta });
     const transfer = await sandbox.transferCandidate({
       snapshotId: candidateSnapshotId(view, current),
       candidateId: current,
