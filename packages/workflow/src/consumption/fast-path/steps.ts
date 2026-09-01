@@ -87,11 +87,7 @@ export interface TransferStepMeta {
   videoCount?: number;
 }
 
-/** 从候选池取分享链接(只用于 args,绝不打印到 stdout)。 */
-export function candidateLinkUrl(candidate: { providerPayload?: Record<string, unknown> } | undefined): string | undefined {
-  const url = candidate?.providerPayload?.["url"];
-  return typeof url === "string" && url.length > 0 ? url : undefined;
-}
+/** fast path 装配选项。 */
 export interface FastPathOptions {
   sandbox: TaskSandbox;
   model: LanguageModel;

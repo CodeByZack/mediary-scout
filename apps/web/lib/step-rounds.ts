@@ -7,7 +7,7 @@
  *  - 同 round 的 stagingDigest/digestFiles/arbitrateEpisodeMapping/arbitrateDiagnosis
  *    → 并入该轮卡片;
  *  - 无 round 的 transferCandidate(老数据)→ 独立成轮(fallbackRoundSeq);
- *  - 搜索/评分/选片 等 pre-transfer 步骤 → 「决策链」卡(kind=decision);
+ *  - 搜索/评分/选片 等 pre-transfer 步骤 → 「搜索与选片」卡(kind=decision);
  *  - finalizeLanding/finish 等收尾步骤 → 「收尾」卡(kind=closing);
  *  - 保持原始顺序。
  */
@@ -31,17 +31,6 @@ function roundOf(step: ActivityStepView): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/** 从步骤 args 读 pool(primary/fallback);无则 undefined。 */
-function poolOf(step: ActivityStepView): "primary" | "fallback" | undefined {
-  const value = step.args?.["pool"];
-  return value === "primary" || value === "fallback" ? value : undefined;
-}
-
-/** 从步骤 args 读 decidedBy(code/ai);无则 undefined。 */
-function decidedByOf(step: ActivityStepView): "code" | "ai" | undefined {
-  const value = step.args?.["decidedBy"];
-  return value === "code" || value === "ai" ? value : undefined;
-}
 
 /** 卡片标题的决策来源标记:⚙️ 代码 / 🤖 AI。 */
 export function decidedByLabel(value: "code" | "ai" | undefined): string {
@@ -57,7 +46,7 @@ export function poolLabel(value: "primary" | "fallback" | undefined): string {
   return "—"; // B3:未知时诚实显示,不谎报 primary。
 }
 
-/** 从一组步骤里找第一个非 undefined 的 pool(卡头展示;避免锚点退化时谎报)。 */
+
 
 
 /** 轮次卡的最终判定(B1 三态):pass=digest 通过或最终归位;fail=digest 未通过且未归位;
@@ -133,7 +122,7 @@ export function groupStepsIntoRounds(steps: ActivityStepView[]): StepRoundCard[]
     if (closingTools.includes(step.toolName)) closingSteps.push(step);
     else decisionSteps.push(step);
   }
-  flush(decisionSteps, "decision", "决策链");
+  flush(decisionSteps, "decision", "搜索与选片");
   flush(closingSteps, "closing", "收尾");
 
   // 生成标题:decision/closing 用固定名;transfer 归纳 pool/decidedBy/candidate/verdict。

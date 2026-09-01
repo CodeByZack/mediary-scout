@@ -16,7 +16,6 @@ import {
   concludeUncovered,
   emitStep,
   fileBaseName,
-  candidateTitleEvidence,
   evidenceDigestLine,
   gradeDistribution,
   gradedCandidateEvidence,
@@ -125,7 +124,7 @@ async function runTvCandidatePhase(
       const doneDetail = `暂无资源(${poolLabel}池仲裁放弃:${arbitration.reasoning || "无可用候选"})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "arbitrateSelection", "pick", declineDetail, {
-        pool: gradedCandidateEvidence(grading),
+        // issue #29 用户拍板:候选列表只在 gradeCandidates 展示一次,仲裁结果不带全表。
         reasoning: arbitration.reasoning ?? null,
         selected: null,
       });
@@ -167,7 +166,7 @@ async function runTvCandidatePhase(
     const pickedDetail = `${poolLabel}池选中候选 ${current}${arbitration.reasoning ? `(${arbitration.reasoning})` : ""}`;
     stepLog(sandbox, target.title, "仲裁", pickedDetail);
     emitStep(onProgress, "arbitrateSelection", "pick", pickedDetail, {
-      pool: gradedCandidateEvidence(grading),
+      // issue #29:仲裁结果不带候选全表(gradeCandidates 已展示);只带结论与 AI 决策标记。
       reasoning: arbitration.reasoning ?? null,
       selected: current,
       // issue #29:仲裁选片=AI 决策(ai),供前端标记「谁选的」。

@@ -134,6 +134,23 @@ describe("groupStepsIntoRounds", () => {
     expect(closing?.steps.map((s) => s.toolName)).toEqual(["finish"]);
   });
 
+
+  it("REV:有转存轮后仍累积尾部决策桶——尾卡显示「搜索与选片」而非旧词「决策链」", () => {
+    // 场景:primary 已转存(轮卡),随后兜底重搜/仲裁步骤无 round → 尾部决策桶
+    const steps: ActivityStepView[] = [
+      step("transferCandidate", "primary池候选 cX(1/3 次转存)", { candidateId: "cX", round: 1, pool: "primary" }),
+      step("stagingDigest", "干净落地", { round: 1, passes: true }),
+      step("searchResources", "keyword=「别名」(第 1/3 轮)", { keyword: "别名" }),
+      step("gradeCandidates", "兜底合并池继续仲裁", { keyword: "别名" }),
+      step("arbitrateSelection", "仲裁放弃:无可用候选", { reasoning: "无可用候选", selected: null }),
+    ];
+    const cards = groupStepsIntoRounds(steps);
+    const tail = cards[cards.length - 1];
+    expect(tail?.kind).toBe("decision");
+    expect(tail?.heading).toBe("搜索与选片");
+    expect(tail?.heading).not.toContain("决策链");
+    expect(tail?.steps.map((s) => s.toolName)).toEqual(["searchResources", "gradeCandidates", "arbitrateSelection"]);
+  });
   it("空数组 → 空卡片", () => {
     expect(groupStepsIntoRounds([])).toEqual([]);
   });

@@ -292,9 +292,14 @@ export async function aliasesFallbackReSearch(input: {
     if (currentGrading.ranked.length > 0) {
       stepLog(sandbox, title, "兜底命中", evidenceDigestLine(currentGrading));
     }
+    // issue #29:兜底轮是不同关键词的搜索结果(信息价值),保留列表并补链接保持全链可点。
+    const roundUrlById: Record<string, string> = {};
+    for (const c of nextView.candidates) {
+      if (c.url) roundUrlById[c.id] = c.url;
+    }
     emitStep(onProgress, "gradeCandidates", "search", gradeDetail, {
       keyword: alias,
-      candidates: gradedCandidateEvidence(currentGrading),
+      candidates: gradedCandidateEvidence(currentGrading, roundUrlById),
     });
     if (nextView.candidates.length > 0 && currentGrading.uniqueTopGrade) {
       foundUniqueA = true;

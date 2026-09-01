@@ -3182,15 +3182,14 @@ select.setting-control {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.act-ev-reason {
-  flex: 0 1 auto;
-  min-width: 0;
-  font-size: 11px;
-  opacity: 0.72;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.act-ev-title.act-ev-link {
+  color: var(--accent, #4c8dff);
 }
+.act-ev-title.act-ev-link:hover {
+  text-decoration: underline;
+}
+
+
 .act-ev-grade {
   flex: none;
   width: 16px;
