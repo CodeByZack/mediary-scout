@@ -438,6 +438,37 @@ TV 阶段2 原从 stale ctx 起算（死链上限虚高可到 20、AI 升级低�
 **补记**：v1.0.0 tag 于 2026-08-30 从 `f669334` 移到 `fcaa17a`（含 PR #24 修复）重发双架构 fpk
 （arm 15,445,034B / x86 15,246,503B，Create 2026-08-30T04:15:42Z，run 33292057274 success）。
 
+### 28. 综艺「第N期」→ TMDB Part 锚定 + 期号一致性校验（PR #25 追加，地球超新鲜 S02E19/E20 案）
+
+**用户疑问**：地球超新鲜 S2 一直补不上「最新一集」。查到驻留资源 42f43d6608c2（标题「更0825期」
+= 页面更新日期，非内容到 0825）**实际内容正片只到第4期（07-19）**；而 TMDB S2 每期拆两集
+（Episode N (Part 1/2)），第10期 = E19/E20。代码把「第10期」机械解析成 E10 → 缺集 E19 永远补不上。
+
+**根因一（数据链断裂）**：tmdbSeasonMetadataSync 门闩 `MEDIA_TRACK_SEARCH_PROVIDER !== "tmdb"`
+直接 return undefined——本机搜索配 pansou，TMDB 播出日从不注入 → episode_states.airDate 全 null →
+年守卫、Part 锚定全程惰性。且 getTmdbAccesses 的 proxy 通道**永远保底**（env.TMDB_PROXY_BASE_URL
+|| 默认托管域名），TMDB 元数据恒可用——两版门闩（搜索 provider 版、环境变量版）都误伤了仅配默认
+proxy 的部署。**最终修复：彻底移除门闩**，无任何环境变量闸门（commit c6e7e98）。
+
+**根因二（第N期错位）**：一期=TMDB 两集时「第N期 → SxxEN」机械映射系统性错位。**Part 锚定**：
+episodeNames（SxxExx→TMDB name "Episode N (Part X)"）沿 prepareTrackingTarget→commands→pipeline→
+tv/landing→staging-digest 全链透传；episode-code.ts 新增 anchorVarietyPeriod——文件名「第N期上/下」
+↔ Episode N (Part 1/2)；无标记取唯一或 Part 1；锚不到回退机械 E(N)。TMDB 播出日同步放开门闩后
+巡检才回填（commit 5afe42e）。
+
+**根因三（假集号）**：AI 集数映射（9e2e671 全量重映射）只校验「文件名合法 + 集号不重复」，不校验
+「该集号对应的期是否真的存在于包内」。候选包里没有第10期正片时，AI 把「第4期上」硬安成 S02E19/
+E20 迎合 need → 假 mark obtained（run eaade691 实证：S02E19/E20 入库但包内只有到第4期）。
+**修复（期号一致性校验，commit 01b0a0f）**：有 episodeNames 时反查——AI 映射的 code 对应 TMDB
+name 的期号 N，文件名「第M期」M≠N → 该条映射作废（整表回落诊断仲裁）。
+
+**验证**：fast-path.test.ts 新增「假集号防线」用例（第4期上→S01E19 被拒）全绿；受影响套件
+137/137；PR #25 CI 双 job green；fpk 双架构重打包。
+
+**清理提醒**：run eaade691 已在线上把 S02E19/E20 假 mark obtained（绑定了第4期文件）。升级新包前
+或后需手动重置这两集（obtained=false、verifiedFileIds=[]、airDate 由巡检回填），否则下次巡检视为
+已入库、永远不找真第10期。
+
 ---
 ## 注意事项
 
