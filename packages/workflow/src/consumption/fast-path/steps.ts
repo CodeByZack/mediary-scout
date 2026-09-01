@@ -70,17 +70,20 @@ export function emitStep(
  *  按 decidedBy/pool/transferIndex/linkUrl/videoCount 渲染一张「本轮转存卡片」。
  *  逐字保持 activity 文案不变,这些字段只进 args,不改变任何现有输出。 */
 export interface TransferStepMeta {
-  /** 第几轮转存循环(primary 从 1 起,兜底接续编号,跨池单调递增的转存序号)。 */
+  /** 第几轮真实转存(仅转存成功时推进;死链/系统阻塞探针不占 round,共用当前轮号)。 */
   round: number;
   /** 候选归属池:primary | fallback。 */
   pool: "primary" | "fallback";
-  /** 选片决策来源:code=唯一A盲转(零 LLM);ai=仲裁器选片。 */
+  /** 选片决策来源:code=唯一A盲转(零 LLM);ai=仲裁器选片。
+   *  语义 = 本池「初始选片」的决策者。循环第 2+ 次转存若由诊断仲裁 retry_other
+   *  (landing.ts)点名 aiNext 推进,其选片来源是 AI —— 前端可从该轮的
+   *  arbitrateDiagnosis retry_other 事件(带 aiNext 与否)另行标注,本字段不覆盖。 */
   decidedBy: "code" | "ai";
   /** 本池内第几次转存(1/3 或 1/1…)。 */
   transferIndex: number;
   /** 分享链接(providerPayload.url,stdout 红线:只进 args 不落日志)。 */
   linkUrl?: string;
-  /** 转存成功后落盘视频文件数。 */
+  /** 转存后落盘文件总数(含视频/字幕/nfo;vendor 可能混入非视频,前端展示为「N 个文件」)。 */
   videoCount?: number;
 }
 
@@ -146,7 +149,7 @@ export function fileBaseName(path: string): string {
 /** agent-trace-sink 对 args JSON >2000 字符整体硬截(_truncated)——证据列表必须自带预算,否则 UI 只会看到「参数过长已省略」。 */
 const EVIDENCE_BUDGET = 1800;
 
-function pushWithinBudget<T>(out: T[], rows: T[], budget = EVIDENCE_BUDGET): T[] {
+export function pushWithinBudget<T>(out: T[], rows: T[], budget = EVIDENCE_BUDGET): T[] {
   let size = 2;
   for (const row of rows) {
     const cost = JSON.stringify(row).length + 1;
@@ -159,6 +162,17 @@ function pushWithinBudget<T>(out: T[], rows: T[], budget = EVIDENCE_BUDGET): T[]
 
 function shortCandidateId(id: string): string {
   return id.length > 28 ? "…" + id.slice(-24) : id;
+}
+
+
+/** 紧凑集号列表(活动页卡片证据):集合过大时只报 count + 前 N 项,防整体超预算。 */
+export function compactCodeList(codes: string[], maxItems = 24): { count: number; sample: string[] } {
+  return { count: codes.length, sample: codes.slice(0, maxItems) };
+}
+
+/** 紧凑 AI 映射表(活动页卡片证据):文件名过长/过多时只保留前 N 条、文件名截断。 */
+export function compactMapping(mapping: Record<string, string>, maxItems = 12): Array<{ file: string; code: string }> {
+  return Object.entries(mapping).slice(0, maxItems).map(([file, code]) => ({ file: file.length > 48 ? file.slice(0, 45) + "…" : file, code }));
 }
 
 interface EvidenceCandidate {

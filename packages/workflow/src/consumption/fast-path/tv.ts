@@ -24,6 +24,7 @@ import {
   stepLog,
   type FastPathOptions,
   type FastPathResult,
+  type TransferStepMeta,
 } from "./steps.js";
 
 // 出口名保留（orchestrator/测试从 fast-path.js 引用）；实现体逐字搬迁。
@@ -185,7 +186,7 @@ async function runTvCandidatePhase(
     const transferDetail = `${poolLabel}池候选 ${current}(${ctx.attempted.size - poolTransferBase + 1}/${attemptBudget} 次转存)`;
     stepLog(sandbox, target.title, "转存", transferDetail);
     // issue #29:转存步骤的结构化证据(卡片化)。round 跨池单调递增,给前端「第几轮转存」。
-    const transferMeta = {
+    const transferMeta: TransferStepMeta = {
       round: ctx.attempted.size + 1,
       pool: poolLabel === "兜底" ? "fallback" : "primary",
       decidedBy: grading.uniqueTopGrade ? "code" : "ai",

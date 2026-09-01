@@ -9,6 +9,8 @@ import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import type { TvAnimeTarget } from "../../acquisition-v2/task-agents.js";
 import { MAX_DEAD_LINK_RETRIES, MAX_FALLBACK_SEARCHES } from "./budgets.js";
 import {
+  compactCodeList,
+  compactMapping,
   concludeUncovered,
   emitStep,
   evidenceDigestLine,
@@ -150,7 +152,7 @@ export async function tryEpisodeMapping(options: {
   if (!valid) {
     const failDetail = `集数映射校验失败(文件名幻觉/集数冲突),回落诊断仲裁`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
-    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: Object.entries(arbitration.mapping) });
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "failed";
   }
 
@@ -167,20 +169,20 @@ export async function tryEpisodeMapping(options: {
   if (re.passes) {
     const mapDetail = `集数映射 ${Object.entries(clean).length} 个文件 → ${Object.values(clean).join(",")},重建 digest 通过`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "log");
-    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: Object.entries(arbitration.mapping) });
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "passed";
   }
   if (re.episodeCodes.length > 0 && !re.isDirtyPack) {
     // 映射上了但没覆盖 need(例如映射出的是别的集数)—— 回收干净但无用。
     const mapDetail = `集数映射生效但未覆盖目标(${re.episodeCodes.join(",")}),丢弃换候选`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "warn");
-    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: Object.entries(arbitration.mapping) });
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "unmapped-but-clean";
   }
   // 重建后仍脏(映射不完整/失败) → 回落诊断仲裁。
   const failDetail = `集数映射后仍不通过(${re.summary.split("\n").join(" / ")}),回落诊断仲裁`;
   stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
-  emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: Object.entries(arbitration.mapping) });
+  emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
   return "failed";
 }
 
@@ -408,7 +410,12 @@ export async function closeOutTvLanding(options: {
       stepLog(sandbox, target.title, "转存失败", blockDetail, "error");
       const doneDetail = `失败(系统阻塞:${transfer.systemicBlock.reason})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "transferCandidate", "transfer", blockDetail);
+      // issue #29 A3:systemic 也是转存轮事件,补 round 防前端误判为老数据序号卡。
+      emitStep(onProgress, "transferCandidate", "transfer", blockDetail, {
+        candidateId: current,
+        round: attempted.size + 1,
+        decidedBy: grading.uniqueTopGrade ? "code" : "ai",
+      });
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return { verdict: "systemic", done: {
         text: `系统阻塞:${transfer.systemicBlock.reason}`,
@@ -425,7 +432,12 @@ export async function closeOutTvLanding(options: {
       const next = nextCandidate(grading, tried);
       const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",无下一候选"}`;
       stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
-      emitStep(onProgress, "transferCandidate", "transfer", deadDetail, { candidateId: current });
+      // issue #29 A3:dead 探针也归当前轮。
+      emitStep(onProgress, "transferCandidate", "transfer", deadDetail, {
+        candidateId: current,
+        round: attempted.size + 1,
+        decidedBy: grading.uniqueTopGrade ? "code" : "ai",
+      });
       const probeDetail = `候选 ${current} 转存返回 0 个落盘文件 → 判死链(探测第 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} 次,不占 3 次转存预算)${next ? "" : ";池内无下一候选"}`;
       stepLog(sandbox, target.title, "死链探测", probeDetail, "warn");
       return { verdict: "dead", done: null, next, escalated, deadRetries };
@@ -455,14 +467,16 @@ export async function closeOutTvLanding(options: {
     emitStep(onProgress, "stagingDigest", "verify", digestDetail, {
       passes: digest.passes,
       videoCount: transfer.staging.length,
-      coveredCodes: digest.coveredCodes,
-      missingCodes: digest.missingCodes,
+      // issue #29 预算化(A1):长篇动漫整包入库 covered/missing 可达 100+,直接平铺会触发
+      // agent-trace-sink 的 2000 字符整体塌缩 → passes/round 一起丢。改发 count + 前 N 项。
+      coveredCodes: compactCodeList(digest.coveredCodes),
+      missingCodes: compactCodeList(digest.missingCodes),
       round: attempted.size,
     });
     const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates);
     if (parseRows.length > 0) {
       stepLog(sandbox, target.title, "解析明细", parseRows.join(" / "));
-      emitStep(onProgress, "digestFiles", "verify", `逐文件解析 ${parseRows.length} 条`, { files: parseRows });
+      emitStep(onProgress, "digestFiles", "verify", `逐文件解析 ${parseRows.length} 条`, { files: parseRows, round: attempted.size });
     }
     {
       const candidate = grading.ranked.find((c) => c.id === current);
@@ -635,7 +649,7 @@ export async function closeOutTvLanding(options: {
       const next = nextCandidate(grading, tried);
       const retryDetail = `映射未覆盖目标:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
       stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail);
+      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size + 1 });
       return { verdict: "retry_other", done: null, next, escalated, deadRetries };
     }
 
@@ -704,7 +718,7 @@ export async function closeOutTvLanding(options: {
       stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
       const doneDetail = `暂无资源(仲裁 abandon:${diagnosis.reasoning})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail);
+      emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail, { round: attempted.size + 1 });
       emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
       return { verdict: "abandon", done: await concludeUncovered(sandbox, {
         text: `仲裁 abandon:${diagnosis.reasoning}`,
@@ -729,6 +743,6 @@ export async function closeOutTvLanding(options: {
     const next = aiNext ?? nextCandidate(grading, tried);
     const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}${aiNext ? "(仲裁指定)" : ""}`;
     stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-    emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail);
+    emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail, { round: attempted.size + 1 });
     return { verdict: "retry_other", done: null, next, escalated, deadRetries };
 }
