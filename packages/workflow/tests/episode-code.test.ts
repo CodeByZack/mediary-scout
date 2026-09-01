@@ -152,3 +152,23 @@ describe("episodeCodeFromFileName — 2026-08-19 补齐的命名规则 (§3)", (
     expect(episodeCodeFromFileName("Show.S01E01.mkv", [1, 2])).toBe("S01E01");
   });
 });
+
+  it("Part 锚定:pipeline 重建的 episodeNames 含正确 TMDB name 时,第10期上→S02E19(2026-08-31 地球超新鲜案)", () => {
+    const episodeNames = {
+      S02E19: "Episode 10 (Part 1)",
+      S02E20: "Episode 10 (Part 2)",
+    };
+    expect(episodeCodeFromFileName("2026.08.29_第10期上_4K_60fps.mp4", [2], episodeNames)).toBe("S02E19");
+    expect(episodeCodeFromFileName("2026.08.30_第10期下_4K_60fps.mp4", [2], episodeNames)).toBe("S02E20");
+  });
+
+  it("Part 锚定保护:占位名 Episode N 混入 episodeNames 时不得锚错——回退机械 E(N)", () => {
+    // 回归:pipeline.ts 过滤正则是 /^Episode d+$/ 少个反斜杠时,占位名 Episode 19
+    // 混进 episodeNames → 锚定反查期号=19 ≠ 文件名第10期 → 回退机械 E(10)。
+    // 此测试锁定语义:即使过滤失效,也绝不把第10期错误锚成 S02E19(假集号)。
+    const placeholderNames = {
+      S02E19: "Episode 19",
+      S02E20: "Episode 20",
+    };
+    expect(episodeCodeFromFileName("2026.08.29_第10期上_4K_60fps.mp4", [2], placeholderNames)).toBe("S02E10");
+  });

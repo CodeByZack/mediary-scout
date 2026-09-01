@@ -117,7 +117,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
         // 用 episodeNames 生成);「第N期上/下 ↔ Episode N (Part 1/2)」靠它定位。
         episodeNames: Object.fromEntries(
           claimed.snapshot.episodes.flatMap((episode) =>
-            !episode.title || /^Episode d+$/.test(episode.title)
+            !episode.title || /^Episode \d+$/.test(episode.title)
               ? []
               : [[episode.episodeCode, episode.title] as const],
           ),
@@ -275,7 +275,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
         ),
         episodeNames: Object.fromEntries(
           patrol.episodes.flatMap((episode) =>
-            !episode.title || /^Episode d+$/.test(episode.title)
+            !episode.title || /^Episode \d+$/.test(episode.title)
               ? []
               : [[episode.episodeCode, episode.title] as const],
           ),
