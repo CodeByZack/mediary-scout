@@ -38,6 +38,20 @@ const tx = db.transaction(() => { for (const c of codes) upd.run(c); });
 tx();
 const after = codes.map((c) => { const row = sel.get(c, codes[1]); return row ? [c, JSON.parse(row.payload).obtained, JSON.parse(row.payload).verifiedFileIds] : [c, 'NOT FOUND']; });
 console.log('重置后:', JSON.stringify(after));
-console.log('OK: S02E19/E20 已恢复为缺集(obtained=false, verifiedFileIds=[])');
+// ★ 季级 status 回滚:假入库把季抬成 completed → 巡检直接跳过(worker.ts 514 行
+//   status !== 'active' continue)。completed 永不回退,必须手动改回 active 才能
+//   让巡检重新把 E19/E20 当缺集获取。幂等:当前已是 active 则不动。
+const seasonRow = db.prepare("SELECT payload FROM tracked_seasons WHERE id = 'tmdb_tv_296202_s2'").get();
+if (seasonRow) {
+  const sp = JSON.parse(seasonRow.payload);
+  if (sp.status !== 'active') {
+    sp.status = 'active';
+    db.prepare("UPDATE tracked_seasons SET payload = ? WHERE id = 'tmdb_tv_296202_s2'").run(JSON.stringify(sp));
+    console.log('季级: tmdb_tv_296202_s2 status completed → active(巡检恢复参与)');
+  } else {
+    console.log('季级: tmdb_tv_296202_s2 已是 active(无需回滚)');
+  }
+}
+console.log('OK: S02E19/E20 已恢复为缺集,季已回到 active(下次巡检会重新尝试获取)');
 console.log('注: 若 Season 目录里有误归位的 地球超新鲜.S02E19/S02E20.* 文件,请手动删掉/改回原名。');
 db.close();
