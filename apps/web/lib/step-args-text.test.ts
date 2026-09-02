@@ -74,6 +74,17 @@ describe("stepDetailView — 结构化证据行(§23)", () => {
     expect(stepDetailView(step({ renames: [{ newName: "A.mkv" }] }))).toBeNull();
     expect(stepDetailView(step({}))).toBeNull();
   });
+
+  it("AI 集数映射(mapping)逐条分行——扩 files 行渲染,不再挤一行", () => {
+    expect(stepDetailView(step({ mapping: [
+      { file: "01.mkv", code: "S01E01" },
+      { file: "02.mkv", code: "S01E02" },
+    ] }))).toEqual({
+      kind: "files",
+      rows: ["01.mkv → S01E01", "02.mkv → S01E02"],
+    });
+    expect(stepDetailView(step({ mapping: [] }))).toBeNull();
+  });
 });
 describe("B6(issue #29)紧凑集号/AI 映射消费", () => {
   function st(args: Record<string, unknown>): ActivityStepView {

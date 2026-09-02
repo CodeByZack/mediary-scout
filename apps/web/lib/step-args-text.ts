@@ -148,6 +148,19 @@ export function stepDetailView(step: ActivityStepView): StepDetailView {
       return { kind: "files", rows };
     }
   }
+  // issue #29 用户实测:AI 集数映射(arguments)逐条分行——mapping [{file,code}] 复用 files 行渲染。
+  const mapping = Array.isArray(args.mapping) ? args.mapping : null;
+  if (mapping && mapping.length > 0) {
+    const rows = mapping.map((row) => {
+      const record = (row ?? {}) as Record<string, unknown>;
+      const file = typeof record.file === "string" ? record.file : "?";
+      const code = typeof record.code === "string" ? record.code : "?";
+      return `${file} → ${code}`;
+    });
+    if (rows.length > 0) {
+      return { kind: "files", rows };
+    }
+  }
   return null;
 }
 
