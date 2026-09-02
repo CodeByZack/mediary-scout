@@ -2,15 +2,13 @@ name: Build Docker images (arm + x86)
 
 # docker save 分发包——把 web 镜像导出为 tar.gz 文件挂在 GitHub Release 附件上,
 # 用户下载后 `docker load < file.tar.gz` 导入(不依赖任何第三方 registry)。
-# 触发方式:
-#   - 手动: workflow_dispatch(可带 tag 输入,产物挂到对应 GitHub Release)
-#   - 自动: push tag v*(产物同时挂到 GitHub Release)
-# 与 build-fpk.yml 同构:同矩阵(原生 arm/x86 runner)、同发布闸门(test 模式不进 Release)。
+# 与 build-fpk.yml 同构:同矩阵(原生 arm/x86 runner)。
+# ⚠️ 2026-09-02 暂态:不监听 tag push;release 步骤已注释(避免与 fpk 的 Release 附件互相干扰,
+# 待双架构 docker 打包实测通过后再恢复 tag 触发 + release 上传)。
 
+# ⚠️ 暂时不监听 push tag v*(与 build-fpk.yml 同时触发会都往同一 Release 传附件,且
+# docker 打包尚未实测通过)。只支持手动 workflow_dispatch;release 步骤暂注释(见下)。
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       tag:
@@ -107,31 +105,32 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  release:
-    needs: [build]
-    if: needs.build.result == 'success' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) && inputs.mode != 'test'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Determine release tag
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "tag=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
-          else
-            echo "tag=${{ inputs.tag }}" >> "${GITHUB_OUTPUT}"
-          fi
-
-      - name: Download docker image artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Upload docker images to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          files: dist/*.tar.gz
-          fail_on_unmatched_files: true
+#   release:
+#     needs: [build]
+#     if: needs.build.result == 'success' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) && inputs.mode != 'test'
+#     runs-on: ubuntu-latest
+#     permissions:
+#       contents: write
+#     steps:
+#       - name: Determine release tag
+#         id: tag
+#         run: |
+#           if [ "${{ github.event_name }}" = "push" ]; then
+#             echo "tag=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+#           else
+#             echo "tag=${{ inputs.tag }}" >> "${GITHUB_OUTPUT}"
+#           fi
+#
+#       - name: Download docker image artifacts
+#         uses: actions/download-artifact@v4
+#         with:
+#           path: dist
+#           merge-multiple: true
+#
+#       - name: Upload docker images to GitHub Release
+#         uses: softprops/action-gh-release@v2
+#         with:
+#           tag_name: ${{ steps.tag.outputs.tag }}
+#           files: dist/*.tar.gz
+#           fail_on_unmatched_files: true
+#
