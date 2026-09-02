@@ -590,7 +590,10 @@ export async function closeOutTvLanding(options: {
     // pack land like a clean digest (zero further LLM decisions); a failed or
     // partial mapping falls through to the diagnostic arbitrator.
     // Movie landings never map episodes — they go straight to the movie diagnosis.
-    escalated = true;
+    // issue #29 八轮复核:escalated 从预置 true 改为 false——tryEpisodeMapping 的
+    // "no" 返回(多季/代码已全覆盖/全衍生文件)不调 AI,预置 true 会虚增 aiEscalated;
+    // 置位推迟到确认 AI 参与过的分支出口(passed/unmapped-but-clean/failed)。
+    escalated = false;
     let landingDigest = digest;
     let mappingTable: Record<string, string> | undefined;
     const mappingEscalated = await tryEpisodeMapping({
@@ -671,6 +674,7 @@ export async function closeOutTvLanding(options: {
       const doneDetail = `已完成:${landingDigest.coveredCodes.join(",") || "-"} 已入库(AI 补认)`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "finish", "finalize", doneDetail);
+      escalated = true; // AI 集数映射参与过
       return { verdict: "mapped_clean", done: {
         text: `集数映射归位:${landingDigest.coveredCodes.join(",") || "-"}`,
         steps: attempted.size,
@@ -689,6 +693,7 @@ export async function closeOutTvLanding(options: {
       const retryDetail = `这轮转存没拿到需要的集:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
       stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
       emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size });
+      escalated = true; // AI 集数映射参与过(虽未覆盖目标)
       return { verdict: "retry_other", done: null, next, escalated, deadRetries };
     }
 
@@ -697,6 +702,13 @@ export async function closeOutTvLanding(options: {
     // 此前 failed 会升级诊断仲裁再问一次 AI(accept/retry/abandon),纯属多余(此前
     // 曾出现「AI 识别出 20 集,还有 0 集没认出来,交 AI 处理」的自相矛盾文案——实际
     // 目标全覆盖却因脏包信号再叫 AI)。现在按 landingDigest.missingCodes 决定。
+    // issue #29 八轮复核:只有 mappingEscalated === "failed" 才是 AI 集数映射真参与过;
+    // "no" 返回(多季/代码已全覆盖/全衍生文件)一次 AI 都没跑,文案不得冒领 AI 归因、
+    // escalated 不得虚增。与 unmapped-but-clean 同源分家。
+    const mappedByAI = mappingEscalated === "failed";
+    if (mappedByAI) {
+      escalated = true;
+    }
     if (landingDigest.missingCodes.length === 0) {
       // 目标集全覆盖(可能有杂项/多余文件——finalize 只补 need,多余文件清理/跳过)。
       try {
@@ -728,11 +740,12 @@ export async function closeOutTvLanding(options: {
           files: pushWithinBudget<string>([], arRenameRows, 1300),
         });
         const acceptCodes = landingDigest.coveredCodes.length > 0 ? landingDigest.coveredCodes.join(",") + " " : "";
-        const doneDetail = `已完成:${acceptCodes}已入库(AI 补认)`;
+        // 八轮复核:AI 参与过(mappedByAI)才署名「AI 补认」;否则是代码识别直接收尾。
+        const doneDetail = `已完成:${acceptCodes}已入库${mappedByAI ? "(AI 补认)" : ""}`;
         stepLog(sandbox, target.title, "结论", doneDetail);
         emitStep(onProgress, "finish", "finalize", doneDetail);
         return { verdict: "accept", done: {
-          text: `AI 集数映射覆盖全部缺集,已入库`,
+          text: `${mappedByAI ? "AI 集数映射" : "代码识别"}:目标集已覆盖,已入库`,
           steps: attempted.size,
           coverage: await sandbox.finish(),
           escalated,
@@ -765,7 +778,8 @@ export async function closeOutTvLanding(options: {
         await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
       }
       const next = nextCandidate(grading, tried);
-      const retryDetail = `AI 识别后仍没拿全缺集:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
+      // 八轮复核:AI 参与过才署「AI 识别」;否则(no 路径)复用 unmapped-but-clean 同款中性文案。
+      const retryDetail = `${mappedByAI ? "AI 识别后仍没拿全缺集" : "这轮转存没拿到需要的集"}:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
       stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
       emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size });
       return { verdict: "retry_other", done: null, next, escalated, deadRetries };

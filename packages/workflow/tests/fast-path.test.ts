@@ -38,15 +38,18 @@ function throwModel() {
 }
 
 /** Model returning a scripted sequence of texts, one per doGenerate call. */
-function sequentialModel(texts: string[]) {
+function sequentialModel(texts: string[], onCall?: () => void) {
   let i = 0;
   return new MockLanguageModelV3({
-    doGenerate: async () => ({
-      content: [{ type: "text" as const, text: texts[i++] ?? texts[texts.length - 1]! }],
-      finishReason: { unified: "stop" as const, raw: "stop" as const },
-      usage: USAGE,
-      warnings: [],
-    }),
+    doGenerate: async () => {
+      onCall?.();
+      return {
+        content: [{ type: "text" as const, text: texts[i++] ?? texts[texts.length - 1]! }],
+        finishReason: { unified: "stop" as const, raw: "stop" as const },
+        usage: USAGE,
+        warnings: [],
+      };
+    },
   });
 }
 
@@ -155,6 +158,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
       isChineseNative: false,
     });
 
+    // 选片仲裁(AI)参与了 → escalated 为 true。
     expect(result.escalated).toBe(true);
     expect(result.coverage.coverageMet).toBe(true);
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
@@ -207,7 +211,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     expect(result.coverage.missing).toEqual(["S01E01"]);
   });
 
-  it("escalates to the diagnostic arbitrator on a dirty landing, and honors accept", async () => {
+  it("issue #29 八轮:代码全识别 + 脏包(sample) → 零 AI 直接收尾(escalated=false,不再诊断仲裁)", async () => {
     const { sandbox, s1, storage } = await createSetup({
       // issue #29 回归:候选带 url → 转存步骤需透出 linkUrl(用户拍板链接展示)。
       candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字", url: "https://115.com/s/abc123" }],
@@ -228,7 +232,8 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
       isChineseNative: false,
     });
 
-    expect(result.escalated).toBe(true);
+    // 八轮:代码已全覆盖(S01E01),脏包(sample)信号不再升级——AI 零参与,escalated=false。
+    expect(result.escalated).toBe(false);
     expect(result.coverage.coverageMet).toBe(true);
     // Only the real episode was renamed + moved; the sample stays out of the season.
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
@@ -237,11 +242,13 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
   });
 
   it("issue #29 八轮拍板: AI 映射覆盖缺集后直接收尾(无第二次诊断仲裁)——fansub 包保住映射集 (S03,原 2026-08-21 bugfix)", async () => {
+    let aiCalls = 0;
     // 末日地堡 S03 缺 S08:包是 fansub 风格 `末日地堡 - 08.mkv`(文件名夹标题,
-    // 纯数字规则不适用,代码解析不出),AI 集数映射确认 08.mkv → S03E08,
-    // 01.mkv 也无法解析(留在 unmapped) → 仍脏 → 诊断仲裁 accept。修复前
-    // accept 分支的 finalizeLanding 漏传 overrides,08.mkv 会随 staging wipe
-    // 被清掉(假入库);修复后 08.mkv 必须 rename+归位入库,仅 01.mkv 被丢弃。
+    // 纯数字规则不适用,代码解析不出),AI 集数映射确认 08.mkv → S03E08 → 目标全覆盖
+    // 直接收尾(八轮拍板:无第二次诊断仲裁;01.mkv 无法解析 → 随 finalize 清理)。
+    // 源头是 2026-08-21 bugfix:accept 分支曾是 finalizeLanding 漏传 overrides,
+    // 08.mkv 会随 staging wipe 被清掉(假入库);现在映射覆盖即收尾,08.mkv 必须
+    // rename+归位入库,仅 01.mkv 被丢弃。
     const { sandbox, storage, seasonDirIds } = await createSetup({
       candidates: [{ id: "c1", title: "末日地堡 第三季 [8集] 全" }],
       seasons: [3],
@@ -265,9 +272,15 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
       // 识别出的集数一对比即决:AI 确认 08.mkv → S03E08 后目标全覆盖 → 直接收尾。
       // 只调一次 AI(集数映射),无第二次「诊断仲裁」调用。01.mkv 无法解析 → 随 finalize
       // 清理/跳过,但 08.mkv 必须 rename+归位入库(2026-08-21 bugfix 场景)。
-      model: sequentialModel([
-        '{"mapping":{"末日地堡 - 08.mkv":"S03E08"},"unmapped":["末日地堡 - 01.mkv"],"reasoning":"编号 08 是第 8 集"}',
-      ]),
+      // 八轮钉:AI 只允许调一次(集数映射),不得有第二次「诊断仲裁」——doGenerate 计数。
+      model: sequentialModel(
+        [
+          '{"mapping":{"末日地堡 - 08.mkv":"S03E08"},"unmapped":["末日地堡 - 01.mkv"],"reasoning":"编号 08 是第 8 集"}',
+        ],
+        () => {
+          aiCalls += 1;
+        },
+      ),
       target: { ...target, title: "末日地堡", seasons: [3], missingEpisodes: ["S03E08"] },
       isChineseNative: false,
       onProgress: (e) => {
@@ -276,8 +289,8 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     });
 
     expect(result.escalated).toBe(true);
-    // issue #29 八轮拍板:映射覆盖即收尾,不再让 AI 判断「收不收」——加入 calls 计数验证。
-    expect(result.escalated && true).toBe(true);
+    // issue #29 八轮拍板:映射覆盖即收尾,不再让 AI 判断「收不收」——AI 调用必须恰好 1 次。
+    expect(aiCalls).toBe(1);
     // issue #29 复核:accept 分支也必须 emit finalizeLanding(改名/归位/明细 UI 可见)。
     expect(organizers.length).toBe(1);
     expect(organizers[0]).toContain("归位到 Season 目录");
