@@ -579,7 +579,7 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 - digestDetail **pass/fail 同源复用一个 summary**(修「部分覆盖仍谎报完整」双源矛盾);
 - 恢复 fast-path happy path 的 `coverageMet toBe(true)`(PR #24 假入库防线,复核检出被无由删除);
 - 清理:死 CSS(act-round-badge/pass/fail)、step-rounds 死导出标注、错位注释、badId doneDetail 去模型串。
-**用户实测三轮反馈(commit 待补)** —— 家里跑通一把(绿灯军团 3 集全归位)后按 UI 实测提 5 点,全部落地:
+**用户实测三轮反馈(commit 907c0d0 + 复核 6dc4863 + 收尾 f774755)** —— 家里跑通一把(绿灯军团 3 集全归位)后按 UI 实测提 5 点,全部落地:
 - **删重复步骤**:primary 阶段 gradingDecision 与 gradeCandidates 分布重复 → 删 gradingDecision 的 emit(决策摘要仅表格日志);
   兜底轮 searchResources 与 gradeCandidates 同关键词重复 → searchResources 不再 emit(命中结果在 gradeCandidates 一条带出);
   兜底耗尽「合并证据池」不再单独成步(与随后的兜底评分合并);
