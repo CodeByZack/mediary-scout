@@ -545,14 +545,21 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
       },
     });
 
+    const activities: string[] = [];
     const result = await runFastPathAcquisition({
       sandbox,
       model: throwModel(),
       target: fallbackTarget,
       isChineseNative: false,
+      onProgress: (e) => {
+        if (e.toolName === "gradeCandidates") activities.push(e.activity ?? "");
+      },
     });
 
     expect(result.escalated).toBe(false);
+    // issue #29 复核:兜底命中唯一 A 提前停(零 LLM)时,activity 不能谎称「AI 选择」。
+    expect(activities.some((a) => a.includes("兜底第 1 轮命中唯一 A"))).toBe(true);
+    expect(activities.some((a) => a.includes("AI 选择"))).toBe(false);
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["S01E01"]);
     expect(searches).toBe(2); // 1 预搜 + 1 兜底（唯一 A 提前停）
@@ -1108,6 +1115,8 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect(((steps[2]!.args.candidates as { url?: string }[])[0]?.url)).toBe("https://115.com/s/abc123");
     // issue #29:候选带链接透出(fake provider 此候选无 url,故不强制断言 url)。
     expect((steps[6]!.args.files as string[])[0]).toContain("S01E01");
+    // issue #29 实测:finalizeLanding 展示 rename 明细(原名 → 规范名)。
+    expect(steps[7]!.args.files as string[]).toContain("狂飙.S01E01.mkv → 狂飙.S01E01.mkv");
     // 落盘结果不受 trace 影响
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",

@@ -210,7 +210,8 @@ export async function finalizeLanding(
       const source = baseById.get(fileId) ?? fileId;
       const err = errorByFileId.get(fileId);
       // issue #29 实测反馈:rename 明细供 UI 归位步骤展示(成功与否一目了然)。
-      renamedPairs.push({ from: source, to: newName });
+      // 复核:失败项带 ⚠ 后缀——部分改名失败时不许假呈规范名。
+      renamedPairs.push({ from: source, to: err === undefined ? newName : `${newName} ⚠` });
       if (err === undefined) {
         stepLog(sandbox, canonicalTitle, "改名", `${source} → ${newName}`);
       } else {
