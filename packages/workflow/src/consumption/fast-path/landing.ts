@@ -531,8 +531,9 @@ export async function closeOutTvLanding(options: {
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
         });
         const skipNote =
+          // 九轮复核:与归位去集号一致——已在库/非缺集跳过的明细都在 args.files。
           (finalized.skippedOnDisk.length > 0
-            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集(${finalized.skippedOnDisk.sort().join(",")})`
+            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集`
             : "") +
           (finalized.skippedNotNeeded.length > 0
             ? ` / 非缺集跳过 ${finalized.skippedNotNeeded.length} 件`
@@ -637,8 +638,9 @@ export async function closeOutTvLanding(options: {
           ...(mappingTable ? { overrides: mappingTable } : {}),
         });
         const skipNote =
+          // 九轮复核:与归位去集号一致——已在库/非缺集跳过的明细都在 args.files。
           (finalized.skippedOnDisk.length > 0
-            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集(${finalized.skippedOnDisk.sort().join(",")})`
+            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集`
             : "") +
           (finalized.skippedNotNeeded.length > 0
             ? ` / 非缺集跳过 ${finalized.skippedNotNeeded.length} 件`
@@ -694,7 +696,7 @@ export async function closeOutTvLanding(options: {
       // issue #29:换候选不显示 ID(人话)。
       const retryDetail = `这轮转存没拿到需要的集:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
       stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size });
+      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size, aiUsed: true });
       escalated = true; // AI 集数映射参与过(虽未覆盖目标)
       return { verdict: "retry_other", done: null, next, escalated, deadRetries };
     }
@@ -727,9 +729,10 @@ export async function closeOutTvLanding(options: {
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
           ...(mappingTable ? { overrides: mappingTable } : {}),
         });
+        // 九轮复核:与归位去集号一致(明细在 files)。
         const arSkipNote =
           (arAccept.skippedOnDisk.length > 0
-            ? ` / 已在库跳过 ${arAccept.skippedOnDisk.length} 集(${arAccept.skippedOnDisk.sort().join(",")})`
+            ? ` / 已在库跳过 ${arAccept.skippedOnDisk.length} 集`
             : "") +
           (arAccept.skippedNotNeeded.length > 0
             ? ` / 非缺集跳过 ${arAccept.skippedNotNeeded.length} 件`
@@ -784,7 +787,8 @@ export async function closeOutTvLanding(options: {
       // 八轮复核:AI 参与过才署「AI 识别」;否则(no 路径)复用 unmapped-but-clean 同款中性文案。
       const retryDetail = `${mappedByAI ? "AI 识别后仍没拿全缺集" : "这轮转存没拿到需要的集"}:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
       stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size });
+      // 九轮复核(第二轮):aiUsed 显式透出——mappedByAI=false 的 no 支(零 AI)不得挂「AI」徽章。
+      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size, ...(mappedByAI ? { aiUsed: true } : { aiUsed: false }) });
       return { verdict: "retry_other", done: null, next, escalated, deadRetries };
     }
 

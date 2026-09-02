@@ -144,7 +144,12 @@ export function StepStatusIcon({ status }: { status: ActivityStepView["stepStatu
 /** issue #29 用户拍板(九轮):AI 参与的步骤在标题加「AI」小徽章——toolName 以
  *  arbitrate 开头(选片/诊断/集数映射仲裁都是 AI 调用)或 args.aiUsed===true。 */
 function stepUsedAI(step: ActivityStepView): boolean {
-  return step.toolName.startsWith("arbitrate") || step.args?.["aiUsed"] === true;
+  // 九轮复核:arbitrate* 前缀兜底真仲裁(选片/诊断),但 aiUsed 显式 false(no 支零 AI)
+  // 必须压过前缀——八轮的文案分家不能让徽章焊回去。
+  const aiUsed = step.args?.["aiUsed"];
+  if (aiUsed === true) return true;
+  if (aiUsed === false) return false;
+  return step.toolName.startsWith("arbitrate");
 }
 
 /** issue #29 用户拍板(九轮):转存步骤展示分享链接(可点击)。链接来自 args.linkUrl。 */

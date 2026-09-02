@@ -360,7 +360,8 @@ async function runMovieCandidatePhase(
       try {
         const finalized = await finalizeMovieLanding({ sandbox, digest });
         // issue #29 九轮拍板:与 TV 一致,不罗列集号(明细在 rename 列表里)。
-        const organizeDetail = `归位到媒体库:标为已入库,移动 ${finalized.movie.length} 个文件`;
+        // 九轮复核:movie.length 是 flatten 后目录清单(含零移动/字幕),不实——去掉计数。
+        const organizeDetail = `归位到媒体库:标为已入库`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
         emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, { ok: true });
       } catch (error) {
@@ -421,7 +422,7 @@ async function runMovieCandidatePhase(
         // issue #29 复核揪出:movie 诊断 accept 分支与 TV 同型漏 emit——flatten/归位都执行了,
         // 但 UI 看不到「归位到媒体库」步骤。与干净路径同款补上。
         // issue #29 九轮拍板:同上,不罗列集号。
-        const arOrganizeDetail = `归位到媒体库:标为已入库,移动 ${arMovie.movie.length} 个文件`;
+        const arOrganizeDetail = `归位到媒体库:标为已入库`;
         stepLog(sandbox, target.title, "归位", arOrganizeDetail);
         emitStep(onProgress, "finalizeLanding", "organize", arOrganizeDetail, { ok: true });
       } catch (error) {
