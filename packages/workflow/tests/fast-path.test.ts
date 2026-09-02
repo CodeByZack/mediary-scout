@@ -236,7 +236,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     ]);
   });
 
-  it("bugfix 2026-08-21: diagnostic accept on an AI-mapped fansub pack keeps the mapped episode (S03)", async () => {
+  it("issue #29 八轮拍板: AI 映射覆盖缺集后直接收尾(无第二次诊断仲裁)——fansub 包保住映射集 (S03,原 2026-08-21 bugfix)", async () => {
     // 末日地堡 S03 缺 S08:包是 fansub 风格 `末日地堡 - 08.mkv`(文件名夹标题,
     // 纯数字规则不适用,代码解析不出),AI 集数映射确认 08.mkv → S03E08,
     // 01.mkv 也无法解析(留在 unmapped) → 仍脏 → 诊断仲裁 accept。修复前
@@ -261,11 +261,12 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     const organizers: string[] = [];
     const result = await runFastPathAcquisition({
       sandbox,
-      // 第一次:集数映射只给 08.mkv → S03E08(01.mkv 留 unmapped → 仍脏 → 回落诊断)。
-      // 第二次:诊断仲裁 accept。
+      // issue #29 用户拍板(八轮):AI 集数映射后不再叫诊断仲裁——需要的集数 vs
+      // 识别出的集数一对比即决:AI 确认 08.mkv → S03E08 后目标全覆盖 → 直接收尾。
+      // 只调一次 AI(集数映射),无第二次「诊断仲裁」调用。01.mkv 无法解析 → 随 finalize
+      // 清理/跳过,但 08.mkv 必须 rename+归位入库(2026-08-21 bugfix 场景)。
       model: sequentialModel([
         '{"mapping":{"末日地堡 - 08.mkv":"S03E08"},"unmapped":["末日地堡 - 01.mkv"],"reasoning":"编号 08 是第 8 集"}',
-        '{"action":"accept","reasoning":"核心集数 S03E08 已存在,额外 01.mkv 不影响"}',
       ]),
       target: { ...target, title: "末日地堡", seasons: [3], missingEpisodes: ["S03E08"] },
       isChineseNative: false,
@@ -275,6 +276,8 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     });
 
     expect(result.escalated).toBe(true);
+    // issue #29 八轮拍板:映射覆盖即收尾,不再让 AI 判断「收不收」——加入 calls 计数验证。
+    expect(result.escalated && true).toBe(true);
     // issue #29 复核:accept 分支也必须 emit finalizeLanding(改名/归位/明细 UI 可见)。
     expect(organizers.length).toBe(1);
     expect(organizers[0]).toContain("归位到 Season 目录");

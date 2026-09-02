@@ -1,6 +1,6 @@
 import type { LanguageModel } from "ai";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
-import { arbitrateDiagnosis, arbitrateEpisodeMapping } from "../../acquisition-v2/arbitrator.js";
+import { arbitrateEpisodeMapping } from "../../acquisition-v2/arbitrator.js";
 import { finalizeLanding } from "../../acquisition-v2/finalize-landing.js";
 import { digestStaging, digestTitle, type StagingDigest } from "../../acquisition-v2/staging-digest.js";
 import { normalizeSearchKeyword } from "../../planning-search-gate.js";
@@ -183,11 +183,12 @@ export async function tryEpisodeMapping(options: {
     emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "unmapped-but-clean";
   }
-  // 重建后仍脏(映射不完整/失败) → 回落诊断仲裁。
-    // issue #29 用户反馈:人话——AI 补认后结果如何、为什么要去诊断。
+  // 重建后仍脏(映射不完整/失败)。issue #29 用户拍板(八轮):不需要再让 AI 判断
+  // 「收不收」——需要的集数 vs 识别出的集数一对比就知道:全覆盖 → 收尾(failed 由
+  // 调用方按 missingCodes 分流);没覆盖 → 换候选。这里如实报覆盖结果即可。
   // issue #29 用户拍板:title 计数化——AI 识别出 N 集,还有 M 集没认出来;
-  // 明细在下方 mapping 列表逐条展示。诊断 LLM 仍用 re.summary(富信息)。
-  const failDetail = `AI 识别出 ${Object.keys(clean).length} 集,还有 ${re.missingCodes.length} 集没认出来,交 AI 处理`;
+  // 明细在下方 mapping 列表逐条展示。
+  const failDetail = `AI 识别出 ${Object.keys(clean).length} 集,还有 ${re.missingCodes.length} 集没认出来`;
   stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
   emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
   return "failed";
@@ -691,26 +692,17 @@ export async function closeOutTvLanding(options: {
       return { verdict: "retry_other", done: null, next, escalated, deadRetries };
     }
 
-    const diagnosis = await arbitrateDiagnosis({
-      model,
-      summary: landingDigest.summary,
-      title: target.title,
-      // 功能4: 把剩余候选按分级喂给诊断仲裁,retry_other 时一次挑出下一个,
-      // 避免每个脏包都重新仲裁(45 候选只试 3 次的教训)。
-      remainingCandidates: grading.ranked.map((c) => ({
-        id: c.id,
-        title: c.title,
-        grade: c.grade,
-      })),
-      triedIds: [...tried],
-    });
-    if (diagnosis.action === "accept") {
+    // issue #29 用户拍板(八轮实测):AI 集数映射后**不再让 AI 判断「收不收」**——
+    // 需要的集数 vs 识别出的集数一对比就知道:全覆盖 → 收尾;没覆盖 → 清掉换候选。
+    // 此前 failed 会升级诊断仲裁再问一次 AI(accept/retry/abandon),纯属多余(此前
+    // 曾出现「AI 识别出 20 集,还有 0 集没认出来,交 AI 处理」的自相矛盾文案——实际
+    // 目标全覆盖却因脏包信号再叫 AI)。现在按 landingDigest.missingCodes 决定。
+    if (landingDigest.missingCodes.length === 0) {
+      // 目标集全覆盖(可能有杂项/多余文件——finalize 只补 need,多余文件清理/跳过)。
       try {
         // 2026-08-21 bugfix: 必须把 AI 集数映射的 overrides 传给 finalizeLanding ——
-        // 否则纯数字/日漫 fansub 文件名(如 `08.mkv`)在诊断仲裁 accept 后重新用裸
-        // 文件名解析时依然解析不出(S03 任务纯数字规则本就禁猜),文件不 rename/
-        // 不归位/不 mark,最后被 staging wipe 当垃圾清掉 → 日志写"入库"实际没入库。
-        // 与上方 mappingEscalated === "passed" 分支保持一致。
+        // 否则纯数字/日漫 fansub 文件名(如 `08.mkv`)重新用裸文件名解析时依然解析
+        // 不出,文件不 rename/不归位/不 mark,最后被 staging wipe 当垃圾清掉。
         const arAccept = await finalizeLanding({
           sandbox,
           digest: landingDigest,
@@ -721,9 +713,6 @@ export async function closeOutTvLanding(options: {
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
           ...(mappingTable ? { overrides: mappingTable } : {}),
         });
-        // issue #29 用户实测复核揪出:诊断仲裁 accept 分支此前漏了 finalizeLanding 的
-        // 成功 emit —— rename/归位/mark 都执行了,但 UI 看不到「归位到 Season 目录」
-        // 步骤和 rename 明细。与 passed/干净路径同款补上。
         const arSkipNote =
           (arAccept.skippedOnDisk.length > 0
             ? ` / 已在库跳过 ${arAccept.skippedOnDisk.length} 集(${arAccept.skippedOnDisk.sort().join(",")})`
@@ -738,6 +727,16 @@ export async function closeOutTvLanding(options: {
           ok: true,
           files: pushWithinBudget<string>([], arRenameRows, 1300),
         });
+        const acceptCodes = landingDigest.coveredCodes.length > 0 ? landingDigest.coveredCodes.join(",") + " " : "";
+        const doneDetail = `已完成:${acceptCodes}已入库(AI 补认)`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "finish", "finalize", doneDetail);
+        return { verdict: "accept", done: {
+          text: `AI 集数映射覆盖全部缺集,已入库`,
+          steps: attempted.size,
+          coverage: await sandbox.finish(),
+          escalated,
+        }, next: null, escalated, deadRetries };
       } catch (error) {
         try {
           await sandbox.discardStaging();
@@ -757,51 +756,19 @@ export async function closeOutTvLanding(options: {
           reason: error instanceof Error ? error.message : String(error),
         }), next: null, escalated, deadRetries };
       }
-            // issue #29:人话——仲裁同意后这几集已入库,理由附后。
-      // issue #29 用户拍板:finish 要人话 + 报出具体集数(有值时);空则只给理由。
-      const acceptCodes = landingDigest.coveredCodes.length > 0 ? landingDigest.coveredCodes.join(",") + " " : "";
-      const doneDetail = `已完成:${acceptCodes}已入库(${diagnosis.reasoning})`;
-      stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "finish", "finalize", doneDetail);
-      return { verdict: "accept", done: {
-        text: `${diagnosis.reasoning}`,
-        steps: attempted.size,
-        coverage: await sandbox.finish(),
-        escalated,
-      }, next: null, escalated, deadRetries };
     }
-    if (diagnosis.action === "abandon") {
-      await sandbox.discardStaging();
-      const declineDetail = `放弃:${diagnosis.reasoning}`;
-      stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
-      const doneDetail = `放弃:${diagnosis.reasoning}`;
-      stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail, { round: attempted.size });
-      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
-      return { verdict: "abandon", done: await concludeUncovered(sandbox, {
-        text: `放弃:${diagnosis.reasoning}`,
-        steps: attempted.size,
-        escalated,
-        reason: diagnosis.reasoning,
-      }), next: null, escalated, deadRetries };
+    // AI 识别后仍未覆盖全部缺集 → 清掉暂存,机械换下一条候选(与 unmapped-but-clean 同款,
+    // 但不再让 AI 指认下一个——覆盖对比已经说明这包不行,直接试下一条)。
+    {
+      const leftover = await sandbox.inspectStaging();
+      if (leftover.length > 0) {
+        await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
+      }
+      const next = nextCandidate(grading, tried);
+      const retryDetail = `AI 识别后仍没拿全缺集:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
+      stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
+      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size });
+      return { verdict: "retry_other", done: null, next, escalated, deadRetries };
     }
-    // retry_other → clear the bad pack's files (keep the staging dir alive) and
-    // try the next candidate. 功能4: AI 已随仲裁返回 nextCandidateId 就直接用它
-    // (需校验:候选存在、未尝试过),否则才回退机械按序 nextCandidate。
-    const leftover = await sandbox.inspectStaging();
-    if (leftover.length > 0) {
-      await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
-    }
-    const aiNext =
-      diagnosis.nextCandidateId &&
-      grading.ranked.some((c) => c.id === diagnosis.nextCandidateId) &&
-      !tried.has(diagnosis.nextCandidateId)
-        ? diagnosis.nextCandidateId
-        : null;
-    const next = aiNext ?? nextCandidate(grading, tried);
-    // issue #29:中文人话 + 不显示候选 ID。
-    const retryDetail = `这轮内容不对:清掉暂存换一条候选${next ? "" : "(没有可换的,终止)"}${aiNext ? " (AI 指定)" : ""}`;
-    stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-    emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail, { round: attempted.size });
-    return { verdict: "retry_other", done: null, next, escalated, deadRetries };
+
 }

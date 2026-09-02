@@ -1187,6 +1187,7 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 ,测试钉 series 用例。
 - 七轮反馈(用户实测拍板):① compactMapping 默认截断 12 条——AI 一眼认出 20 集时 UI 明细只显示前 12,去掉条数截断(只截长文件名>48 字符);② 活动页 title 计数化——stagingDigest 改「代码识别出 N 集,还有 M 集没认出来」(新增 digestTitle,LLM 诊断仍用摘要富信息),arbitrateEpisodeMapping 三态改「AI 识别出 N 集…」,明细交给下方列表。
 - 复核 REQUEST_CHANGES 修订:① 计数统一用 AI 有效映射数(Object.keys(clean).length——混源包/AI 命中非目标集不再谎报);② compactMapping 接 1600 字符预算(短名季全量,超长季停线 +「其余 N 条未列」占位,永不过 trace sink 2000);③ digestTitle 三支统一带「另有 N 个文件看不出集数」;156 测试全绿。
+- 八轮反馈(用户实测拍板):**AI 集数映射后不再让 AI 判断「收不收」**——需要的集数 vs 识别出的集数一对比即决。此前 failed 会升级诊断仲裁再问一次 AI,曾现「AI 识别出 20 集,还有 0 集没认出来,交 AI 处理」自相矛盾文案(目标全覆盖却因脏包信号再叫 AI)。新行为:映射后全覆盖 → 直接 finalize 收尾(多余文件清理/跳过);仍未覆盖 → 清掉机械换候选。landing.ts 移除 arbitrateDiagnosis 调用,movie 诊断保留;failed 文案去掉「交 AI 处理」;155 测试全绿。
 
 
 
