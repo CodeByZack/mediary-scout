@@ -1189,6 +1189,7 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 - 复核 REQUEST_CHANGES 修订:① 计数统一用 AI 有效映射数(Object.keys(clean).length——混源包/AI 命中非目标集不再谎报);② compactMapping 接 1600 字符预算(短名季全量,超长季停线 +「其余 N 条未列」占位,永不过 trace sink 2000);③ digestTitle 三支统一带「另有 N 个文件看不出集数」;156 测试全绿。
 - 八轮反馈(用户实测拍板):**AI 集数映射后不再让 AI 判断「收不收」**——需要的集数 vs 识别出的集数一对比即决。此前 failed 会升级诊断仲裁再问一次 AI,曾现「AI 识别出 20 集,还有 0 集没认出来,交 AI 处理」自相矛盾文案(目标全覆盖却因脏包信号再叫 AI)。新行为:映射后全覆盖 → 直接 finalize 收尾(多余文件清理/跳过);仍未覆盖 → 清掉机械换候选。landing.ts 移除 arbitrateDiagnosis 调用,movie 诊断保留;failed 文案去掉「交 AI 处理」;155 测试全绿。
 - 复核 REQUEST_CHANGES 修订:① **"no" 路径不冒领 AI**——tryEpisodeMapping 的 no 返回(多季/代码已全覆盖/全衍生)零 AI 调用,文案分家(全覆盖→「已入库(代码识别)」/缺集→复用中性「这轮转存没拿到需要的集」),escalated 预置改 false、只在 AI 真参与的分支置 true;② 测试真钉 AI 只调一次(sequentialModel 加 onCall 计数,239 用例 aiCalls===1);③ 脏包用例改零 AI 收尾(escalated=false)。
+- 八轮二次复核修订:删掉 escalated=false 预置(它会覆盖 options.escalated 携带的选片仲裁 AI 历史——AI 选片+代码全覆盖脏包的交叉格会谎报「零 AI 介入」);新增交叉格用例钉住(escalated=true + aiCalls=1);156 测试全绿。
 
 
 

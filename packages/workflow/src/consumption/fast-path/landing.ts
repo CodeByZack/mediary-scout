@@ -590,10 +590,11 @@ export async function closeOutTvLanding(options: {
     // pack land like a clean digest (zero further LLM decisions); a failed or
     // partial mapping falls through to the diagnostic arbitrator.
     // Movie landings never map episodes — they go straight to the movie diagnosis.
-    // issue #29 八轮复核:escalated 从预置 true 改为 false——tryEpisodeMapping 的
-    // "no" 返回(多季/代码已全覆盖/全衍生文件)不调 AI,预置 true 会虚增 aiEscalated;
-    // 置位推迟到确认 AI 参与过的分支出口(passed/unmapped-but-clean/failed)。
-    escalated = false;
+    // issue #29 八轮复核:escalated 不再在映射前预置 true(之前会虚增 aiEscalated——
+    // tryEpisodeMapping 的 "no" 返回:多季/代码已全覆盖/全衍生文件不调 AI)。置位推迟到
+    // 确认 AI 参与过的分支出口(passed/unmapped-but-clean/failed)。注意:绝不能在这里
+    // 赋 false——options.escalated 可能已带选片仲裁(AI 挑候选)置的 true(第二轮复核
+    // 揪出),覆盖会清掉全程累计 AI 历史 → runCheckout 谎报「零 AI 介入」。
     let landingDigest = digest;
     let mappingTable: Record<string, string> | undefined;
     const mappingEscalated = await tryEpisodeMapping({

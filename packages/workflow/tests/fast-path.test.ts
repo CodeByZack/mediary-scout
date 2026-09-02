@@ -142,6 +142,48 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     ]);
   });
 
+  it("issue #29 八轮交叉格:AI 选片(无唯一 A) + 代码全覆盖脏包 → escalated 保留 true(不虚增也不漏报)", async () => {
+    // 池无唯一 A(c1/c2 打平,靠 AI 选片) → tv.ts 选片仲裁后 escalated=true 传入。
+    // 转来 code 已全覆盖(S01E01)但带 sample 脏包 → tryEpisodeMapping 返回 "no" 零 AI,
+    // 直接收尾——但选片那次 AI 历史必须在 escalated 里保留(第二轮复核:false 预置会清掉它)。
+    let aiCalls = 0;
+    const { sandbox, s1, storage } = await createSetup({
+      candidates: [
+        { id: "c1", title: "狂飙.S01E01.1080p.中字" },
+        { id: "c2", title: "狂飙.S01E01.1080p" },
+      ],
+      packs: {
+        c1: {
+          files: [
+            { path: "狂飙.S01E01.mkv", sizeBytes: 1_000_000_000 },
+            { path: "狂飙.S01E01.sample.mkv", sizeBytes: 50_000_000 },
+          ],
+        },
+      },
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: sequentialModel(
+        ['{"candidateId":"c1","reasoning":"更早一集"}'],
+        () => {
+          aiCalls += 1;
+        },
+      ),
+      target,
+      isChineseNative: false,
+    });
+
+    // 选片 AI 参与 → escalated=true;digest no 支不重置它。
+    expect(aiCalls).toBe(1);
+    expect(result.escalated).toBe(true);
+    expect(result.coverage.coverageMet).toBe(true);
+    // sample 不进季目录。
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+    ]);
+  });
+
   it("escalates to the selection arbitrator when there is no unique A-grade", async () => {
     const { sandbox, s1, storage } = await createSetup({
       candidates: [
