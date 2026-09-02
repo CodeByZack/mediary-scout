@@ -167,11 +167,26 @@ export function compactCodeList(codes: string[], maxItems = 24): { count: number
 }
 
 /** 紧凑 AI 映射表(活动页卡片证据):文件名过长/过多时只保留前 N 条、文件名截断。 */
-export function compactMapping(mapping: Record<string, string>): Array<{ file: string; code: string }> {
-  // issue #29 用户拍板:去掉 12 条截断——AI 一次认出 20 集时明细必须全量展示,
-  // 否则 UI 只看到前 12 条(AI 补认 20 集 → 明细 12 条的用户困惑根因)。
-  // 文件名仅截长(>48 字符缩略,防单条撑爆预算),条数不截。
-  return Object.entries(mapping).map(([file, code]) => ({ file: file.length > 48 ? file.slice(0, 45) + "…" : file, code }));
+export function compactMapping(mapping: Record<string, string>, budget = 1600): Array<{ file: string; code: string }> {
+  // issue #29 用户拍板:去掉旧 12 条硬截断——AI 一次认出 20 集时明细必须全量展示
+  // (否则 UI 只见前 12 条)。但全量必须**接字符预算**(trace sink MAX_ARGS_JSON=2000,
+  // 超限整包 collapse 成 {_truncated:true} → UI 连明细都没了):短文件名季(20-28 集)
+  // 现在可全量,超长季自动停在预算线并追一条「其余 N 条未列」占位,永不过线。
+  const entries = Object.entries(mapping);
+  const out: Array<{ file: string; code: string }> = [];
+  let size = 2;
+  for (const [file, code] of entries) {
+    const row = { file: file.length > 48 ? file.slice(0, 45) + "…" : file, code };
+    const cost = JSON.stringify(row).length + 1;
+    if (size + cost > budget) {
+      const rest = entries.length - out.length;
+      if (rest > 0) out.push({ file: `…其余 ${rest} 条未列`, code: "…" });
+      break;
+    }
+    out.push(row);
+    size += cost;
+  }
+  return out;
 }
 
 interface EvidenceCandidate {

@@ -169,14 +169,16 @@ export async function tryEpisodeMapping(options: {
   options.onDigest(re);
   if (re.passes) {
         // issue #29 用户反馈:人话——AI 根据文件名补认了哪些集,结果如何。
-    const mapDetail = `AI 识别出 ${re.coveredCodes.length} 集,目标集数已齐`;
+    // review REQUEST_CHANGES ①:coveredCodes 是代码+AI 合并口径,混源包会把代码功劳
+    // 记在 AI 头上(AI 只认 3 集却报「AI 识别出 20 集」)——统一用 AI 有效映射数。
+    const mapDetail = `AI 识别出 ${Object.keys(clean).length} 集,目标集数已齐`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "log");
     emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "passed";
   }
   if (re.episodeCodes.length > 0 && !re.isDirtyPack) {
     // 映射上了但没覆盖 need(例如映射出的是别的集数)—— 回收干净但无用。
-    const mapDetail = `AI 识别出 ${re.coveredCodes.length} 集,没有覆盖目标集数,丢弃换候选`;
+    const mapDetail = `AI 识别出 ${Object.keys(clean).length} 集,没有覆盖目标集数,丢弃换候选`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "warn");
     emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "unmapped-but-clean";
@@ -185,7 +187,7 @@ export async function tryEpisodeMapping(options: {
     // issue #29 用户反馈:人话——AI 补认后结果如何、为什么要去诊断。
   // issue #29 用户拍板:title 计数化——AI 识别出 N 集,还有 M 集没认出来;
   // 明细在下方 mapping 列表逐条展示。诊断 LLM 仍用 re.summary(富信息)。
-  const failDetail = `AI 识别出 ${re.coveredCodes.length} 集,还有 ${re.missingCodes.length} 集没认出来,交 AI 处理`;
+  const failDetail = `AI 识别出 ${Object.keys(clean).length} 集,还有 ${re.missingCodes.length} 集没认出来,交 AI 处理`;
   stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
   emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
   return "failed";

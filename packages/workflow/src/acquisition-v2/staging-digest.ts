@@ -172,13 +172,16 @@ export function digestTitle(d: Pick<StagingDigest, "coveredCodes" | "missingCode
   const covered = d.coveredCodes.length;
   const missing = d.missingCodes.length;
   const unparsed = d.unparsedVideos.length;
+  // review minor:三支统一带「另有 N 个文件看不出集数」——目标缺集(unparsed>0 的文件常
+  // 恰是 AI 映射要认的名单)与文件名不可读是两个语义,同句并存信息递增,不冗余。
+  const unparsedNote = unparsed > 0 ? `,另有 ${unparsed} 个文件看不出集数` : "";
   if (covered > 0 && missing === 0) {
-    return `代码识别出 ${covered} 集,目标集数已齐`;
+    return `代码识别出 ${covered} 集,目标集数已齐${unparsedNote}`;
   }
   if (covered > 0) {
-    return `代码识别出 ${covered} 集,还有 ${missing} 集没认出来`;
+    return `代码识别出 ${covered} 集,还有 ${missing} 集没认出来${unparsedNote}`;
   }
-  return `代码识别出 0 集,还有 ${missing} 集没认出来${unparsed > 0 ? `,另有 ${unparsed} 个文件看不出集数` : ""}`;
+  return `代码识别出 0 集,还有 ${missing} 集没认出来${unparsedNote}`;
 }
 
 function summarizeDigest(d: Omit<StagingDigest, "summary">): string {

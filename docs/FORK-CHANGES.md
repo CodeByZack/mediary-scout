@@ -1186,6 +1186,7 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 - review 顺带发现并同轮修复:movie 诊断 accept 分支同样的漏 emit(flatten 执行但 UI 无「归位到媒体库」步骤)——同款补上,成功 emit 补 ok:true、失败补 ok:false,测试对称钉断言。
 ,测试钉 series 用例。
 - 七轮反馈(用户实测拍板):① compactMapping 默认截断 12 条——AI 一眼认出 20 集时 UI 明细只显示前 12,去掉条数截断(只截长文件名>48 字符);② 活动页 title 计数化——stagingDigest 改「代码识别出 N 集,还有 M 集没认出来」(新增 digestTitle,LLM 诊断仍用摘要富信息),arbitrateEpisodeMapping 三态改「AI 识别出 N 集…」,明细交给下方列表。
+- 复核 REQUEST_CHANGES 修订:① 计数统一用 AI 有效映射数(Object.keys(clean).length——混源包/AI 命中非目标集不再谎报);② compactMapping 接 1600 字符预算(短名季全量,超长季停线 +「其余 N 条未列」占位,永不过 trace sink 2000);③ digestTitle 三支统一带「另有 N 个文件看不出集数」;156 测试全绿。
 
 
 

@@ -87,6 +87,16 @@ describe("compactCodeList / compactMapping(issue #29 A1/A2 预算化)", () => {
     expect(out.sample[0]).toBe("S02E01");
     expect(JSON.stringify(out).length).toBeLessThan(2000);
   });
+  it("compactMapping:超长季停预算线,追「其余 N 条未列」占位(防 trace sink _truncated 整灭)", () => {
+    const mapping: Record<string, string> = {};
+    for (let i = 0; i < 80; i++) mapping[`第${i + 1}话.mp4`] = `S01E${String(i + 1).padStart(2, "0")}`;
+    const out = compactMapping(mapping);
+    expect(out.length).toBeLessThan(80); // 未全量,停在预算线
+    expect(out.at(-1)!.file).toMatch(/其余 \d+ 条未列/);
+    expect(JSON.stringify(out).length).toBeLessThan(2000); // 永不过 trace sink 上限
+    // 短文件名季(20 集)仍全量 ≫ 20:220 字符 < 预算
+    expect(out.length).toBeGreaterThan(20);
+  });
   it("compactCodeList:短列表原样全透传", () => {
     const out = compactCodeList(["S02E06"]);
     expect(out).toEqual({ count: 1, sample: ["S02E06"] });
