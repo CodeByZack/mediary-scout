@@ -232,6 +232,36 @@ describe("getActivityView", () => {
     expect(q.steps).toEqual([]);
   });
 
+  it("series 全剧获取的子 run(runId 带 _s 尾缀)回退到无尾缀主 run 查步骤", async () => {
+    const repo = new InMemoryWorkflowRepository();
+    // persistSeriesSeasons 落子 run(通知挂 _s1 名下),agent_steps 记在主 run(无尾缀)。
+    const snap = run({
+      id: "r_series_s1",
+      tmdbId: 6,
+      name: "地球超新鲜",
+      status: "succeeded",
+      startedAt: "2026-06-17T00:05:00Z",
+      finishedAt: "2026-06-17T00:05:30Z",
+    });
+    snap.notifications[0]!.report!.status = "complete";
+    await repo.saveWorkflowRunSnapshot(snap);
+    await repo.appendAgentStep("r_series", step(0, "inspectTargetDir", "目标缺集未在库(S01E01),开始获取", "search", {}));
+    await repo.appendAgentStep("r_series", step(1, "transferCandidate", "转存《地球超新鲜》到暂存区", "transfer", {}));
+    await repo.appendAgentStep("r_series", step(2, "finish", "已完成:S01E01 已入库", "finalize", {}));
+
+    const view = await getActivityView({ repository: repo });
+    const done = view.recentCompleted.find((c) => c.title === "地球超新鲜")!;
+    expect(done.workflowRunId).toBe("r_series_s1");
+    expect(done.steps.map((s) => s.activity)).toEqual([
+      "目标缺集未在库(S01E01),开始获取",
+      "转存《地球超新鲜》到暂存区",
+      "已完成:S01E01 已入库",
+    ]);
+    expect(done.steps.every((s) => s.stepStatus === "success")).toBe(true);
+    // 尾缀 run 自身无步骤 → 回退后仍非空;纯无尾缀查询不受影响。
+    expect((await repo.listAgentSteps("r_series_s1", undefined)).length).toBe(0);
+  });
+
   it("queued run with a leftover trace marks its last step failed (上一轮执行失败，等待重试)", async () => {
     const repo = new InMemoryWorkflowRepository();
     await repo.saveWorkflowRunSnapshot(run({ id: "r_q", tmdbId: 4, name: "Queue", status: "queued", startedAt: "2026-06-17T00:03:00Z" }));

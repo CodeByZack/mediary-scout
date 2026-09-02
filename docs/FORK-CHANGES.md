@@ -591,6 +591,7 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 - 四轮反馈:arbitrateEpisodeMapping 的 AI 映射改逐条分行展示(stepDetailView 扩 mapping→files 行);归位 rename 明细确认已进 args.files(旧 run 数据无此字段,新 run 可见)。
 - 五轮反馈(用户实测复核揪出):诊断仲裁 accept 分支此前漏 emit finalizeLanding 成功步骤——rename/归位/mark 都执行了(用户确认文件已改名),但 UI 看不到「归位到 Season 目录」+ rename 明细;已补与 passed/干净同款的 stepLog+emitStep(args.files),测试钉 accept 路径断言。
 - review 顺带发现并同轮修复:movie 诊断 accept 分支同样的漏 emit(flatten 执行但 UI 无「归位到媒体库」步骤)——同款补上,成功 emit 补 ok:true、失败补 ok:false,测试对称钉断言。
+- 六轮反馈(用户实测):「获取全剧」(type1 series)的通知子 run id 带 `_s{季号}` 尾缀(persistSeriesSeasons),agent_steps 却记在无尾缀主 run → UI 用尾缀 id 查步骤恒空「暂无步骤记录」。修:activity-view runSteps 对带 `_s{数字}` 尾缀的 runId 剥尾缀回退查主 run,测试钉 series 用例。
 
 
 

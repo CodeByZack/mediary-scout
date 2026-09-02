@@ -157,12 +157,24 @@ export async function runSteps(input: {
   scope: WorkflowScope | undefined;
   runState: StepRunState;
 }): Promise<ActivityStepView[]> {
-  try {
-    const steps = await input.repository.listAgentSteps(input.runId, input.scope);
-    return inferStepStatuses({ runState: input.runState, steps });
-  } catch {
-    return [];
+  // series 全剧获取(consumption/stages/persist.ts persistSeriesSeasons)每季落一个
+  // <uuid>_s<season> 子 run,通知挂在子 run 名下;但 agent_steps 始终记在无尾缀的
+  // 主 run(progressAndTraceSink 用 claimed.runId)。直接用带尾缀 runId 查 agent_steps
+  // 永远空 → UI「暂无步骤记录」。剥掉 _s 尾缀回退查主 run。
+  const candidates = /_[a-z]\d+$/.test(input.runId)
+    ? [input.runId, input.runId.replace(/_[a-z]\d+$/, "")]
+    : [input.runId];
+  for (const runId of candidates) {
+    try {
+      const steps = await input.repository.listAgentSteps(runId, input.scope);
+      if (steps.length > 0) {
+        return inferStepStatuses({ runState: input.runState, steps });
+      }
+    } catch {
+      // 该候选查询失败 → 试下一个(剥尾缀回退)。
+    }
   }
+  return [];
 }
 
 /**
