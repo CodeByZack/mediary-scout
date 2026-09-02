@@ -587,6 +587,7 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 - **「识别」措辞**:stagingDigest 「转存内容已认:认出 X」→「转存内容已识别:识别出 X」(fail 分支同);
 - **归位展示 rename 明细**:finalizeLanding 返回 renamedPairs(原名→规范名),两处 finalizeLanding emit args 带 files,前端渲染原名 → 规范名逐条;
 - 测试同步:fast-path 步骤序列减 gradingDecision、序号/索引整体左移,断言改新文案。
+- 复核顺手揪出铁律①残留:兜底轮 gradeCandidates 命中唯一 A 时曾拼 `top=候选ID(标题)` → 改《标题》,候选 ID 全链清零。
 
 
 

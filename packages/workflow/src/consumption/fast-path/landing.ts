@@ -287,7 +287,7 @@ export async function aliasesFallbackReSearch(input: {
     currentGrading = grade(nextView.candidates);
     const gradeDetail = `keyword=「${alias}」命中=${nextView.candidates.length} ${
       currentGrading.uniqueTopGrade
-        ? `唯一A级 top=${currentGrading.top?.id}(${currentGrading.top?.title})`
+        ? `唯一 A 级《${currentGrading.top?.title}》` // issue #29 铁律①:候选 ID 全链不上 UI,只留标题。
         : gradeDistribution(currentGrading)
     }`;
     stepLog(sandbox, title, "兜底评分", gradeDetail);
