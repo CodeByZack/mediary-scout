@@ -258,6 +258,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     });
     const s3 = seasonDirIds[3]!;
 
+    const organizers: string[] = [];
     const result = await runFastPathAcquisition({
       sandbox,
       // 第一次:集数映射只给 08.mkv → S03E08(01.mkv 留 unmapped → 仍脏 → 回落诊断)。
@@ -268,9 +269,16 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
       ]),
       target: { ...target, title: "末日地堡", seasons: [3], missingEpisodes: ["S03E08"] },
       isChineseNative: false,
+      onProgress: (e) => {
+        if (e.toolName === "finalizeLanding") organizers.push(e.activity ?? "");
+      },
     });
 
     expect(result.escalated).toBe(true);
+    // issue #29 复核:accept 分支也必须 emit finalizeLanding(改名/归位/明细 UI 可见)。
+    expect(organizers.length).toBe(1);
+    expect(organizers[0]).toContain("归位到 Season 目录");
+    expect(organizers[0]).toContain("移动 1 个文件");
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toContain("S03E08");
     // 修复后 08.mkv 被 rename 成 末日地堡.S03E08.mkv 并归位到 Season 3;01.mkv 留在 staging 被 wipe。

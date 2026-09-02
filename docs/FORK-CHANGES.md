@@ -589,6 +589,7 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 - 测试同步:fast-path 步骤序列减 gradingDecision、序号/索引整体左移,断言改新文案。
 - 复核顺手揪出铁律①残留:兜底轮 gradeCandidates 命中唯一 A 时曾拼 `top=候选ID(标题)` → 改《标题》,候选 ID 全链清零。
 - 四轮反馈:arbitrateEpisodeMapping 的 AI 映射改逐条分行展示(stepDetailView 扩 mapping→files 行);归位 rename 明细确认已进 args.files(旧 run 数据无此字段,新 run 可见)。
+- 五轮反馈(用户实测复核揪出):诊断仲裁 accept 分支此前漏 emit finalizeLanding 成功步骤——rename/归位/mark 都执行了(用户确认文件已改名),但 UI 看不到「归位到 Season 目录」+ rename 明细;已补与 passed/干净同款的 stepLog+emitStep(args.files),测试钉 accept 路径断言。
 
 
 

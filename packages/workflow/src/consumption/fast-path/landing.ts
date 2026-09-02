@@ -705,7 +705,7 @@ export async function closeOutTvLanding(options: {
         // 文件名解析时依然解析不出(S03 任务纯数字规则本就禁猜),文件不 rename/
         // 不归位/不 mark,最后被 staging wipe 当垃圾清掉 → 日志写"入库"实际没入库。
         // 与上方 mappingEscalated === "passed" 分支保持一致。
-        await finalizeLanding({
+        const arAccept = await finalizeLanding({
           sandbox,
           digest: landingDigest,
           canonicalTitle: target.title,
@@ -714,6 +714,23 @@ export async function closeOutTvLanding(options: {
           onlyCodes: needCodes,
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
           ...(mappingTable ? { overrides: mappingTable } : {}),
+        });
+        // issue #29 用户实测复核揪出:诊断仲裁 accept 分支此前漏了 finalizeLanding 的
+        // 成功 emit —— rename/归位/mark 都执行了,但 UI 看不到「归位到 Season 目录」
+        // 步骤和 rename 明细。与 passed/干净路径同款补上。
+        const arSkipNote =
+          (arAccept.skippedOnDisk.length > 0
+            ? ` / 已在库跳过 ${arAccept.skippedOnDisk.length} 集(${arAccept.skippedOnDisk.sort().join(",")})`
+            : "") +
+          (arAccept.skippedNotNeeded.length > 0
+            ? ` / 非缺集跳过 ${arAccept.skippedNotNeeded.length} 件`
+            : "");
+        const arOrganizeDetail = `归位到 Season 目录:${arAccept.marked.join(",") || "-"}${arAccept.movedCount > 0 ? `,移动 ${arAccept.movedCount} 个文件` : ""}${arAccept.discarded.length > 0 ? `,清理 ${arAccept.discarded.length} 个多余文件` : ""}${arSkipNote}`;
+        stepLog(sandbox, target.title, "归位", arOrganizeDetail);
+        const arRenameRows = arAccept.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
+        emitStep(onProgress, "finalizeLanding", "organize", arOrganizeDetail, {
+          ok: true,
+          files: pushWithinBudget<string>([], arRenameRows, 1300),
         });
       } catch (error) {
         try {
