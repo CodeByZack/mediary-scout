@@ -141,7 +141,13 @@ export function StepStatusIcon({ status }: { status: ActivityStepView["stepStatu
   return <CheckCircle2 size={13} className="act-step-icon act-step-success" aria-hidden />;
 }
 
-/** issue #29 用户拍板:转存步骤展示分享链接(可点击)。链接来自 args.linkUrl。 */
+/** issue #29 用户拍板(九轮):AI 参与的步骤在标题加「AI」小徽章——toolName 以
+ *  arbitrate 开头(选片/诊断/集数映射仲裁都是 AI 调用)或 args.aiUsed===true。 */
+function stepUsedAI(step: ActivityStepView): boolean {
+  return step.toolName.startsWith("arbitrate") || step.args?.["aiUsed"] === true;
+}
+
+/** issue #29 用户拍板(九轮):转存步骤展示分享链接(可点击)。链接来自 args.linkUrl。 */
 function transferLink(step: ActivityStepView): React.ReactNode | null {
   if (step.toolName !== "transferCandidate") return null;
   const url = step.args?.["linkUrl"];
@@ -160,7 +166,7 @@ function StepRow({ step }: { step: ActivityStepView }) {
       <StepStatusIcon status={step.stepStatus} />
       <div className="act-step-main">
         <div className="act-step-head">
-          <span className="act-step-activity">{step.activity}{transferLink(step)}</span>
+          <span className="act-step-activity">{step.activity}{transferLink(step)}{stepUsedAI(step) ? <span className="act-step-ai">AI</span> : null}</span>
           <span className="act-step-tool">{step.toolName}</span>
           <span className="act-step-at">{new Date(step.at).toLocaleString("zh-CN")}</span>
         </div>

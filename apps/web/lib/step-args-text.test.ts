@@ -90,10 +90,10 @@ describe("B6(issue #29)紧凑集号/AI 映射消费", () => {
   function st(args: Record<string, unknown>): ActivityStepView {
     return { ordinal: 1, toolName: "stagingDigest", activity: "a", phase: "verify", at: "2026-09-01T00:00:00Z", args, stepStatus: "success" };
   }
-  it("missingCodes {count,sample} → '还缺 N 集(样本…)'", () => {
+  it("missingCodes {count,sample} → '还缺 N 集'(issue #29 九轮:只报数量,不罗列样本——明细在同卡 files)", () => {
     const out = stepArgsText(st({ coveredCodes: { count: 1, sample: ["S02E06"] }, missingCodes: { count: 2, sample: ["S02E19", "S02E20"] } }));
-    expect(out).toContain("还缺 2 集");
-    expect(out).toContain("S02E19");
+    expect(out).toBe("还缺 2 集 · 已有 1 集");
+    expect(out).not.toContain("S02E19");
   });
   it("coveredCodes {count:0} → null(无遗漏,不显示)", () => {
     expect(stepArgsText(st({ coveredCodes: { count: 0, sample: [] }, missingCodes: { count: 0, sample: [] } }))).toBeNull();

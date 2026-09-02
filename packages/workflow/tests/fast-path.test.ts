@@ -1138,7 +1138,6 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
       "pickCandidate",
       "transferCandidate",
       "stagingDigest",
-      "digestFiles",
       "finalizeLanding",
       "finish",
       "runCheckout",
@@ -1150,13 +1149,12 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
       "pick",
       "transfer",
       "verify",
-      "verify",
       "organize",
       "finalize",
       "finalize",
     ]);
     // 序号连续;activity = stepLog 的 detail;转存带 candidateId 参数
-    expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
     expect(steps[1]!.activity).toBe("候选 1 条");
     expect(steps[4]!.args.candidateId).toBe("c1");
     // issue #29:转存步骤带标题 + 链接(用户拍板;链接来自 urlById 透出)。
@@ -1164,25 +1162,27 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect(steps[4]!.args.linkUrl).toBe("https://115.com/s/abc123");
     // issue #29 用户拍板:finish 人话化(「已完成:…已入库」);runCheckout 结账行也人话化,
     // activity 只讲结果,统计细节进 args(transfers/searches/aiEscalated)。
-    expect(steps[8]!.activity).toContain("已完成:");
-    expect(steps[8]!.activity).toContain("已入库");
-    expect(steps[9]!.activity).toContain("转存 1 次完成");
-    expect(steps[9]!.args.transfers).toBe(1);
-    expect(steps[9]!.args.searches).toBe(1);
+    expect(steps[7]!.activity).toContain("已完成:");
+    expect(steps[7]!.activity).toContain("已入库");
+    expect(steps[8]!.activity).toContain("转存 1 次完成");
+    expect(steps[8]!.args.transfers).toBe(1);
+    expect(steps[8]!.args.searches).toBe(1);
     // issue #29 用户拍板:digest 人话化——activity 不再报「未通过(脏包)…判定」,
-    // 而是一句人话(如「识别出 S01E01,还有…」);逐文件识别在 digestFiles 展示一次。
+    // 逐文件明细已并入 stagingDigest 同卡(九轮),digestFiles 不再单独成步。
     expect(steps[5]!.activity).not.toContain("脏包");
     expect(steps[5]!.activity).not.toContain("判定");
-    expect(steps[6]!.activity).toContain("逐文件识别 1 条");
+    // 九轮:逐文件明细并入 stagingDigest 同卡(不再单独 digestFiles 步骤)。
+    expect((steps[5]!.args as { files?: unknown }).files).toEqual(["狂飙.S01E01.mkv → S01E01"]);
     // 可观测性增强(L1/L2/L4):决策与证据 payload 随事件走 agent_steps
     // issue #29:gradingDecision 已删(与 gradeCandidates 分布重复);候选评级列表只在 gradeCandidates 一次。
     expect(steps[2]!.args.uniqueTopGrade).toBe(true);
     expect((steps[2]!.args.candidates as unknown[]).length).toBe(1);
     expect(((steps[2]!.args.candidates as { url?: string }[])[0]?.url)).toBe("https://115.com/s/abc123");
     // issue #29:候选带链接透出(fake provider 此候选无 url,故不强制断言 url)。
-    expect((steps[6]!.args.files as string[])[0]).toContain("S01E01");
-    // issue #29 实测:finalizeLanding 展示 rename 明细(原名 → 规范名)。
-    expect(steps[7]!.args.files as string[]).toContain("狂飙.S01E01.mkv → 狂飙.S01E01.mkv");
+    // 九轮:逐文件明细并入 stagingDigest(steps[5])同卡。
+    expect((steps[5]!.args.files as string[])[0]).toContain("S01E01");
+    // issue #29 实测:finalizeLanding(现 steps[6])展示 rename 明细(原名 → 规范名)。
+    expect((steps[6]!.args.files as string[])).toContain("狂飙.S01E01.mkv → 狂飙.S01E01.mkv");
     // 落盘结果不受 trace 影响
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",

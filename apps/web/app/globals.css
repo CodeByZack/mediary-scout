@@ -3104,6 +3104,19 @@ select.setting-control {
   font-weight: 600;
 }
 
+.act-step-ai {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  color: var(--bg, #fff);
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  vertical-align: 1px;
+}
+
 .act-step-tool {
   font-size: 11px;
   color: var(--text-muted);

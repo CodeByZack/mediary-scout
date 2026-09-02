@@ -482,6 +482,10 @@ export async function closeOutTvLanding(options: {
     );
     // issue #29:digest 步骤结构化证据(卡片化判定)。videoCount=落盘视频文件数;
     // passes/coveredCodes/missingCodes 给前端红绿判定与「还缺什么」。
+    const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates);
+    // issue #29 用户拍板(九轮):逐文件明细并入 stagingDigest 一张卡——不再单独
+    // emit「digestFiles 逐文件识别 N 条」步骤(标题+明细一张卡,无需两个步骤)。
+    const argsFiles = pushWithinBudget<string>([], parseRows, 1300);
     emitStep(onProgress, "stagingDigest", "verify", digestDetail, {
       passes: digest.passes,
       videoCount: transfer.staging.length,
@@ -489,17 +493,12 @@ export async function closeOutTvLanding(options: {
       // agent-trace-sink 的 2000 字符整体塌缩 → passes/round 一起丢。改发 count + 前 N 项。
       coveredCodes: compactCodeList(digest.coveredCodes),
       missingCodes: compactCodeList(digest.missingCodes),
+      // 逐文件解析明细(原 digestFiles 步骤内容,合并进来一张卡)。
+      ...(argsFiles.length > 0 ? { files: argsFiles } : {}),
       round: attempted.size,
     });
-    const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates);
     if (parseRows.length > 0) {
       stepLog(sandbox, target.title, "解析明细", parseRows.join(" / "));
-      // M6:stepLog 的 parseRows 已按 1850 预算(stdout),但进 args 时被 {files,round} 包裹,
-      // 距 agent-trace-sink 的 2000 字符整体塌缩只剩 ~150——args 侧单独收紧到 1300。
-      // M6(修正):args 侧只截断、不加「未列」汇总行——stdout 的 parseRows 已有总计数,
-      // 二次截断再加会双条「未列」且把 stdout 汇总行计入。总数在 activity 文案里已有。
-      const argsFiles = pushWithinBudget<string>([], parseRows, 1300);
-      emitStep(onProgress, "digestFiles", "verify", `逐文件识别 ${parseRows.length} 条`, { files: argsFiles, round: attempted.size });
     }
     {
       const candidate = grading.ranked.find((c) => c.id === current);
@@ -540,7 +539,8 @@ export async function closeOutTvLanding(options: {
             : "");
                 // issue #29 用户反馈:finalizeLanding 是「真正落到网盘」的一步(rename→move→mark),
         // 文案点明归位到 Season 目录 + 结果,不再用「标记/移动/清理」割裂的内部词。
-        const organizeDetail = `归位到 Season 目录:${finalized.marked.join(",") || "-"}${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
+        // issue #29 用户拍板(九轮):归位标题不罗列集号(下方 rename 明细逐条有),只报数量。
+        const organizeDetail = `归位到 Season 目录${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
         // issue #29 实测:归位步骤展示 rename 明细(原名 → 规范名),预算内截断。
         const renameRows = finalized.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
@@ -644,7 +644,8 @@ export async function closeOutTvLanding(options: {
             ? ` / 非缺集跳过 ${finalized.skippedNotNeeded.length} 件`
             : "");
         // issue #29:与干净路径(:535)同款人话——归位到 Season 目录(真正落库)。
-        const organizeDetail = `归位到 Season 目录:${finalized.marked.join(",") || "-"}${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
+        // issue #29 用户拍板(九轮):归位标题不罗列集号(下方 rename 明细逐条有),只报数量。
+        const organizeDetail = `归位到 Season 目录${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
         // issue #29 实测:与干净路径同款——rename 明细(原名 → 规范名)。
         const renameRows2 = finalized.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
@@ -733,7 +734,8 @@ export async function closeOutTvLanding(options: {
           (arAccept.skippedNotNeeded.length > 0
             ? ` / 非缺集跳过 ${arAccept.skippedNotNeeded.length} 件`
             : "");
-        const arOrganizeDetail = `归位到 Season 目录:${arAccept.marked.join(",") || "-"}${arAccept.movedCount > 0 ? `,移动 ${arAccept.movedCount} 个文件` : ""}${arAccept.discarded.length > 0 ? `,清理 ${arAccept.discarded.length} 个多余文件` : ""}${arSkipNote}`;
+        // issue #29 用户拍板(九轮):同上,不罗列集号。
+        const arOrganizeDetail = `归位到 Season 目录${arAccept.movedCount > 0 ? `,移动 ${arAccept.movedCount} 个文件` : ""}${arAccept.discarded.length > 0 ? `,清理 ${arAccept.discarded.length} 个多余文件` : ""}${arSkipNote}`;
         stepLog(sandbox, target.title, "归位", arOrganizeDetail);
         const arRenameRows = arAccept.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
         emitStep(onProgress, "finalizeLanding", "organize", arOrganizeDetail, {
