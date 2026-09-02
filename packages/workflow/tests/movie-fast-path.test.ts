@@ -201,13 +201,20 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
       },
     });
 
+    const organizers: string[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
       model: textModel('{"action":"accept","reasoning":"预告片不影响正片"}'),
       target: movieTarget,
+      onProgress: (e) => {
+        if (e.toolName === "finalizeLanding") organizers.push(e.activity ?? "");
+      },
     });
 
     expect(result.escalated).toBe(true);
+    // issue #29 复核:movie accept 分支也必须 emit 归位步骤(flatten 执行了,UI 要可见)。
+    expect(organizers.length).toBe(1);
+    expect(organizers[0]).toContain("归位到媒体库");
     expect(result.coverage.coverageMet).toBe(true);
     // Only the largest video (the film) survives; the trailer + wrapper are gone.
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([

@@ -361,12 +361,12 @@ async function runMovieCandidatePhase(
         const finalized = await finalizeMovieLanding({ sandbox, digest });
         const organizeDetail = `归位到媒体库:标为已入库(${finalized.marked.join(",") || "-"})`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
-        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, { ok: true });
       } catch (error) {
         await clearMovieLanding(sandbox).catch(() => {});
         const organizeFailDetail = error instanceof Error ? error.message : String(error);
         stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
-        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
         const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
         stepLog(sandbox, target.title, "结论", doneDetail);
         emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
@@ -416,12 +416,17 @@ async function runMovieCandidatePhase(
         });
       }
       try {
-        await finalizeMovieLanding({ sandbox, digest });
+        const arMovie = await finalizeMovieLanding({ sandbox, digest });
+        // issue #29 复核揪出:movie 诊断 accept 分支与 TV 同型漏 emit——flatten/归位都执行了,
+        // 但 UI 看不到「归位到媒体库」步骤。与干净路径同款补上。
+        const arOrganizeDetail = `归位到媒体库:标为已入库(${arMovie.marked.join(",") || "-"})`;
+        stepLog(sandbox, target.title, "归位", arOrganizeDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", arOrganizeDetail, { ok: true });
       } catch (error) {
         await clearMovieLanding(sandbox).catch(() => {});
         const organizeFailDetail = error instanceof Error ? error.message : String(error);
         stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
-        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
         const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
         stepLog(sandbox, target.title, "结论", doneDetail);
         emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
