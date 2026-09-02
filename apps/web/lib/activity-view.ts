@@ -161,8 +161,8 @@ export async function runSteps(input: {
   // <uuid>_s<season> 子 run,通知挂在子 run 名下;但 agent_steps 始终记在无尾缀的
   // 主 run(progressAndTraceSink 用 claimed.runId)。直接用带尾缀 runId 查 agent_steps
   // 永远空 → UI「暂无步骤记录」。剥掉 _s 尾缀回退查主 run。
-  const candidates = /_[a-z]\d+$/.test(input.runId)
-    ? [input.runId, input.runId.replace(/_[a-z]\d+$/, "")]
+  const candidates = /_s\d+$/.test(input.runId)
+    ? [input.runId, input.runId.replace(/_s\d+$/, "")]
     : [input.runId];
   for (const runId of candidates) {
     try {
