@@ -14,9 +14,9 @@
 #                                                默认 live（真 LLM + 真网盘，需在设置页配 key）
 #
 # 产物：
-#   deploy/fpk/dist/mediary-scout-<ARCH>.fpk        （release：arm → mediary-scout-arm.fpk，x86 → mediary-scout-x86.fpk）
-#   deploy/fpk/dist/mediary-scout-dev-<ARCH>.fpk    （test：arm → mediary-scout-dev-arm.fpk，x86 → mediary-scout-dev-x86.fpk）
-#   deploy/fpk/dist/mediary-scout-dev-fake-<ARCH>.fpk （test+fake：arm → mediary-scout-dev-fake-arm.fpk，x86 → mediary-scout-dev-fake-x86.fpk）
+#   deploy/fpk/dist/mediary-scout-<VERSION>-<ARCH>.fpk        （release：arm → mediary-scout-0.0.1-arm.fpk）
+#   deploy/fpk/dist/mediary-scout-dev-<VERSION>-<ARCH>.fpk     （test：arm → mediary-scout-dev-0.0.1-arm.fpk）
+#   deploy/fpk/dist/mediary-scout-dev-<VERSION>-fake-<ARCH>.fpk （test+fake：arm → mediary-scout-dev-0.0.1-fake-arm.fpk）
 #
 # 前置条件（本机已具备）：
 #   - node + npm（构建机与 NAS 同架构 + Node 24，ABI 匹配；CI 里 setup-node 用 24）
@@ -260,10 +260,12 @@ if [ "${FPK_MODE}" = "test" ]; then
 else
     FPK_BASE="mediary-scout"
 fi
+# issue #29 用户拍板(十轮):产物名带版本号——mediary-scout-<VERSION>-<ARCH>.fpk,
+# 与 manifest version / package.json 同步(CI 传 tag 去 v 前缀;本地缺省读 package.json)。
 if [ "${FPK_RUNTIME}" = "fake" ]; then
-    FPK_NAME="${FPK_BASE}-fake-${ARCH}.fpk"
+    FPK_NAME="${FPK_BASE}-${VERSION}-fake-${ARCH}.fpk"
 else
-    FPK_NAME="${FPK_BASE}-${ARCH}.fpk"
+    FPK_NAME="${FPK_BASE}-${VERSION}-${ARCH}.fpk"
 fi
 
 rm -rf "${DIST_DIR}"

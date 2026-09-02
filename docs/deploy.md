@@ -286,11 +286,14 @@ docker compose build --build-arg NPM_REGISTRY=https://registry.npmmirror.com
 
 ## 备份与恢复（mediary-data）
 
-自托管时数据在 compose 卷 `mediary-data` 里(SQLite 文件 `/data/mediary.db`)，是媒体库/追踪状态的唯一真相。建议定期备份：
+自托管时数据在 compose 卷 `mediary-data` 里(SQLite 文件 `/data/mediary.db`)，是媒体库/追踪状态的唯一真相。建议定期备份(2026-09 起 `sqlite-backup.sh` 已随目录梳理删除，直接用 Docker 体积备份):
 
 ```bash
-# 在仓库根目录
-./scripts/sqlite-backup.sh ./backups
+# 停库前先停写入/worker 再拷贝单文件(与旧脚本语义一致、更简单):
+docker compose stop web
+docker run --rm -v mediary-data:/data -v "$PWD/backups:/backups" \
+  --entrypoint sh node:22-slim -c 'cp /data/mediary.db /backups/mediary-$(date +%Y%m%d-%H%M%S).db'
+docker compose start web
 # → backups/mediary-YYYYMMDD-HHMMSS.db
 ```
 
@@ -312,7 +315,7 @@ docker compose start web
 ```cron
 # 每天 03:30 备份 mediary-data；保留最近 14 天
 # 若要固定北京时间，在 crontab 顶部加: TZ=Asia/Shanghai
-30 3 * * * cd /path/to/mediary-scout && ./scripts/sqlite-backup.sh ./backups >>./backups/cron.log 2>&1
+30 3 * * * cd /path/to/mediary-scout && docker compose exec -T web sh -c 'cp /data/mediary.db /backups/mediary-$(date +%Y%m%d-%H%M%S).db' >>./backups/cron.log 2>&1
 0 4 * * * find /path/to/mediary-scout/backups -name 'mediary-*.db' -mtime +14 -delete
 ```
 

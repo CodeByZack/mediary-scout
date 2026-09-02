@@ -1,7 +1,11 @@
 name: CI
 
 on:
+  # issue #29 用户拍板(PR #30 修订):分支开着 PR 时同样的 push 会同时触发
+  # push 与 pull_request 两个事件 → 同一 commit CI 跑两遍。改为 push 只跑 main
+  # (合并后归位验证),PR 靠 pull_request 事件(分支 push 同步触发 synchronize)。
   push:
+    branches: ["main"]
   pull_request:
 
 jobs:
