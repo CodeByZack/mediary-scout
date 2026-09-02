@@ -579,6 +579,15 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 - digestDetail **pass/fail 同源复用一个 summary**(修「部分覆盖仍谎报完整」双源矛盾);
 - 恢复 fast-path happy path 的 `coverageMet toBe(true)`(PR #24 假入库防线,复核检出被无由删除);
 - 清理:死 CSS(act-round-badge/pass/fail)、step-rounds 死导出标注、错位注释、badId doneDetail 去模型串。
+**用户实测三轮反馈(commit 待补)** —— 家里跑通一把(绿灯军团 3 集全归位)后按 UI 实测提 5 点,全部落地:
+- **删重复步骤**:primary 阶段 gradingDecision 与 gradeCandidates 分布重复 → 删 gradingDecision 的 emit(决策摘要仅表格日志);
+  兜底轮 searchResources 与 gradeCandidates 同关键词重复 → searchResources 不再 emit(命中结果在 gradeCandidates 一条带出);
+  兜底耗尽「合并证据池」不再单独成步(与随后的兜底评分合并);
+- **去「仲裁」词**:兜底评分 activity 改「兜底耗尽,合并证据池 N 条候选,AI 选择(A 0/B 9/…)」,stepLog 同口径;
+- **「识别」措辞**:stagingDigest 「转存内容已认:认出 X」→「转存内容已识别:识别出 X」(fail 分支同);
+- **归位展示 rename 明细**:finalizeLanding 返回 renamedPairs(原名→规范名),两处 finalizeLanding emit args 带 files,前端渲染原名 → 规范名逐条;
+- 测试同步:fast-path 步骤序列减 gradingDecision、序号/索引整体左移,断言改新文案。
+
 
 
 ## 注意事项

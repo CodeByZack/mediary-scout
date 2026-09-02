@@ -653,7 +653,7 @@ export async function runMovieFastPathAcquisition(
         sandbox,
         target.title,
         "证据恢复",
-        `合并 primary+兜底 证据池 ${fallbackView.candidates.length} 条候选(兜底共搜 ${fallback.rounds} 轮,零额外 PanSou 请求)继续仲裁`,
+        `合并 primary+兜底 证据池 ${fallbackView.candidates.length} 条候选(兜底共搜 ${fallback.rounds} 轮,零额外 PanSou 请求)交 AI 选择`,
       );
     }
     if (fallbackView.candidates.length === 0) {
@@ -669,7 +669,7 @@ export async function runMovieFastPathAcquisition(
     }
     const fbCounts = { A: 0, B: 0, C: 0, D: 0 };
     for (const candidate of grading.ranked) fbCounts[candidate.grade] += 1;
-    const fbDetail = `兜底池 A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D}`;
+    const fbDetail = `兜底耗尽,合并证据池 ${fallbackView.candidates.length} 条候选,AI 选择(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`;
     stepLog(sandbox, target.title, "评分", fbDetail);
     stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
     emitStep(onProgress, "gradeCandidates", "search", fbDetail);

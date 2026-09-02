@@ -371,15 +371,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   if (grading.ranked.length > 0) {
     stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
   }
-  emitStep(
-    onProgress,
-    "gradingDecision",
-    "search",
-    `uniqueA=${grading.uniqueTopGrade ? "yes" : "no"} A=${gradeCounts.A}(${gradeDistribution(grading)})`,
-    // issue #29 用户拍板:候选列表只在 gradeCandidates 步骤展示一次,决策摘要不再带列表。
-    { uniqueTopGrade: grading.uniqueTopGrade },
-  );
-
+  // issue #29 用户实测:gradingDecision 与 gradeCandidates 分布重复,决策摘要只在表格日志,activity 一条足矣。
   // primary 空且无别名:无任何证据可转 → 零 LLM 诚实终止(旧行为;空池但有别名时,
   // 阶段2 的 aliasesFallbackReSearch 会去兜底「搜得到」的新证据,不在此处终止)。
   if (grading.ranked.length === 0 && target.aliases.length === 0) {
@@ -482,7 +474,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
         sandbox,
         target.title,
         "证据恢复",
-        `合并 primary+兜底 证据池 ${fallbackView.candidates.length} 条候选(兜底共搜 ${fallback.rounds} 轮,零额外 PanSou 请求)继续仲裁`,
+        `合并 primary+兜底 证据池 ${fallbackView.candidates.length} 条候选(兜底共搜 ${fallback.rounds} 轮,零额外 PanSou 请求)交 AI 选择`,
       );
     }
 
@@ -510,7 +502,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
 
     const fbCounts = { A: 0, B: 0, C: 0, D: 0 };
     for (const candidate of grading.ranked) fbCounts[candidate.grade] += 1;
-    const fbDetail = `兜底池 A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D}`;
+    const fbDetail = `兜底耗尽,合并证据池 ${fallbackView.candidates.length} 条候选,AI 选择(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`;
     stepLog(sandbox, target.title, "评分", fbDetail);
     stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
     emitStep(onProgress, "gradeCandidates", "search", fbDetail, {

@@ -269,7 +269,8 @@ export async function aliasesFallbackReSearch(input: {
     rounds += 1;
     const roundDetail = `keyword=「${alias}」(第 ${rounds}/${MAX_FALLBACK_SEARCHES} 轮)`;
     stepLog(sandbox, title, "兜底重搜", roundDetail);
-    emitStep(onProgress, "searchResources", "search", roundDetail, { keyword: alias });
+    // issue #29 用户实测:searchResources 与随后的 gradeCandidates 同关键词重复,
+    // activity 只留 gradeCandidates 一条(带命中结果),此步仅留表格排障日志。
     try {
       await sandbox.primeRawSnapshot(alias);
     } catch (error) {
@@ -277,7 +278,6 @@ export async function aliasesFallbackReSearch(input: {
       // next alias (bounded by the budget; a dead source never kills the run).
       const failDetail = `keyword=「${alias}」搜索失败:${error instanceof Error ? error.message : String(error)}`;
       stepLog(sandbox, title, "兜底重搜", failDetail, "warn");
-      emitStep(onProgress, "searchResources", "search", failDetail, { keyword: alias });
       continue;
     }
     const nextView = sandbox.rawSnapshotView();
@@ -337,9 +337,9 @@ export async function aliasesFallbackReSearch(input: {
     if (merged.length > 0) {
       const mergedView: EvidenceView = { snapshotId: view.snapshotId, candidates: merged, candidateSnapshots };
       const mergedGrading = grade(merged);
-      const restoreDetail = `全部兜底无唯一 A,合并证据池(primary ${primaryCount} + 兜底 ${fallbackCount})继续仲裁`;
+      const restoreDetail = `兜底耗尽,合并证据池(primary ${primaryCount} + 兜底 ${fallbackCount})`;
       stepLog(sandbox, title, "兜底重搜", restoreDetail);
-      emitStep(onProgress, "gradeCandidates", "search", restoreDetail);
+      // issue #29 用户实测:合并证据池不单独成步(与随后的兜底评分重复),交给调用方一条带出。
       return { view: mergedView, grading: mergedGrading, rounds, restored: true };
     }
   }
@@ -463,7 +463,7 @@ export async function closeOutTvLanding(options: {
       ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
     });
     // issue #29 用户反馈:activity 人话化——直接复用 summarizeDigest 的人话结论
-    // (pass=「转存内容已认…」/ fail=「认出…还缺…」),与 args 的 missingCodes 一致,
+    // (pass=「转存内容已识别…」/ fail=「识别出…还缺…」),与 args 的 missingCodes 一致,
     // 不再自造「转存内容完整」双源文案(部分覆盖时曾谎报完整,复核揪出)。
     const digestDetail = digest.summary;
     stepLog(
@@ -535,7 +535,12 @@ export async function closeOutTvLanding(options: {
         // 文案点明归位到 Season 目录 + 结果,不再用「标记/移动/清理」割裂的内部词。
         const organizeDetail = `归位到 Season 目录:${finalized.marked.join(",") || "-"}${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
-        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, { ok: true });
+        // issue #29 实测:归位步骤展示 rename 明细(原名 → 规范名),预算内截断。
+        const renameRows = finalized.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, {
+          ok: true,
+          files: pushWithinBudget<string>([], renameRows, 1300),
+        });
       } catch (error) {
         // A rename/move guard refused, or storage failed mid-landing — nothing was
         // reliably placed. Wipe staging and surface honest no-coverage (never a
@@ -630,7 +635,12 @@ export async function closeOutTvLanding(options: {
         // issue #29:与干净路径(:535)同款人话——归位到 Season 目录(真正落库)。
         const organizeDetail = `归位到 Season 目录:${finalized.marked.join(",") || "-"}${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
-        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, { ok: true });
+        // issue #29 实测:与干净路径同款——rename 明细(原名 → 规范名)。
+        const renameRows2 = finalized.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, {
+          ok: true,
+          files: pushWithinBudget<string>([], renameRows2, 1300),
+        });
       } catch (error) {
         try {
           await sandbox.discardStaging();

@@ -176,11 +176,11 @@ function summarizeDigest(d: Omit<StagingDigest, "summary">): string {
   if (d.passes) {
     // 部分覆盖(passes 但还有缺集):不写「完整」,如实说认出哪些 + 还缺哪些(避免与 args「还缺 N 集」自相矛盾)。
     const stillMissing = d.missingCodes.length > 0 ? `,还缺 ${d.missingCodes.join(",")}` : "";
-    parts.push(`转存内容已认:认出 ${known}${stillMissing}${d.subtitles.length > 0 ? `,含字幕 ${d.subtitles.length} 个` : ""}`);
+    parts.push(`转存内容已识别:识别出 ${known}${stillMissing}${d.subtitles.length > 0 ? `,含字幕 ${d.subtitles.length} 个` : ""}`);
   } else {
     const unparsedNote = unparsedCount > 0 ? `${unparsedCount} 个文件看不出集数` : "";
     const missingNote = d.missingCodes.length > 0 ? `,还缺 ${d.missingCodes.join(",")}` : "";
-    parts.push(`认出 ${known}${unparsedNote ? ",另有 " + unparsedNote + missingNote : missingNote}`);
+    parts.push(`识别出 ${known}${unparsedNote ? ",另有 " + unparsedNote + missingNote : missingNote}`);
     if (d.dateRejectedVideos.length > 0) {
       // 年守卫:文件自带日期与该集播出日矛盾 → 不采信。保留可见(PR #24 契约,测试断言)。
       parts.push(`季份日期不符剔除 ${d.dateRejectedVideos.join("、")}`);

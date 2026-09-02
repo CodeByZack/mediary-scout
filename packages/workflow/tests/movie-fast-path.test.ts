@@ -597,7 +597,7 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect(searches.length).toBe(1); // 无兜底
   });
 
-  it("兜底全失败且 primary 有候选 → 恢复 primary 快照继续仲裁(movie twin)", async () => {
+  it("兜底全失败且 primary 有候选 → 恢复 primary 快照继续 AI 选择(movie twin)", async () => {
     const { sandbox, movieDir, storage, aliasTarget, searches } = await createMovieAliasSetup({
       results: {
         流浪地球: [

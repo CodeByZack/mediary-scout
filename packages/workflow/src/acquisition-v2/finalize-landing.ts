@@ -49,6 +49,8 @@ export interface SeasonMoveRestrictions {
 export interface FinalizeLandingResult {
   /** Canonical names actually renamed. */
   renamed: string[];
+  /** issue #29 实测反馈:rename 明细(原名 → 规范名),UI 归位步骤展示。 */
+  renamedPairs: Array<{ from: string; to: string }>;
   /** season -> count of files moved into it. */
   movedSeasons: Record<number, number>;
   /** Episode codes marked obtained (in-scope parsed codes, incl. provider-ahead). */
@@ -160,6 +162,7 @@ export async function finalizeLanding(
   //    文件名由仲裁给出 code),否则用裸文件名解析。
   const renames: Array<{ fileId: string; newName: string }> = [];
   const renamed: string[] = [];
+  const renamedPairs: Array<{ from: string; to: string }> = [];
   const skippedOnDisk: string[] = [];
   const skippedNotNeeded: string[] = [];
   const junkNames = new Set(digest.junkSignals);
@@ -206,6 +209,8 @@ export async function finalizeLanding(
     for (const { fileId, newName } of renames) {
       const source = baseById.get(fileId) ?? fileId;
       const err = errorByFileId.get(fileId);
+      // issue #29 实测反馈:rename 明细供 UI 归位步骤展示(成功与否一目了然)。
+      renamedPairs.push({ from: source, to: newName });
       if (err === undefined) {
         stepLog(sandbox, canonicalTitle, "改名", `${source} → ${newName}`);
       } else {
@@ -264,7 +269,7 @@ export async function finalizeLanding(
   // 4. Wipe staging (leftovers: out-of-scope episodes, dup packs, residue).
   const discarded = (await sandbox.discardStaging()).removed;
 
-  return { renamed, movedSeasons, marked, discarded, skippedOnDisk, skippedNotNeeded, movedCount };
+  return { renamed, renamedPairs, movedSeasons, marked, discarded, skippedOnDisk, skippedNotNeeded, movedCount };
 }
 
 /**

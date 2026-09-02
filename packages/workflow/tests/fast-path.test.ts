@@ -1061,7 +1061,6 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect(steps.map((s) => s.toolName)).toEqual([
       "inspectTargetDir",
       "viewResourceSnapshot",
-      "gradingDecision",
       "gradeCandidates",
       "pickCandidate",
       "transferCandidate",
@@ -1075,7 +1074,6 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
       "search",
       "search",
       "search",
-      "search",
       "pick",
       "transfer",
       "verify",
@@ -1085,33 +1083,31 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
       "finalize",
     ]);
     // 序号连续;activity = stepLog 的 detail;转存带 candidateId 参数
-    expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(steps[1]!.activity).toBe("候选 1 条");
-    expect(steps[5]!.args.candidateId).toBe("c1");
+    expect(steps[4]!.args.candidateId).toBe("c1");
     // issue #29:转存步骤带标题 + 链接(用户拍板;链接来自 urlById 透出)。
-    expect(steps[5]!.args.title).toBe("狂飙.S01E01.1080p.中字");
-    expect(steps[5]!.args.linkUrl).toBe("https://115.com/s/abc123");
+    expect(steps[4]!.args.title).toBe("狂飙.S01E01.1080p.中字");
+    expect(steps[4]!.args.linkUrl).toBe("https://115.com/s/abc123");
     // issue #29 用户拍板:finish 人话化(「已完成:…已入库」);runCheckout 结账行也人话化,
     // activity 只讲结果,统计细节进 args(transfers/searches/aiEscalated)。
-    expect(steps[9]!.activity).toContain("已完成:");
-    expect(steps[9]!.activity).toContain("已入库");
-    expect(steps[10]!.activity).toContain("转存 1 次完成");
-    expect(steps[10]!.args.transfers).toBe(1);
-    expect(steps[10]!.args.searches).toBe(1);
+    expect(steps[8]!.activity).toContain("已完成:");
+    expect(steps[8]!.activity).toContain("已入库");
+    expect(steps[9]!.activity).toContain("转存 1 次完成");
+    expect(steps[9]!.args.transfers).toBe(1);
+    expect(steps[9]!.args.searches).toBe(1);
     // issue #29 用户拍板:digest 人话化——activity 不再报「未通过(脏包)…判定」,
-    // 而是一句人话(如「认出 S01E01,还有…」);逐文件识别在 digestFiles 展示一次。
-    expect(steps[6]!.activity).not.toContain("脏包");
-    expect(steps[6]!.activity).not.toContain("判定");
-    expect(steps[7]!.activity).toContain("逐文件识别 1 条");
+    // 而是一句人话(如「识别出 S01E01,还有…」);逐文件识别在 digestFiles 展示一次。
+    expect(steps[5]!.activity).not.toContain("脏包");
+    expect(steps[5]!.activity).not.toContain("判定");
+    expect(steps[6]!.activity).toContain("逐文件识别 1 条");
     // 可观测性增强(L1/L2/L4):决策与证据 payload 随事件走 agent_steps
-    // issue #29:gradingDecision 只报决策摘要;候选评级列表只在 gradeCandidates 一次。
+    // issue #29:gradingDecision 已删(与 gradeCandidates 分布重复);候选评级列表只在 gradeCandidates 一次。
     expect(steps[2]!.args.uniqueTopGrade).toBe(true);
-    expect(steps[2]!.args.candidates).toBeUndefined();
-    expect(steps[3]!.args.uniqueTopGrade).toBe(true);
-    expect((steps[3]!.args.candidates as unknown[]).length).toBe(1);
-    expect(((steps[3]!.args.candidates as { url?: string }[])[0]?.url)).toBe("https://115.com/s/abc123");
+    expect((steps[2]!.args.candidates as unknown[]).length).toBe(1);
+    expect(((steps[2]!.args.candidates as { url?: string }[])[0]?.url)).toBe("https://115.com/s/abc123");
     // issue #29:候选带链接透出(fake provider 此候选无 url,故不强制断言 url)。
-    expect((steps[7]!.args.files as string[])[0]).toContain("S01E01");
+    expect((steps[6]!.args.files as string[])[0]).toContain("S01E01");
     // 落盘结果不受 trace 影响
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
@@ -1177,10 +1173,9 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect(steps.map((s) => s.toolName)).toEqual([
       "inspectTargetDir",
       "viewResourceSnapshot",
-      "gradingDecision",
       "reportNoCoverage",
     ]);
-    expect(steps[3]!.activity).toBe("暂无资源(快照为空)");
+    expect(steps[2]!.activity).toBe("暂无资源(快照为空)");
   });
 
   it("onProgress 缺失(裸 sandbox)→ 不写 trace 也不崩溃", async () => {
