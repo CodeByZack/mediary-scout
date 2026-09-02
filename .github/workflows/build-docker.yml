@@ -1,0 +1,137 @@
+name: Build Docker images (arm + x86)
+
+# docker save 分发包——把 web 镜像导出为 tar.gz 文件挂在 GitHub Release 附件上,
+# 用户下载后 `docker load < file.tar.gz` 导入(不依赖任何第三方 registry)。
+# 触发方式:
+#   - 手动: workflow_dispatch(可带 tag 输入,产物挂到对应 GitHub Release)
+#   - 自动: push tag v*(产物同时挂到 GitHub Release)
+# 与 build-fpk.yml 同构:同矩阵(原生 arm/x86 runner)、同发布闸门(test 模式不进 Release)。
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to publish (e.g. v0.0.1, 与 docker 镜像 tag 一致)"
+        required: false
+        default: ""
+      mode:
+        description: "打包模式:release=正式版(默认);test=测试版(镜像 tag 带 -dev 后缀,不进 Release)"
+        required: false
+        default: release
+        type: choice
+        options:
+          - release
+          - test
+
+permissions:
+  contents: read
+
+env:
+  MEDIA_TRACK_SQLITE_PATH: ""
+
+jobs:
+  build:
+    name: Build docker image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm
+            runner: ubuntu-24.04-arm
+            docker_platform: linux/arm64
+            artifact: docker-arm
+          - arch: x86
+            runner: ubuntu-latest
+            docker_platform: linux/amd64
+            artifact: docker-x86
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Checkout tag commit (workflow_dispatch with tag)
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        run: |
+          git fetch --tags
+          if git rev-parse "refs/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
+            git checkout "${{ inputs.tag }}"
+          else
+            echo "::error::Tag ${{ inputs.tag }} does not exist. Create it first: git tag ${{ inputs.tag }} && git push origin ${{ inputs.tag }}"
+            exit 1
+          fi
+
+      - name: Resolve version
+        id: version
+        run: |
+          V=""
+          if [ "${{ github.event_name }}" = "push" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            V="${{ inputs.tag }}"
+            V="${V#v}"
+          fi
+          # 没给 tag 时读 package.json(缺省构建/测试用)
+          if [ -z "${V}" ]; then
+            V="$(node -e "try{console.log(require('./package.json').version||'')}catch(e){console.log('')}" || true)"
+          fi
+          V="${V:-0.0.1}"
+          if [ "${{ inputs.mode }}" = "test" ]; then
+            V="${V}-dev"
+          fi
+          echo "version=${V}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build + export docker image (${{ matrix.arch }})
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          IMAGE="mediary-scout:${VERSION}"
+          echo "==> image tag: ${IMAGE} (platform ${{ matrix.docker_platform }})"
+          docker build \
+            --platform "${{ matrix.docker_platform }}" \
+            --build-arg "GIT_SHA=${GITHUB_SHA}" \
+            -f deploy/docker/Dockerfile \
+            -t "${IMAGE}" \
+            .
+          mkdir -p dist
+          docker save "${IMAGE}" | gzip > "dist/mediary-scout-${VERSION}-${{ matrix.arch }}.tar.gz"
+          echo "==> 导出产物: $(ls -lh dist/)"
+
+      - name: Upload docker image artifact (${{ matrix.arch }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ format('{0}-{1}{2}', matrix.artifact, steps.version.outputs.version, (inputs.mode == 'test' && '-dev' || '')) }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [build]
+    if: needs.build.result == 'success' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) && inputs.mode != 'test'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "tag=${{ inputs.tag }}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Download docker image artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload docker images to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: dist/*.tar.gz
+          fail_on_unmatched_files: true
