@@ -15,12 +15,13 @@
 # GIT_SHA=$(git rev-parse HEAD) is passed as a build arg the Dockerfile uses right before
 # `COPY . .`, forcing a fresh source COPY + build per commit while deps stay cached.
 #
-# Usage (on the host, in the repo dir):   ./scripts/deploy.sh [extra `up` args]
+# Usage (在仓库根运行):   ./deploy/docker/deploy.sh [extra `up` args]
 set -eu
 
-# Repo root = the script's parent dir. Plain dirname (no `--`, no `cd --`) for
-# portability across /bin/sh implementations (busybox ash, dash, bash).
-cd "$(dirname "$0")/.."
+# Repo root = deploy/docker/ 的上两级(脚本移到 deploy/docker/ 后)。
+# Plain dirname (no `--`, no `cd --`) for portability across /bin/sh
+# implementations (busybox ash, dash, bash).
+cd "$(dirname "$0")/../.."
 
 echo "==> git pull --ff-only"
 git pull --ff-only
@@ -31,10 +32,10 @@ echo "==> Building web at commit ${GIT_SHA}"
 # compose reads build.args GIT_SHA=${GIT_SHA} from the exported env above — no need to
 # pass --build-arg. No --no-cache either: the GIT_SHA cache-bust already forces the
 # source COPY + build to re-run, while keeping the (slow) npm ci layer cached.
-docker compose build web
+docker compose --project-directory . -f deploy/docker/docker-compose.yml build web
 
 echo "==> Starting stack"
-docker compose up -d "$@"
+docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d "$@"
 
 # Verify: the running container reports the commit we just built. This is the check
 # that host `git rev-parse HEAD` CANNOT give you (a stale image outlives a pulled HEAD).
@@ -44,7 +45,7 @@ echo "==> Verifying running container commit"
 RUNNING=""
 i=0
 while [ "$i" -lt 15 ]; do
-  RUNNING="$(docker compose exec -T web cat BUILD_COMMIT 2>/dev/null || true)"
+  RUNNING="$(docker compose --project-directory . -f deploy/docker/docker-compose.yml exec -T web cat BUILD_COMMIT 2>/dev/null || true)"
   [ -n "$RUNNING" ] && break
   i=$((i + 1))
   sleep 1
@@ -57,7 +58,7 @@ if [ "${RUNNING}" = "${GIT_SHA}" ]; then
   i=0
   READY=0
   while [ "$i" -lt 60 ]; do
-    if docker compose exec -T web node -e "fetch('http://127.0.0.1:3000/api/health',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+    if docker compose --project-directory . -f deploy/docker/docker-compose.yml exec -T web node -e "fetch('http://127.0.0.1:3000/api/health',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
       READY=1
       break
     fi
@@ -68,7 +69,7 @@ if [ "${RUNNING}" = "${GIT_SHA}" ]; then
     echo "==> OK: container serves the freshly built commit and passes the DB-backed health probe."
   else
     echo "==> WARNING: container commit matches HEAD but /api/health never became ready."
-    docker compose logs --tail=100 web || true
+    docker compose --project-directory . -f deploy/docker/docker-compose.yml logs --tail=100 web || true
     exit 1
   fi
 else
