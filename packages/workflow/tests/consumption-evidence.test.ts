@@ -91,12 +91,12 @@ describe("compactCodeList / compactMapping(issue #29 A1/A2 预算化)", () => {
     const out = compactCodeList(["S02E06"]);
     expect(out).toEqual({ count: 1, sample: ["S02E06"] });
   });
-  it("compactMapping:文件名截断到 45 字符+…,最多 12 条", () => {
+  it("compactMapping:文件名截断到 45 字符+…,条数不截(issue #29 用户拍板:AI 一次认出 20 集明细必须全量)", () => {
     const longName = "非常长的日漫粉丝字幕组文件名".repeat(20);
     const mapping: Record<string, string> = {};
     for (let i = 0; i < 16; i++) mapping[`${longName}${i}.mkv`] = `S02E${String(i + 1).padStart(2, "0")}`;
     const out = compactMapping(mapping);
-    expect(out.length).toBe(12);
+    expect(out.length).toBe(16); // 全量,不截 12 条
     expect(out[0]!.file.length).toBeLessThanOrEqual(48);
     expect(out[0]!.file.endsWith("…")).toBe(true);
     expect(out.some((r) => r.code === "S02E01")).toBe(true);

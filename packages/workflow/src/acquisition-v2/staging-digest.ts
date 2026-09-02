@@ -166,6 +166,21 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
   };
 }
 
+/** 活动页 title 计数版(issue #29 用户拍板):「代码识别出 N 集,还有 M 集没认出来」。
+ *  明细(逐文件/映射表)放在下面步骤里,title 不再罗列集号长串。 */
+export function digestTitle(d: Pick<StagingDigest, "coveredCodes" | "missingCodes" | "episodeCodes" | "unparsedVideos">): string {
+  const covered = d.coveredCodes.length;
+  const missing = d.missingCodes.length;
+  const unparsed = d.unparsedVideos.length;
+  if (covered > 0 && missing === 0) {
+    return `代码识别出 ${covered} 集,目标集数已齐`;
+  }
+  if (covered > 0) {
+    return `代码识别出 ${covered} 集,还有 ${missing} 集没认出来`;
+  }
+  return `代码识别出 0 集,还有 ${missing} 集没认出来${unparsed > 0 ? `,另有 ${unparsed} 个文件看不出集数` : ""}`;
+}
+
 function summarizeDigest(d: Omit<StagingDigest, "summary">): string {
   // issue #29 用户反馈:不要内部术语(脏包/判定/覆盖目标),写一句人话结论:
   // 转存后检查 → 认出哪几集 / 有几个文件看不出 / 暂时缺哪几集 / 日期拒收说明。

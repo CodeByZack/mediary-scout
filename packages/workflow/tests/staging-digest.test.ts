@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { digestMovieStaging, digestStaging } from "../src/acquisition-v2/staging-digest.js";
+import { digestMovieStaging, digestStaging, digestTitle } from "../src/acquisition-v2/staging-digest.js";
 import type { SimTreeFile } from "../src/acquisition-v2/storage-115-simulator.js";
 
 function video(name: string, id = name): SimTreeFile {
@@ -217,4 +217,36 @@ describe("digestStaging — 综艺「第N期」Part 锚定(2026-08-31 地球超�
     expect(d.episodeCodes).toEqual([]);
     expect(d.unparsedVideos.length).toBe(1);
   });
+
+
+describe("digestTitle — 活动页标题计数化(issue #29 用户拍板)", () => {
+  it("覆盖全部缺集时:代码识别出 N 集,目标集数已齐", () => {
+    const d = digestStaging({
+      files: [video("狂飙.S01E01.mkv"), video("狂飙.S01E02.mkv"), video("狂飙.S01E03.mkv")],
+      ...tvInput,
+    });
+    expect(digestTitle(d)).toBe("代码识别出 3 集,目标集数已齐");
+  });
+
+  it("部分覆盖:代码识别出 N 集,还有 M 集没认出来(不罗列集号长串)", () => {
+    const d = digestStaging({
+      files: [video("狂飙.S01E01.mkv"), video("S01E01.mkv路径外视频.mkv")],
+      seasons: [1],
+      needCodes: ["S01E01", "S01E02", "S01E03"],
+    });
+    expect(digestTitle(d)).toContain("代码识别出 1 集");
+    expect(digestTitle(d)).toContain("还有 2 集没认出来");
+    expect(digestTitle(d)).not.toContain("S01E02"); // 计数化,不罗列
+  });
+
+  it("零覆盖:代码识别出 0 集 + 看不出集数的文件数", () => {
+    const d = digestStaging({
+      files: [video("20250803-无规则数字.mkv")],
+      seasons: [1],
+      needCodes: ["S01E01"],
+    });
+    expect(digestTitle(d)).toContain("代码识别出 0 集");
+    expect(digestTitle(d)).toContain("1 个文件看不出集数");
+  });
+});
 });

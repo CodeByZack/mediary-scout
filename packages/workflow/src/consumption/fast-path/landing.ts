@@ -2,7 +2,7 @@ import type { LanguageModel } from "ai";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
 import { arbitrateDiagnosis, arbitrateEpisodeMapping } from "../../acquisition-v2/arbitrator.js";
 import { finalizeLanding } from "../../acquisition-v2/finalize-landing.js";
-import { digestStaging, type StagingDigest } from "../../acquisition-v2/staging-digest.js";
+import { digestStaging, digestTitle, type StagingDigest } from "../../acquisition-v2/staging-digest.js";
 import { normalizeSearchKeyword } from "../../planning-search-gate.js";
 import type { AgentToolEvent } from "../../acquisition-v2/activity.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
@@ -169,21 +169,23 @@ export async function tryEpisodeMapping(options: {
   options.onDigest(re);
   if (re.passes) {
         // issue #29 用户反馈:人话——AI 根据文件名补认了哪些集,结果如何。
-    const mapDetail = `AI 补认:${Object.values(clean).join(",")},目标集数已齐`;
+    const mapDetail = `AI 识别出 ${re.coveredCodes.length} 集,目标集数已齐`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "log");
     emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "passed";
   }
   if (re.episodeCodes.length > 0 && !re.isDirtyPack) {
     // 映射上了但没覆盖 need(例如映射出的是别的集数)—— 回收干净但无用。
-    const mapDetail = `集数映射生效但未覆盖目标(${re.episodeCodes.join(",")}),丢弃换候选`;
+    const mapDetail = `AI 识别出 ${re.coveredCodes.length} 集,没有覆盖目标集数,丢弃换候选`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "warn");
     emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "unmapped-but-clean";
   }
   // 重建后仍脏(映射不完整/失败) → 回落诊断仲裁。
     // issue #29 用户反馈:人话——AI 补认后结果如何、为什么要去诊断。
-  const failDetail = `AI 补认后仍不完整(${re.summary.split("\n").join(" / ")}),交给诊断仲裁`;
+  // issue #29 用户拍板:title 计数化——AI 识别出 N 集,还有 M 集没认出来;
+  // 明细在下方 mapping 列表逐条展示。诊断 LLM 仍用 re.summary(富信息)。
+  const failDetail = `AI 识别出 ${re.coveredCodes.length} 集,还有 ${re.missingCodes.length} 集没认出来,交 AI 处理`;
   stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
   emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
   return "failed";
@@ -465,7 +467,9 @@ export async function closeOutTvLanding(options: {
     // issue #29 用户反馈:activity 人话化——直接复用 summarizeDigest 的人话结论
     // (pass=「转存内容已识别…」/ fail=「识别出…还缺…」),与 args 的 missingCodes 一致,
     // 不再自造「转存内容完整」双源文案(部分覆盖时曾谎报完整,复核揪出)。
-    const digestDetail = digest.summary;
+    // issue #29 用户拍板:title 计数化(代码识别出 N 集,还差 M 集);
+    // 明细在 digestFiles 步骤逐条展示。LLM 诊断仍用 digest.summary(富信息)。
+    const digestDetail = digestTitle(digest);
     stepLog(
       sandbox,
       target.title,

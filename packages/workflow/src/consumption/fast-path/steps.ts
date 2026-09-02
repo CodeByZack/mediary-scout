@@ -167,8 +167,11 @@ export function compactCodeList(codes: string[], maxItems = 24): { count: number
 }
 
 /** 紧凑 AI 映射表(活动页卡片证据):文件名过长/过多时只保留前 N 条、文件名截断。 */
-export function compactMapping(mapping: Record<string, string>, maxItems = 12): Array<{ file: string; code: string }> {
-  return Object.entries(mapping).slice(0, maxItems).map(([file, code]) => ({ file: file.length > 48 ? file.slice(0, 45) + "…" : file, code }));
+export function compactMapping(mapping: Record<string, string>): Array<{ file: string; code: string }> {
+  // issue #29 用户拍板:去掉 12 条截断——AI 一次认出 20 集时明细必须全量展示,
+  // 否则 UI 只看到前 12 条(AI 补认 20 集 → 明细 12 条的用户困惑根因)。
+  // 文件名仅截长(>48 字符缩略,防单条撑爆预算),条数不截。
+  return Object.entries(mapping).map(([file, code]) => ({ file: file.length > 48 ? file.slice(0, 45) + "…" : file, code }));
 }
 
 interface EvidenceCandidate {
