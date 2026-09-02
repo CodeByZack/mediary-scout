@@ -45,7 +45,7 @@ describe("docker-compose.yml web service config", () => {
   it("ships a valid runtime config (regression guard for the MEDIA_TRACK_AGENT_ADAPTER=real outage)", () => {
     // Resolve relative to THIS test file so it works regardless of the vitest
     // working directory (process.cwd() would require running from the repo root).
-    const composePath = resolve(dirname(fileURLToPath(import.meta.url)), "../../../docker-compose.yml");
+    const composePath = resolve(dirname(fileURLToPath(import.meta.url)), "../../../deploy/docker/docker-compose.yml");
     const compose = parse(readFileSync(composePath, "utf8")) as {
       services: { web: { environment: Record<string, string> } };
     };

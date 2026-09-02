@@ -81,7 +81,7 @@
 ```bash
 git clone https://github.com/CodeByZack/mediary-scout && cd mediary-scout
 cp .env.example .env   # 可选——大多数配置可在 UI 里填
-docker compose up -d   # web + 自带 PanSou + SQLite 卷
+docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d   # web + 自带 PanSou + SQLite 卷
 ```
 
 > 🇨🇳 **国内 Docker Hub 不稳定?** 首次构建报 `auth.docker.io ... i/o timeout` = 需要镜像加速,在 `.env` 加 `DOCKER_MIRROR=docker.1ms.run` 再 `up`。详见 **[docs/deploy.md → 国内构建加速](docs/deploy.md#国内构建加速docker-hub-常年不稳定)**。
@@ -173,8 +173,8 @@ flowchart LR
 ## 然后执行(Docker 路径)
 - `git clone https://github.com/CodeByZack/mediary-scout && cd mediary-scout`
 - 国内:首次 `up` 前在 `.env` 设 `DOCKER_MIRROR`(见 docs/deploy.md)
-- `docker compose up -d`(首次构建几分钟)
-- 多账号:`.env` 加 `MEDIA_TRACK_MULTI_USER=1`,再 `docker compose up -d web`
+- `docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d`(首次构建几分钟)
+- 多账号:`.env` 加 `MEDIA_TRACK_MULTI_USER=1`,再 `docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d web`
 - 打开 `http://<主机>:3000`,带用户走设置页(网盘 / LLM / 可选项)
 - 确认起来、报 URL、告诉怎么升级(`git pull && ./scripts/deploy.sh`)
 ```

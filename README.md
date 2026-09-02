@@ -34,7 +34,7 @@ Grab the `.fpk` for your architecture from [Releases](https://github.com/CodeByZ
 ```bash
 git clone https://github.com/CodeByZack/mediary-scout && cd mediary-scout
 cp .env.example .env   # optional — most config can be set in the UI
-docker compose up -d   # web + a bundled PanSou + SQLite volume
+docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d   # web + a bundled PanSou + SQLite volume
 ```
 
 Then open `http://<host>:3000` and configure in **Settings**. Full walkthrough: **[docs/deploy.md](docs/deploy.md)**.
@@ -153,8 +153,8 @@ You are deploying Mediary Scout, a self-hosted media-acquisition app. Follow the
 ## Then execute (Docker path)
 - `git clone https://github.com/CodeByZack/mediary-scout && cd mediary-scout`
 - Mainland China: set `DOCKER_MIRROR` in `.env` (see docs/deploy.md) before the first `up`
-- `docker compose up -d` (first build takes a few minutes)
-- Multi-user: add `MEDIA_TRACK_MULTI_USER=1` to `.env`, then `docker compose up -d web`
+- `docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d` (first build takes a few minutes)
+- Multi-user: add `MEDIA_TRACK_MULTI_USER=1` to `.env`, then `docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d web`
 - Open `http://<host>:3000`, walk the user through Settings (drive / LLM / optional extras)
 - Verify it's up, report the URL, and tell them how to upgrade (`git pull && ./scripts/deploy.sh`)
 ```
