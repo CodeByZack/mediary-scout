@@ -68,6 +68,29 @@ export function stepArgsText(step: ActivityStepView): string | null {
       return `解析: ${rows.slice(0, 2).join(" ｜ ")}`;
     }
   }
+  const covered = compactCodes(args.coveredCodes);
+  const missing = compactCodes(args.missingCodes);
+  // issue #29 九轮拍板:只报数量,不罗列集号样本(逐文件明细在同卡 files 里逐条有)。
+  if (missing !== null && missing.count > 0) {
+    return `还缺 ${missing.count} 集${covered !== null && covered.count > 0 ? ` · 已有 ${covered.count} 集` : ""}`;
+  }
+  if (covered !== null && covered.count > 0) {
+    return `命中 ${covered.count} 集`;
+  }
+  // B6:AI 集数映射(mapping compact 形状 [{'file','code'}] 或旧数组 [file,code]? 新形状)。
+  const mapping = Array.isArray(args.mapping) ? args.mapping : null;
+  if (mapping && mapping.length > 0) {
+    const pairs = mapping.map((row) => {
+      const record = (row ?? {}) as Record<string, unknown>;
+      const file = typeof record.file === "string" ? record.file : "?";
+      const code = typeof record.code === "string" ? record.code : "?";
+      return `${file} → ${code}`;
+    });
+    return `AI 映射: ${pairs.slice(0, 3).join(" ｜ ")}${pairs.length > 3 ? ` 等 ${pairs.length} 条` : ""}`;
+  }
+  if (args.aiUsed === true) {
+    return "AI 已介入集数映射";
+  }
   if (keyword) {
     return `关键词: ${keyword}`;
   }
@@ -85,7 +108,8 @@ export function stepArgsText(step: ActivityStepView): string | null {
 export interface StepEvidenceRow {
   title: string;
   grade: string | null;
-  reasons: string[];
+  /** issue #29 用户拍板:分享链接(有则渲染为可点击);无则纯文本标题。 */
+  url?: string;
 }
 
 export type StepDetailView =
@@ -108,14 +132,10 @@ export function stepDetailView(step: ActivityStepView): StepDetailView {
       typeof args.keyword === "string" && args.keyword.trim() ? args.keyword.trim() : null;
     const rows = evidence.map((item) => {
       const record = (item ?? {}) as Record<string, unknown>;
-      const rawReasons: unknown[] = Array.isArray(record.reasons) ? record.reasons : [];
-      const reasons = rawReasons.filter(
-        (reason): reason is string => typeof reason === "string" && reason.length > 0,
-      );
       return {
         title: typeof record.title === "string" ? record.title : "?",
         grade: typeof record.grade === "string" ? record.grade : null,
-        reasons,
+        ...(typeof record.url === "string" && record.url.length > 0 ? { url: record.url } : {}),
       };
     });
     return { kind: "candidates", keyword, rows };
@@ -127,5 +147,32 @@ export function stepDetailView(step: ActivityStepView): StepDetailView {
       return { kind: "files", rows };
     }
   }
+  // issue #29 用户实测:AI 集数映射(arguments)逐条分行——mapping [{file,code}] 复用 files 行渲染。
+  const mapping = Array.isArray(args.mapping) ? args.mapping : null;
+  if (mapping && mapping.length > 0) {
+    const rows = mapping.map((row) => {
+      const record = (row ?? {}) as Record<string, unknown>;
+      const file = typeof record.file === "string" ? record.file : "?";
+      const code = typeof record.code === "string" ? record.code : "?";
+      return `${file} → ${code}`;
+    });
+    if (rows.length > 0) {
+      return { kind: "files", rows };
+    }
+  }
   return null;
+}
+
+
+
+/** 读取 stagingDigest 的紧凑集号形状 {count,sample};老形状数组也兼容。 */
+function compactCodes(value: unknown): { count: number; sample: string[] } | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const count = typeof record.count === "number" ? record.count : null;
+  const sample = Array.isArray(record.sample) ? record.sample.filter((x): x is string => typeof x === "string") : [];
+  if (count === null && Array.isArray(value)) {
+    return { count: value.length, sample: value.filter((x): x is string => typeof x === "string") };
+  }
+  return count === null ? null : { count, sample };
 }

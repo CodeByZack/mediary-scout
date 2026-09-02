@@ -43,12 +43,12 @@ describe("stepArgsText — 活动页 args 一行摘要", () => {
 });
 
 describe("stepDetailView — 结构化证据行(§23)", () => {
-  it("candidates 全量行:标题/评级/判因/keyword,不截条", () => {
+  it("candidates 全量行:标题/评级/链接/keyword,不截条(判因不上 UI)", () => {
     const d = stepDetailView(
       step({
         keyword: "龍之家族",
         candidates: [
-          { id: "a", title: "龙之家族 4K 更至10集 最新", grade: "D", reasons: ["标题不匹配目标"] },
+          { id: "a", title: "龙之家族 4K 更至10集 最新", grade: "D", url: "https://pan.example/s/abc" },
           { id: "b", title: "沧元图", grade: "D" },
         ],
       }),
@@ -59,9 +59,10 @@ describe("stepDetailView — 结构化证据行(§23)", () => {
     expect(d.rows[0]).toEqual({
       title: "龙之家族 4K 更至10集 最新",
       grade: "D",
-      reasons: ["标题不匹配目标"],
+      url: "https://pan.example/s/abc",
     });
-    expect(d.rows[1]?.reasons).toEqual([]);
+    // 无 url 的候选不带 url 字段(exactOptionalPropertyTypes)。
+    expect(d.rows[1]).toEqual({ title: "沧元图", grade: "D" });
   });
 
   it("files 行直出;_truncated/无关 args → null(组件回退一行摘要)", () => {
@@ -72,5 +73,38 @@ describe("stepDetailView — 结构化证据行(§23)", () => {
     expect(stepDetailView(step({ _truncated: true, candidates: [{ title: "x" }] }))).toBeNull();
     expect(stepDetailView(step({ renames: [{ newName: "A.mkv" }] }))).toBeNull();
     expect(stepDetailView(step({}))).toBeNull();
+  });
+
+  it("AI 集数映射(mapping)逐条分行——扩 files 行渲染,不再挤一行", () => {
+    expect(stepDetailView(step({ mapping: [
+      { file: "01.mkv", code: "S01E01" },
+      { file: "02.mkv", code: "S01E02" },
+    ] }))).toEqual({
+      kind: "files",
+      rows: ["01.mkv → S01E01", "02.mkv → S01E02"],
+    });
+    expect(stepDetailView(step({ mapping: [] }))).toBeNull();
+  });
+});
+describe("B6(issue #29)紧凑集号/AI 映射消费", () => {
+  function st(args: Record<string, unknown>): ActivityStepView {
+    return { ordinal: 1, toolName: "stagingDigest", activity: "a", phase: "verify", at: "2026-09-01T00:00:00Z", args, stepStatus: "success" };
+  }
+  it("missingCodes {count,sample} → '还缺 N 集'(issue #29 九轮:只报数量,不罗列样本——明细在同卡 files)", () => {
+    const out = stepArgsText(st({ coveredCodes: { count: 1, sample: ["S02E06"] }, missingCodes: { count: 2, sample: ["S02E19", "S02E20"] } }));
+    expect(out).toBe("还缺 2 集 · 已有 1 集");
+    expect(out).not.toContain("S02E19");
+  });
+  it("coveredCodes {count:0} → null(无遗漏,不显示)", () => {
+    expect(stepArgsText(st({ coveredCodes: { count: 0, sample: [] }, missingCodes: { count: 0, sample: [] } }))).toBeNull();
+  });
+  it("mapping compact → 'AI 映射: file → code'", () => {
+    const out = stepArgsText(st({ aiUsed: true, mapping: [{ file: "01.mp4", code: "S02E19" }] }));
+    expect(out).toContain("AI 映射");
+    expect(out).toContain("S02E19");
+  });
+  it("老形状数组 coveredCodes 兼容", () => {
+    const out = stepArgsText(st({ coveredCodes: ["S02E06"], missingCodes: [] }));
+    expect(out).toContain("命中 1 集");
   });
 });

@@ -33,6 +33,19 @@ function textModel(text: string) {
   });
 }
 
+/** Model returning a scripted sequence of texts, one per doGenerate call. */
+function sequentialModel(texts: string[]) {
+  let i = 0;
+  return new MockLanguageModelV3({
+    doGenerate: async () => ({
+      content: [{ type: "text" as const, text: texts[i++] ?? texts[texts.length - 1]! }],
+      finishReason: { unified: "stop" as const, raw: "stop" as const },
+      usage: USAGE,
+      warnings: [],
+    }),
+  });
+}
+
 /** A model that THROWS if invoked — proves the happy path never calls the LLM. */
 function throwModel() {
   return new MockLanguageModelV3({
@@ -188,13 +201,20 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
       },
     });
 
+    const organizers: string[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
       model: textModel('{"action":"accept","reasoning":"预告片不影响正片"}'),
       target: movieTarget,
+      onProgress: (e) => {
+        if (e.toolName === "finalizeLanding") organizers.push(e.activity ?? "");
+      },
     });
 
     expect(result.escalated).toBe(true);
+    // issue #29 复核:movie accept 分支也必须 emit 归位步骤(flatten 执行了,UI 要可见)。
+    expect(organizers.length).toBe(1);
+    expect(organizers[0]).toContain("归位到媒体库");
     expect(result.coverage.coverageMet).toBe(true);
     // Only the largest video (the film) survives; the trailer + wrapper are gone.
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
@@ -436,7 +456,7 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     ]);
   });
 
-  it("标题搜索无唯一 A（两个 A 平级）时用 aliases 兜底（movie twin），命中唯一 A 直接盲转", async () => {
+  it("primary 有 A(非唯一)→ 先在 primary 池仲裁转存,不提前跳兜底(movie twin,PR #25)", async () => {
     let searches = 0;
     const fallbackMovieTarget: MovieTarget = {
       ...movieTarget,
@@ -445,13 +465,13 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     const { sandbox, movieDir, storage } = await createMovieSetup({
       candidates: [
         { id: "c1", title: "流浪地球.2019.4K" },
-        { id: "c2", title: "流浪地球.2019.1080p" }, // 两个 A → 无唯一 top → 触发兜底
+        { id: "c2", title: "流浪地球.2019.1080p" }, // 两个 A → 无唯一 top → primary 池仲裁
       ],
       extraResults: {
         "the wandering earth": [{ id: "c3", title: "The Wandering Earth.2019.4K" }],
       },
       packs: {
-        c3: { files: [{ path: "The Wandering Earth.2019.4K.mkv", sizeBytes: 2_000_000_000 }] },
+        c1: { files: [{ path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 }] },
       },
       onSearch: () => {
         searches += 1;
@@ -460,14 +480,15 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
 
     const result = await runMovieFastPathAcquisition({
       sandbox,
-      model: throwModel(),
+      model: textModel('{"candidateId":"c1","reasoning":"4K 优先"}'),
       target: fallbackMovieTarget,
     });
 
-    expect(result.escalated).toBe(false);
+    // PR #25:primary 有 A → 先自己仲裁转存;aliases 兜底只在无 A 或转存失败后才启动。
+    expect(result.escalated).toBe(true); // primary 池仲裁
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["MOVIE"]);
-    expect(searches).toBe(2);
+    expect(searches).toBe(1); // 只有 primary 预搜,兜底没触发
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);
@@ -583,7 +604,7 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect(searches.length).toBe(1); // 无兜底
   });
 
-  it("兜底全失败且 primary 有候选 → 恢复 primary 快照继续仲裁(movie twin)", async () => {
+  it("兜底全失败且 primary 有候选 → 恢复 primary 快照继续 AI 选择(movie twin)", async () => {
     const { sandbox, movieDir, storage, aliasTarget, searches } = await createMovieAliasSetup({
       results: {
         流浪地球: [
@@ -608,6 +629,68 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       "流浪地球 (2019).mkv",
     ]);
     expect(searches.length).toBe(2); // 1 primary + 1 兜底;恢复 primary 零额外搜索
+  });
+
+  it("PR #25 预算分开:primary 烧满 3/3 转存预算后,兜底池仍用自己的配额转存成功(movie twin)", async () => {
+    // primary 三个 A(c1/c2/c3)全部落「非单部正片/脏包」(两张视频碟)→ 诊断 reject_other
+    // 逐个换,primary 转存预算 **真烧满 3/3**(旧共享预算:烧完就没配额了,兜底无法再转) →
+    // 兜底池启动,兜底搜到唯一 A(c4) → 用兜底**独立**的 3 次配额盲转成功。
+    // 核心不变量:primary 试穷不挤占兜底配额。
+    const { sandbox, movieDir, storage, aliasTarget, searches } = await createMovieAliasSetup({
+      results: {
+        流浪地球: [
+          { id: "c1", title: "流浪地球.2019.4K.中字" },
+          { id: "c2", title: "流浪地球.2019.1080P.中字" },
+          { id: "c3", title: "流浪地球.2019.BluRay.中字" }, // 三个 A → primary 仲裁
+        ],
+        "The Wandering Earth": [{ id: "c4", title: "The Wandering Earth.2019.4K.中字" }], // 兜底唯一 A
+      },
+      packs: {
+        // c1/c2/c3 都落成「非单部正片/脏包」(两张视频碟)→ 诊断 reject_other → primary 试尽
+        c1: {
+          files: [
+            { path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 },
+            { path: "流浪地球.2019.4K.Extra.mkv", sizeBytes: 1_000_000_000 },
+          ],
+        },
+        c2: {
+          files: [
+            { path: "流浪地球.2019.1080p.mkv", sizeBytes: 2_000_000_000 },
+            { path: "流浪地球.2019.1080p.Extra.mkv", sizeBytes: 1_000_000_000 },
+          ],
+        },
+        c3: {
+          files: [
+            { path: "流浪地球.2019.BluRay.mkv", sizeBytes: 2_000_000_000 },
+            { path: "流浪地球.2019.BluRay.Extra.mkv", sizeBytes: 1_000_000_000 },
+          ],
+        },
+        c4: { files: [{ path: "The Wandering Earth.2019.4K.mkv", sizeBytes: 2_000_000_000 }] },
+      },
+      aliases: ["The Wandering Earth"],
+    });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: sequentialModel([
+        '{"candidateId":"c1","reasoning":"选 c1"}', // 选片仲裁(primary 三 A)
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c1 → c2
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c2 → c3
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c3 → 试尽 → 兜底
+      ]),
+      target: aliasTarget,
+    });
+
+    // P2-R1:primary 优先的鉴别力——新流程必经 primary 选片仲裁(escalated=true);
+    // 旧实现直接兜底盲转唯一 A(零 LLM,escalated=false),此断言对旧实现必失败。
+    expect(result.escalated).toBe(true);
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual(["MOVIE"]);
+    // 兜底池独立预算:primary 3/3 全废后兜底仍转成 c4。
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+    expect(searches.length).toBe(2); // primary 预搜 1 + 兜底重搜 1
   });
 });
 
@@ -653,7 +736,8 @@ describe("runMovieFastPathAcquisition — 步骤写入 agent_steps（Task D）",
     // activity = stepLog 的 detail;序号连续;markObtained 的 MOVIE sentinel 不污染计数
     expect(steps.map((s) => s.ordinal)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     expect(steps[1]!.activity).toBe("候选 1 条");
-    expect(steps[7]!.activity).toBe("入库(MOVIE)");
+    // issue #29 用户拍板:finish 人话化。
+    expect(steps[7]!.activity).toBe("完成:影片已入库");
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);

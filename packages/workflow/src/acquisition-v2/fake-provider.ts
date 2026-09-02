@@ -15,6 +15,8 @@ import type { MergedSourceHealth } from "../resource-source-health.js";
 export interface SimResourceCandidate {
   id: string;
   title: string;
+  /** 分享链接(fake 可带,测试构造可用;真实 adapter 从 providerPayload.url 透传)。 */
+  url?: string;
 }
 
 export interface ResourceSnapshotV2 {

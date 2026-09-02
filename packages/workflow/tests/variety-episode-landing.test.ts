@@ -293,10 +293,9 @@ describe("fast-path 回放 — 2026-08-30 中餐厅 S10E11", () => {
     });
     const result = await runFastPathAcquisition({
       sandbox,
-      model: sequentialModel([
-        '{"mapping":{},"unmapped":[],"reasoning":"无需映射"}',
-        '{"action":"accept","reasoning":"目标集已在包内,花絮忽略"}',
-      ]),
+      // need(S10E11)已被代码解析覆盖 → 不再触发 AI 集数映射(2026-08-31 起仅在
+      // 代码解析未覆盖缺集时调用),脏包直接走诊断仲裁 accept。
+      model: sequentialModel(['{"action":"accept","reasoning":"目标集已在包内,花絮忽略"}']),
       target: zctTarget,
       isChineseNative: true,
     });

@@ -1,15 +1,18 @@
 import type { LanguageModel } from "ai";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
-import { arbitrateDiagnosis, arbitrateEpisodeMapping } from "../../acquisition-v2/arbitrator.js";
+import { arbitrateEpisodeMapping } from "../../acquisition-v2/arbitrator.js";
 import { finalizeLanding } from "../../acquisition-v2/finalize-landing.js";
-import { digestStaging, type StagingDigest } from "../../acquisition-v2/staging-digest.js";
+import { digestStaging, digestTitle, type StagingDigest } from "../../acquisition-v2/staging-digest.js";
 import { normalizeSearchKeyword } from "../../planning-search-gate.js";
 import type { AgentToolEvent } from "../../acquisition-v2/activity.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import type { TvAnimeTarget } from "../../acquisition-v2/task-agents.js";
 import { MAX_DEAD_LINK_RETRIES, MAX_FALLBACK_SEARCHES } from "./budgets.js";
 import {
+  compactCodeList,
+  compactMapping,
   concludeUncovered,
+  pushWithinBudget,
   emitStep,
   evidenceDigestLine,
   gradeDistribution,
@@ -34,10 +37,10 @@ import {
  *   - "passed": 映射重建 digest 通过 → 调用方应像干净落地一样 finalize;
  *   - "unmapped-but-clean": 映射唯一且合法,但重建后不覆盖 need → 不是脏包,
  *     换下一个候选;
- *   - "no" / "failed": 无 unparsed、非单季、映射失败或校验不通过 → 走诊断仲裁。
+ *   - "no" / "failed": 非单季、代码已覆盖全部缺集、或映射失败/校验不通过 → 走诊断仲裁。
  *
  * 校验规则(代码,不信任 AI 输出):
- *   1. 文件名必须在本次落盘的 unparsed 清单里(防幻觉文件名);
+ *   1. 文件名必须在本次落盘的全部视频清单里(防幻觉文件名);
  *   2. code 必须 SxxExx 形状且季与任务匹配(单季任务强制赛季一致);
  *   3. 一个集数最多被映射一次(冲突 → 整体放弃该映射,回落仲裁);
  *   4. 映射后的文件必须落在任务的 need/已收集范围内(防 AI 编造不存在的集数)。
@@ -57,32 +60,62 @@ export async function tryEpisodeMapping(options: {
   onMapping?: (clean: Record<string, string>) => void;
   /** 必填但可为 undefined — 便于 exactOptionalPropertyTypes 下直接传 FastPathOptions.onProgress */
   onProgress: ((event: AgentToolEvent) => void) | undefined;
+  /** TMDB 各集播出日(SxxExx → "YYYY-MM-DD")。用于给 AI 推导真实集数范围:
+   * 综艺「第N期」在 TMDB 可能一节拆多集(第10期= E19/E20 而非 E10),机械 E(N)
+   * 会系统性错位;把全部落盘文件交 AI 重映射时,知道整季真实集号范围才能对齐。 */
+  episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")—— ram 重建 digest 时透传给
+   *  episodeCodeFromFileName 做「第N期」Part 锚定(与年守卫同源)。 */
+  episodeNames?: Record<string, string>;
 }): Promise<"passed" | "unmapped-but-clean" | "no" | "failed"> {
   const { digest } = options;
-  // 仅 TV 单季且有 unparsed 视频才值得让 AI 映射;movie / 多季 / 无 unparsed → no.
-  if (
-    options.seasons.length !== 1 ||
-    digest.unparsedVideos.length === 0 ||
-    digest.unparsedVideos.every((name) => /(sample|样本|广告|花絮|预告|trailer)/i.test(name))
-  ) {
+  // 仅 TV 单季值得让 AI 映射;movie / 多季 → no。
+  if (options.seasons.length !== 1) {
     return "no";
   }
 
-  const model = options.model;
-  const unparsed = digest.unparsedVideos.filter((n) => !/(sample|样本|广告|花絮|预告|trailer)/i.test(n));
-  if (unparsed.length === 0) return "no";
+  // ★ 触发条件(2026-08-31 地球超新鲜案修正):不再要求「有 unparsed 才让 AI」——
+  // 代码解析可能**错误**(综艺「第N期」被机械解析成 SxxEN,而 TMDB 一期拆多集时
+  // 第10期 = E19 而非 E10),解析结果不覆盖 need 时就把**全部视频文件**交给 AI
+  // 重新判断,而不是只给「代码解析失败名单」(那样第10期·正片永远从 AI 视野消失)。
+  const needSet = new Set(options.needCodes);
+  const codeParsedAllNeeds = options.needCodes.every((code) => digest.episodeCodes.includes(code));
+  if (codeParsedAllNeeds) {
+    return "no"; // 代码已覆盖全部缺集 → 无需 AI。
+  }
 
-  const knownRange = computeKnownEpisodeRange(options.needCodes);
+  const model = options.model;
+  // AI 看到的文件 = 全部落盘视频(含代码"已解析"的)减去确认的衍生内容
+  // (彩蛋/直拍/加更/预告/广告等——它们本就不该有集号,交给 AI 只会浪费 token)。
+  const DERIVATIVE = /(sample|样本|广告|花絮|预告|trailer|彩蛋|直拍|加更|幕后|专访|宣传|前瞻|总宣|花絮|特辑)/i;
+  const allFiles = digest.videos
+    .map((v) => v.path.split("/").pop() ?? v.path)
+    .filter((name) => !DERIVATIVE.test(name));
+  if (allFiles.length === 0) {
+    return "no"; // 全是衍生内容 → 无正片可映射。
+  }
+
+  // 真实集数范围:优先从 TMDB 播出日表推导(E# 的最大值),没有则退回 needCodes。
+  const airRanges = options.episodeAirDates
+    ? Object.keys(options.episodeAirDates)
+        .map((code) => /^S\d{2}E(\d{1,4})$/.exec(code)?.[1])
+        .map((n) => (n ? Number(n) : NaN))
+        .filter((n) => !Number.isNaN(n))
+    : [];
+  const knownRange =
+    airRanges.length > 0
+      ? { min: 1, max: Math.max(...airRanges) }
+      : computeKnownEpisodeRange(options.needCodes);
   const arbitration = await arbitrateEpisodeMapping({
     model,
-    unparsedFiles: unparsed,
+    unparsedFiles: allFiles,
     title: options.targetTitle,
     seasons: options.seasons,
     knownEpisodeRange: knownRange,
   });
 
   // 校验映射(代码,不信任 AI)。
-  const allowed = new Set(unparsed);
+  const allowed = new Set(allFiles);
   const seenCodes = new Set<string>();
   const clean: Record<string, string> = {};
   let valid = true;
@@ -95,13 +128,32 @@ export async function tryEpisodeMapping(options: {
       valid = false;
       break;
     }
+    // ★ 期号一致性校验(2026-08-31 地球超新鲜假集号案修复):AI 可能把不存在的期硬
+    // 安上最新集号(S02E19/E20)迎合 need。当有 episodeNames(TMDB 每集原始 name)时
+    // 反查该集号对应的期号 N(TMDB name "Episode N");若文件名里有「第M期」且 M≠N,
+    // 说明文件与集号对不上 → 该条映射不采信(整表作废,回落诊断仲裁)。
+    if (options.episodeNames) {
+      const filePeriod = /第\s*(\d{1,4})\s*期/.exec(fileName)?.[1];
+      const tmdbName = options.episodeNames[code];
+      const tmdbPeriod = tmdbName ? /Episode\s*(\d{1,4})\b/i.exec(tmdbName)?.[1] : undefined;
+      if (
+        filePeriod !== undefined &&
+        tmdbPeriod !== undefined &&
+        Number(filePeriod) !== Number(tmdbPeriod)
+      ) {
+        const mismatch = `映射期号不符:${fileName}(第${filePeriod}期) → ${code}(TMDB Episode ${tmdbPeriod})`;
+        stepLog(options.sandbox, options.targetTitle, "集数映射", mismatch, "warn");
+        valid = false;
+        break;
+      }
+    }
     seenCodes.add(code);
     clean[fileName] = code;
   }
   if (!valid) {
-    const failDetail = `集数映射校验失败(文件名幻觉/集数冲突),回落诊断仲裁`;
+    const failDetail = `AI 补认结果与文件名对不上,交给诊断仲裁`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
-    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail);
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "failed";
   }
 
@@ -116,22 +168,29 @@ export async function tryEpisodeMapping(options: {
   const re = options.ram(clean);
   options.onDigest(re);
   if (re.passes) {
-    const mapDetail = `集数映射 ${Object.entries(clean).length} 个文件 → ${Object.values(clean).join(",")},重建 digest 通过`;
+        // issue #29 用户反馈:人话——AI 根据文件名补认了哪些集,结果如何。
+    // review REQUEST_CHANGES ①:coveredCodes 是代码+AI 合并口径,混源包会把代码功劳
+    // 记在 AI 头上(AI 只认 3 集却报「AI 识别出 20 集」)——统一用 AI 有效映射数。
+    const mapDetail = `AI 识别出 ${Object.keys(clean).length} 集,目标集数已齐`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "log");
-    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail);
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "passed";
   }
   if (re.episodeCodes.length > 0 && !re.isDirtyPack) {
     // 映射上了但没覆盖 need(例如映射出的是别的集数)—— 回收干净但无用。
-    const mapDetail = `集数映射生效但未覆盖目标(${re.episodeCodes.join(",")}),丢弃换候选`;
+    const mapDetail = `AI 识别出 ${Object.keys(clean).length} 集,没有覆盖目标集数,丢弃换候选`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "warn");
-    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail);
+    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "unmapped-but-clean";
   }
-  // 重建后仍脏(映射不完整/失败) → 回落诊断仲裁。
-  const failDetail = `集数映射后仍不通过(${re.summary.split("\n").join(" / ")}),回落诊断仲裁`;
+  // 重建后仍脏(映射不完整/失败)。issue #29 用户拍板(八轮):不需要再让 AI 判断
+  // 「收不收」——需要的集数 vs 识别出的集数一对比就知道:全覆盖 → 收尾(failed 由
+  // 调用方按 missingCodes 分流);没覆盖 → 换候选。这里如实报覆盖结果即可。
+  // issue #29 用户拍板:title 计数化——AI 识别出 N 集,还有 M 集没认出来;
+  // 明细在下方 mapping 列表逐条展示。
+  const failDetail = `AI 识别出 ${Object.keys(clean).length} 集,还有 ${re.missingCodes.length} 集没认出来`;
   stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
-  emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail);
+  emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
   return "failed";
 }
 
@@ -215,7 +274,8 @@ export async function aliasesFallbackReSearch(input: {
     rounds += 1;
     const roundDetail = `keyword=「${alias}」(第 ${rounds}/${MAX_FALLBACK_SEARCHES} 轮)`;
     stepLog(sandbox, title, "兜底重搜", roundDetail);
-    emitStep(onProgress, "searchResources", "search", roundDetail, { keyword: alias });
+    // issue #29 用户实测:searchResources 与随后的 gradeCandidates 同关键词重复,
+    // activity 只留 gradeCandidates 一条(带命中结果),此步仅留表格排障日志。
     try {
       await sandbox.primeRawSnapshot(alias);
     } catch (error) {
@@ -223,7 +283,6 @@ export async function aliasesFallbackReSearch(input: {
       // next alias (bounded by the budget; a dead source never kills the run).
       const failDetail = `keyword=「${alias}」搜索失败:${error instanceof Error ? error.message : String(error)}`;
       stepLog(sandbox, title, "兜底重搜", failDetail, "warn");
-      emitStep(onProgress, "searchResources", "search", failDetail, { keyword: alias });
       continue;
     }
     const nextView = sandbox.rawSnapshotView();
@@ -233,16 +292,21 @@ export async function aliasesFallbackReSearch(input: {
     currentGrading = grade(nextView.candidates);
     const gradeDetail = `keyword=「${alias}」命中=${nextView.candidates.length} ${
       currentGrading.uniqueTopGrade
-        ? `唯一A级 top=${currentGrading.top?.id}(${currentGrading.top?.title})`
+        ? `唯一 A 级《${currentGrading.top?.title}》` // issue #29 铁律①:候选 ID 全链不上 UI,只留标题。
         : gradeDistribution(currentGrading)
     }`;
     stepLog(sandbox, title, "兜底评分", gradeDetail);
     if (currentGrading.ranked.length > 0) {
       stepLog(sandbox, title, "兜底命中", evidenceDigestLine(currentGrading));
     }
+    // issue #29:兜底轮是不同关键词的搜索结果(信息价值),保留列表并补链接保持全链可点。
+    const roundUrlById: Record<string, string> = {};
+    for (const c of nextView.candidates) {
+      if (c.url) roundUrlById[c.id] = c.url;
+    }
     emitStep(onProgress, "gradeCandidates", "search", gradeDetail, {
       keyword: alias,
-      candidates: gradedCandidateEvidence(currentGrading),
+      candidates: gradedCandidateEvidence(currentGrading, roundUrlById),
     });
     if (nextView.candidates.length > 0 && currentGrading.uniqueTopGrade) {
       foundUniqueA = true;
@@ -278,9 +342,9 @@ export async function aliasesFallbackReSearch(input: {
     if (merged.length > 0) {
       const mergedView: EvidenceView = { snapshotId: view.snapshotId, candidates: merged, candidateSnapshots };
       const mergedGrading = grade(merged);
-      const restoreDetail = `全部兜底无唯一 A,合并证据池(primary ${primaryCount} + 兜底 ${fallbackCount})继续仲裁`;
+      const restoreDetail = `兜底耗尽,合并证据池(primary ${primaryCount} + 兜底 ${fallbackCount})`;
       stepLog(sandbox, title, "兜底重搜", restoreDetail);
-      emitStep(onProgress, "gradeCandidates", "search", restoreDetail);
+      // issue #29 用户实测:合并证据池不单独成步(与随后的兜底评分重复),交给调用方一条带出。
       return { view: mergedView, grading: mergedGrading, rounds, restored: true };
     }
   }
@@ -325,6 +389,8 @@ export async function closeOutTvLanding(options: {
   onDiskCodes: Set<string>;
   /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD",可缺省)—— digest/finalize 共用的年守卫数据。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")——「第N期」Part 锚定数据。 */
+  episodeNames?: Record<string, string>;
   grading: ReturnType<typeof gradeCandidates>;
   tried: Set<string>;
   attempted: Set<string>;
@@ -357,7 +423,12 @@ export async function closeOutTvLanding(options: {
       stepLog(sandbox, target.title, "转存失败", blockDetail, "error");
       const doneDetail = `失败(系统阻塞:${transfer.systemicBlock.reason})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "transferCandidate", "transfer", blockDetail);
+      // issue #29 A3:systemic 也是转存轮事件,补 round 防前端误判为老数据序号卡。
+      emitStep(onProgress, "transferCandidate", "transfer", blockDetail, {
+        candidateId: current,
+        round: attempted.size + 1,
+        decidedBy: grading.uniqueTopGrade ? "code" : "ai",
+      });
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return { verdict: "systemic", done: {
         text: `系统阻塞:${transfer.systemicBlock.reason}`,
@@ -372,10 +443,17 @@ export async function closeOutTvLanding(options: {
     if (transfer.staging.length === 0) {
       deadRetries += 1;
       const next = nextCandidate(grading, tried);
-      const deadDetail = `候选 ${current} 死链(未落盘)${next ? `,死链重试换候选 ${next}(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",无下一候选"}`;
+      // issue #29:死链提示不显示候选 ID(AI 补认也可来自 grading.ranked 标题;找不到退「该候选」)。
+      const deadTitle = grading.ranked.find((c) => c.id === current)?.title ?? "该候选";
+      const deadDetail = `《${deadTitle}》死链(转存未落盘)${next ? `,重试换一条候选(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",没有可换的"}`;
       stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
-      emitStep(onProgress, "transferCandidate", "transfer", deadDetail, { candidateId: current });
-      const probeDetail = `候选 ${current} 转存返回 0 个落盘文件 → 判死链(探测第 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} 次,不占 3 次转存预算)${next ? "" : ";池内无下一候选"}`;
+      // issue #29 A3:dead 探针也归当前轮。
+      emitStep(onProgress, "transferCandidate", "transfer", deadDetail, {
+        candidateId: current,
+        round: attempted.size + 1,
+        decidedBy: grading.uniqueTopGrade ? "code" : "ai",
+      });
+      const probeDetail = `该候选转存返回 0 个落盘文件 → 判死链(探测第 ${deadRetries}/${MAX_DEAD_LINK_RETRIES} 次,不占转存预算)${next ? "" : ";池内无下一候选"}`;
       stepLog(sandbox, target.title, "死链探测", probeDetail, "warn");
       return { verdict: "dead", done: null, next, escalated, deadRetries };
     }
@@ -387,10 +465,14 @@ export async function closeOutTvLanding(options: {
       seasons,
       needCodes,
       ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+      ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
     });
-    const digestDetail = digest.passes
-      ? `干净落地,覆盖 ${digest.coveredCodes.join(",") || "-"}`
-      : `未通过(${digest.isDirtyPack ? "脏包" : "未覆盖目标"}):${digest.summary.split("\n").join(" / ")}`;
+    // issue #29 用户反馈:activity 人话化——直接复用 summarizeDigest 的人话结论
+    // (pass=「转存内容已识别…」/ fail=「识别出…还缺…」),与 args 的 missingCodes 一致,
+    // 不再自造「转存内容完整」双源文案(部分覆盖时曾谎报完整,复核揪出)。
+    // issue #29 用户拍板:title 计数化(代码识别出 N 集,还差 M 集);
+    // 明细在 digestFiles 步骤逐条展示。LLM 诊断仍用 digest.summary(富信息)。
+    const digestDetail = digestTitle(digest);
     stepLog(
       sandbox,
       target.title,
@@ -398,11 +480,25 @@ export async function closeOutTvLanding(options: {
       digestDetail,
       digest.passes ? "log" : "warn",
     );
-    emitStep(onProgress, "stagingDigest", "verify", digestDetail);
+    // issue #29:digest 步骤结构化证据(卡片化判定)。videoCount=落盘视频文件数;
+    // passes/coveredCodes/missingCodes 给前端红绿判定与「还缺什么」。
     const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates);
+    // issue #29 用户拍板(九轮):逐文件明细并入 stagingDigest 一张卡——不再单独
+    // emit「digestFiles 逐文件识别 N 条」步骤(标题+明细一张卡,无需两个步骤)。
+    const argsFiles = pushWithinBudget<string>([], parseRows, 1300);
+    emitStep(onProgress, "stagingDigest", "verify", digestDetail, {
+      passes: digest.passes,
+      videoCount: transfer.staging.length,
+      // issue #29 预算化(A1):长篇动漫整包入库 covered/missing 可达 100+,直接平铺会触发
+      // agent-trace-sink 的 2000 字符整体塌缩 → passes/round 一起丢。改发 count + 前 N 项。
+      coveredCodes: compactCodeList(digest.coveredCodes),
+      missingCodes: compactCodeList(digest.missingCodes),
+      // 逐文件解析明细(原 digestFiles 步骤内容,合并进来一张卡)。
+      ...(argsFiles.length > 0 ? { files: argsFiles } : {}),
+      round: attempted.size,
+    });
     if (parseRows.length > 0) {
       stepLog(sandbox, target.title, "解析明细", parseRows.join(" / "));
-      emitStep(onProgress, "digestFiles", "verify", `逐文件解析 ${parseRows.length} 条`, { files: parseRows });
     }
     {
       const candidate = grading.ranked.find((c) => c.id === current);
@@ -435,15 +531,24 @@ export async function closeOutTvLanding(options: {
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
         });
         const skipNote =
+          // 九轮复核:与归位去集号一致——已在库/非缺集跳过的明细都在 args.files。
           (finalized.skippedOnDisk.length > 0
-            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集(${finalized.skippedOnDisk.sort().join(",")})`
+            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集`
             : "") +
           (finalized.skippedNotNeeded.length > 0
             ? ` / 非缺集跳过 ${finalized.skippedNotNeeded.length} 件`
             : "");
-        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
+                // issue #29 用户反馈:finalizeLanding 是「真正落到网盘」的一步(rename→move→mark),
+        // 文案点明归位到 Season 目录 + 结果,不再用「标记/移动/清理」割裂的内部词。
+        // issue #29 用户拍板(九轮):归位标题不罗列集号(下方 rename 明细逐条有),只报数量。
+        const organizeDetail = `归位到 Season 目录${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
-        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
+        // issue #29 实测:归位步骤展示 rename 明细(原名 → 规范名),预算内截断。
+        const renameRows = finalized.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, {
+          ok: true,
+          files: pushWithinBudget<string>([], renameRows, 1300),
+        });
       } catch (error) {
         // A rename/move guard refused, or storage failed mid-landing — nothing was
         // reliably placed. Wipe staging and surface honest no-coverage (never a
@@ -455,7 +560,7 @@ export async function closeOutTvLanding(options: {
         }
         const organizeFailDetail = error instanceof Error ? error.message : String(error);
         stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
-        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
         const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
         stepLog(sandbox, target.title, "结论", doneDetail);
         emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
@@ -466,7 +571,8 @@ export async function closeOutTvLanding(options: {
           reason: error instanceof Error ? error.message : String(error),
         }), next: null, escalated, deadRetries };
       }
-      const doneDetail = `入库(obtained=${digest.coveredCodes.join(",") || "-"})`;
+            // issue #29 用户反馈:finish 人话——不再「入库(obtained=…)」,直接说收到了哪几集。
+      const doneDetail = `已完成:${digest.coveredCodes.join(",") || "-"} 已入库`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return { verdict: "clean", done: {
@@ -485,7 +591,11 @@ export async function closeOutTvLanding(options: {
     // pack land like a clean digest (zero further LLM decisions); a failed or
     // partial mapping falls through to the diagnostic arbitrator.
     // Movie landings never map episodes — they go straight to the movie diagnosis.
-    escalated = true;
+    // issue #29 八轮复核:escalated 不再在映射前预置 true(之前会虚增 aiEscalated——
+    // tryEpisodeMapping 的 "no" 返回:多季/代码已全覆盖/全衍生文件不调 AI)。置位推迟到
+    // 确认 AI 参与过的分支出口(passed/unmapped-but-clean/failed)。注意:绝不能在这里
+    // 赋 false——options.escalated 可能已带选片仲裁(AI 挑候选)置的 true(第二轮复核
+    // 揪出),覆盖会清掉全程累计 AI 历史 → runCheckout 谎报「零 AI 介入」。
     let landingDigest = digest;
     let mappingTable: Record<string, string> | undefined;
     const mappingEscalated = await tryEpisodeMapping({
@@ -495,6 +605,8 @@ export async function closeOutTvLanding(options: {
       seasons,
       targetTitle: target.title,
       needCodes,
+      ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+      ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
       ram: (overrides) =>
         digestStaging({
           files: transfer.staging,
@@ -502,6 +614,7 @@ export async function closeOutTvLanding(options: {
           needCodes,
           overrides,
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+          ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
         }),
       onDigest: (d) => {
         landingDigest = d;
@@ -525,15 +638,23 @@ export async function closeOutTvLanding(options: {
           ...(mappingTable ? { overrides: mappingTable } : {}),
         });
         const skipNote =
+          // 九轮复核:与归位去集号一致——已在库/非缺集跳过的明细都在 args.files。
           (finalized.skippedOnDisk.length > 0
-            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集(${finalized.skippedOnDisk.sort().join(",")})`
+            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集`
             : "") +
           (finalized.skippedNotNeeded.length > 0
             ? ` / 非缺集跳过 ${finalized.skippedNotNeeded.length} 件`
             : "");
-        const organizeDetail = `标记 ${finalized.marked.join(",") || "-"} / 移动 ${finalized.movedCount} 文件 / 清理 ${finalized.discarded.length} 文件${skipNote}`;
+        // issue #29:与干净路径(:535)同款人话——归位到 Season 目录(真正落库)。
+        // issue #29 用户拍板(九轮):归位标题不罗列集号(下方 rename 明细逐条有),只报数量。
+        const organizeDetail = `归位到 Season 目录${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
         stepLog(sandbox, target.title, "归位", organizeDetail);
-        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail);
+        // issue #29 实测:与干净路径同款——rename 明细(原名 → 规范名)。
+        const renameRows2 = finalized.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, {
+          ok: true,
+          files: pushWithinBudget<string>([], renameRows2, 1300),
+        });
       } catch (error) {
         try {
           await sandbox.discardStaging();
@@ -542,7 +663,7 @@ export async function closeOutTvLanding(options: {
         }
         const organizeFailDetail = error instanceof Error ? error.message : String(error);
         stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
-        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
         const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
         stepLog(sandbox, target.title, "结论", doneDetail);
         emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
@@ -553,9 +674,11 @@ export async function closeOutTvLanding(options: {
           reason: error instanceof Error ? error.message : String(error),
         }), next: null, escalated, deadRetries };
       }
-      const doneDetail = `入库(集数映射:${landingDigest.coveredCodes.join(",") || "-"})`;
+            // issue #29:人话——AI 补认后这几集已入库。
+      const doneDetail = `已完成:${landingDigest.coveredCodes.join(",") || "-"} 已入库(AI 补认)`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "finish", "finalize", doneDetail);
+      escalated = true; // AI 集数映射参与过
       return { verdict: "mapped_clean", done: {
         text: `集数映射归位:${landingDigest.coveredCodes.join(",") || "-"}`,
         steps: attempted.size,
@@ -570,33 +693,33 @@ export async function closeOutTvLanding(options: {
         await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
       }
       const next = nextCandidate(grading, tried);
-      const retryDetail = `映射未覆盖目标:丢弃当前落地,换候选 ${next ?? "无(终止)"}`;
+      // issue #29:换候选不显示 ID(人话)。
+      const retryDetail = `这轮转存没拿到需要的集:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
       stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail);
+      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size, aiUsed: true });
+      escalated = true; // AI 集数映射参与过(虽未覆盖目标)
       return { verdict: "retry_other", done: null, next, escalated, deadRetries };
     }
 
-    const diagnosis = await arbitrateDiagnosis({
-      model,
-      summary: landingDigest.summary,
-      title: target.title,
-      // 功能4: 把剩余候选按分级喂给诊断仲裁,retry_other 时一次挑出下一个,
-      // 避免每个脏包都重新仲裁(45 候选只试 3 次的教训)。
-      remainingCandidates: grading.ranked.map((c) => ({
-        id: c.id,
-        title: c.title,
-        grade: c.grade,
-      })),
-      triedIds: [...tried],
-    });
-    if (diagnosis.action === "accept") {
+    // issue #29 用户拍板(八轮实测):AI 集数映射后**不再让 AI 判断「收不收」**——
+    // 需要的集数 vs 识别出的集数一对比就知道:全覆盖 → 收尾;没覆盖 → 清掉换候选。
+    // 此前 failed 会升级诊断仲裁再问一次 AI(accept/retry/abandon),纯属多余(此前
+    // 曾出现「AI 识别出 20 集,还有 0 集没认出来,交 AI 处理」的自相矛盾文案——实际
+    // 目标全覆盖却因脏包信号再叫 AI)。现在按 landingDigest.missingCodes 决定。
+    // issue #29 八轮复核:只有 mappingEscalated === "failed" 才是 AI 集数映射真参与过;
+    // "no" 返回(多季/代码已全覆盖/全衍生文件)一次 AI 都没跑,文案不得冒领 AI 归因、
+    // escalated 不得虚增。与 unmapped-but-clean 同源分家。
+    const mappedByAI = mappingEscalated === "failed";
+    if (mappedByAI) {
+      escalated = true;
+    }
+    if (landingDigest.missingCodes.length === 0) {
+      // 目标集全覆盖(可能有杂项/多余文件——finalize 只补 need,多余文件清理/跳过)。
       try {
         // 2026-08-21 bugfix: 必须把 AI 集数映射的 overrides 传给 finalizeLanding ——
-        // 否则纯数字/日漫 fansub 文件名(如 `08.mkv`)在诊断仲裁 accept 后重新用裸
-        // 文件名解析时依然解析不出(S03 任务纯数字规则本就禁猜),文件不 rename/
-        // 不归位/不 mark,最后被 staging wipe 当垃圾清掉 → 日志写"入库"实际没入库。
-        // 与上方 mappingEscalated === "passed" 分支保持一致。
-        await finalizeLanding({
+        // 否则纯数字/日漫 fansub 文件名(如 `08.mkv`)重新用裸文件名解析时依然解析
+        // 不出,文件不 rename/不归位/不 mark,最后被 staging wipe 当垃圾清掉。
+        const arAccept = await finalizeLanding({
           sandbox,
           digest: landingDigest,
           canonicalTitle: target.title,
@@ -606,6 +729,33 @@ export async function closeOutTvLanding(options: {
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
           ...(mappingTable ? { overrides: mappingTable } : {}),
         });
+        // 九轮复核:与归位去集号一致(明细在 files)。
+        const arSkipNote =
+          (arAccept.skippedOnDisk.length > 0
+            ? ` / 已在库跳过 ${arAccept.skippedOnDisk.length} 集`
+            : "") +
+          (arAccept.skippedNotNeeded.length > 0
+            ? ` / 非缺集跳过 ${arAccept.skippedNotNeeded.length} 件`
+            : "");
+        // issue #29 用户拍板(九轮):同上,不罗列集号。
+        const arOrganizeDetail = `归位到 Season 目录${arAccept.movedCount > 0 ? `,移动 ${arAccept.movedCount} 个文件` : ""}${arAccept.discarded.length > 0 ? `,清理 ${arAccept.discarded.length} 个多余文件` : ""}${arSkipNote}`;
+        stepLog(sandbox, target.title, "归位", arOrganizeDetail);
+        const arRenameRows = arAccept.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
+        emitStep(onProgress, "finalizeLanding", "organize", arOrganizeDetail, {
+          ok: true,
+          files: pushWithinBudget<string>([], arRenameRows, 1300),
+        });
+        const acceptCodes = landingDigest.coveredCodes.length > 0 ? landingDigest.coveredCodes.join(",") + " " : "";
+        // 八轮复核:AI 参与过(mappedByAI)才署名「AI 补认」;否则是代码识别直接收尾。
+        const doneDetail = `已完成:${acceptCodes}已入库${mappedByAI ? "(AI 补认)" : ""}`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "finish", "finalize", doneDetail);
+        return { verdict: "accept", done: {
+          text: `${mappedByAI ? "AI 集数映射" : "代码识别"}:目标集已覆盖,已入库`,
+          steps: attempted.size,
+          coverage: await sandbox.finish(),
+          escalated,
+        }, next: null, escalated, deadRetries };
       } catch (error) {
         try {
           await sandbox.discardStaging();
@@ -614,7 +764,7 @@ export async function closeOutTvLanding(options: {
         }
         const organizeFailDetail = error instanceof Error ? error.message : String(error);
         stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
-        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
         const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
         stepLog(sandbox, target.title, "结论", doneDetail);
         emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
@@ -625,47 +775,21 @@ export async function closeOutTvLanding(options: {
           reason: error instanceof Error ? error.message : String(error),
         }), next: null, escalated, deadRetries };
       }
-      const doneDetail = `入库(仲裁 accept:${diagnosis.reasoning})`;
-      stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "finish", "finalize", doneDetail);
-      return { verdict: "accept", done: {
-        text: `仲裁 accept:${diagnosis.reasoning}`,
-        steps: attempted.size,
-        coverage: await sandbox.finish(),
-        escalated,
-      }, next: null, escalated, deadRetries };
     }
-    if (diagnosis.action === "abandon") {
-      await sandbox.discardStaging();
-      const declineDetail = `放弃:${diagnosis.reasoning}`;
-      stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");
-      const doneDetail = `暂无资源(仲裁 abandon:${diagnosis.reasoning})`;
-      stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "arbitrateDiagnosis", "pick", declineDetail);
-      emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
-      return { verdict: "abandon", done: await concludeUncovered(sandbox, {
-        text: `仲裁 abandon:${diagnosis.reasoning}`,
-        steps: attempted.size,
-        escalated,
-        reason: diagnosis.reasoning,
-      }), next: null, escalated, deadRetries };
+    // AI 识别后仍未覆盖全部缺集 → 清掉暂存,机械换下一条候选(与 unmapped-but-clean 同款,
+    // 但不再让 AI 指认下一个——覆盖对比已经说明这包不行,直接试下一条)。
+    {
+      const leftover = await sandbox.inspectStaging();
+      if (leftover.length > 0) {
+        await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
+      }
+      const next = nextCandidate(grading, tried);
+      // 八轮复核:AI 参与过才署「AI 识别」;否则(no 路径)复用 unmapped-but-clean 同款中性文案。
+      const retryDetail = `${mappedByAI ? "AI 识别后仍没拿全缺集" : "这轮转存没拿到需要的集"}:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
+      stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
+      // 九轮复核(第二轮):aiUsed 显式透出——mappedByAI=false 的 no 支(零 AI)不得挂「AI」徽章。
+      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size, ...(mappedByAI ? { aiUsed: true } : { aiUsed: false }) });
+      return { verdict: "retry_other", done: null, next, escalated, deadRetries };
     }
-    // retry_other → clear the bad pack's files (keep the staging dir alive) and
-    // try the next candidate. 功能4: AI 已随仲裁返回 nextCandidateId 就直接用它
-    // (需校验:候选存在、未尝试过),否则才回退机械按序 nextCandidate。
-    const leftover = await sandbox.inspectStaging();
-    if (leftover.length > 0) {
-      await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
-    }
-    const aiNext =
-      diagnosis.nextCandidateId &&
-      grading.ranked.some((c) => c.id === diagnosis.nextCandidateId) &&
-      !tried.has(diagnosis.nextCandidateId)
-        ? diagnosis.nextCandidateId
-        : null;
-    const next = aiNext ?? nextCandidate(grading, tried);
-    const retryDetail = `off-target 重试:丢弃当前落地,换候选 ${next ?? "无(终止)"}${aiNext ? "(仲裁指定)" : ""}`;
-    stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-    emitStep(onProgress, "arbitrateDiagnosis", "pick", retryDetail);
-    return { verdict: "retry_other", done: null, next, escalated, deadRetries };
+
 }

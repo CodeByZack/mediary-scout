@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { digestMovieStaging, digestStaging } from "../src/acquisition-v2/staging-digest.js";
+import { digestMovieStaging, digestStaging, digestTitle } from "../src/acquisition-v2/staging-digest.js";
 import type { SimTreeFile } from "../src/acquisition-v2/storage-115-simulator.js";
 
 function video(name: string, id = name): SimTreeFile {
@@ -154,4 +154,99 @@ describe("digestStaging — overrides (功能2 AI 集数映射)", () => {
     expect(d.coveredCodes).toEqual(["S01E01"]);
     expect(d.missingCodes).toEqual(["S01E02"]);
   });
+});
+describe("digestStaging — 综艺「第N期」Part 锚定(2026-08-31 地球超新鲜案)", () => {
+  const episodeNames = {
+    S01E01: "Episode 1 (Part 1)",
+    S01E02: "Episode 1 (Part 2)",
+    S01E19: "Episode 10 (Part 1)",
+    S01E20: "Episode 10 (Part 2)",
+  } as Record<string, string>;
+
+  it("第10期上→S01E19、第10期下→S01E20(每期拆两集的综艺,机械 E(N) 会错位)", () => {
+    const d = digestStaging({
+      seasons: [1],
+      needCodes: ["S01E19"],
+      episodeNames,
+      files: [
+        video("2026.08.28_第10期上_4K.mp4"),
+        video("2026.08.29_第10期下_4K.mp4"),
+      ],
+    });
+    expect(d.episodeCodes).toEqual(["S01E19", "S01E20"]);
+    expect(d.coveredCodes).toEqual(["S01E19"]);
+  });
+
+  it("无 episodeNames(未配 TMDB 元数据)时回退机械 E(N):第10期→S01E10(旧语义)", () => {
+    const d = digestStaging({
+      seasons: [1],
+      needCodes: ["S01E10"],
+      files: [video("2026.08.28_第10期_4K.mp4")],
+    });
+    expect(d.episodeCodes).toEqual(["S01E10"]);
+  });
+
+  it("有 episodeNames 但该期不在表内 → 回退机械 E(N)(不退化全包 unparsed)", () => {
+    const d = digestStaging({
+      seasons: [1],
+      needCodes: ["S01E11"],
+      episodeNames,
+      files: [video("2026.09.05_第11期_4K.mp4")],
+    });
+    expect(d.episodeCodes).toEqual(["S01E11"]);
+  });
+
+  it("第N期无上/下标记且该期多 part → 取 Part 1(正片主体)", () => {
+    const d = digestStaging({
+      seasons: [1],
+      needCodes: ["S01E19"],
+      episodeNames,
+      files: [video("2026.08.28_第10期_4K.mp4")],
+    });
+    expect(d.episodeCodes).toEqual(["S01E19"]);
+  });
+
+  it("第N期被衍生黑名单挡掉(彩蛋/加更)不参与 Part 锚定", () => {
+    const d = digestStaging({
+      seasons: [1],
+      needCodes: ["S01E19"],
+      episodeNames,
+      files: [video("2026.08.28_第10期彩蛋_4K.mp4")],
+    });
+    // 彩蛋不该有集号
+    expect(d.episodeCodes).toEqual([]);
+    expect(d.unparsedVideos.length).toBe(1);
+  });
+
+
+describe("digestTitle — 活动页标题计数化(issue #29 用户拍板)", () => {
+  it("覆盖全部缺集时:代码识别出 N 集,目标集数已齐", () => {
+    const d = digestStaging({
+      files: [video("狂飙.S01E01.mkv"), video("狂飙.S01E02.mkv"), video("狂飙.S01E03.mkv")],
+      ...tvInput,
+    });
+    expect(digestTitle(d)).toBe("代码识别出 3 集,目标集数已齐");
+  });
+
+  it("部分覆盖:代码识别出 N 集,还有 M 集没认出来(不罗列集号长串)", () => {
+    const d = digestStaging({
+      files: [video("狂飙.S01E01.mkv"), video("S01E01.mkv路径外视频.mkv")],
+      seasons: [1],
+      needCodes: ["S01E01", "S01E02", "S01E03"],
+    });
+    expect(digestTitle(d)).toContain("代码识别出 1 集");
+    expect(digestTitle(d)).toContain("还有 2 集没认出来");
+    expect(digestTitle(d)).not.toContain("S01E02"); // 计数化,不罗列
+  });
+
+  it("零覆盖:代码识别出 0 集 + 看不出集数的文件数", () => {
+    const d = digestStaging({
+      files: [video("20250803-无规则数字.mkv")],
+      seasons: [1],
+      needCodes: ["S01E01"],
+    });
+    expect(digestTitle(d)).toContain("代码识别出 0 集");
+    expect(digestTitle(d)).toContain("1 个文件看不出集数");
+  });
+});
 });

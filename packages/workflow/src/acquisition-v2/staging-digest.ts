@@ -63,6 +63,9 @@ export interface StagingDigestInput {
    *  无法解析)。2026-08-30 中餐厅:「1-10季」合集包实际落的是第九季(2025
    *  日期)文件,在 S10 单季任务下被整包解释成 S10Exx —— 号码对、季份错。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")。综艺「第N期上/下 ↔
+   *  Episode N (Part 1/2)」锚定用(2026-08-31 地球超新鲜案);缺省 = 无锚定。 */
+  episodeNames?: Record<string, string>;
 }
 
 function fileBaseName(file: SimTreeFile): string {
@@ -90,15 +93,16 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
 
   for (const video of videos) {
     const base = fileBaseName(video);
-    const code = overrides[base] ?? episodeCodeFromFileName(base, input.seasons);
-    if (code) {
+    const parsedCode =
+      overrides[base] ?? episodeCodeFromFileName(base, input.seasons, input.episodeNames);
+    if (parsedCode) {
       // 年守卫(issue #21 同族):文件自带日期与该集播出日明显矛盾 → 不采信,
       // 按解析失败处理(宁可少认不乱认;映射表给出的 code 同样过守卫)。
-      if (episodeDateConflict(code, base, input.episodeAirDates)) {
+      if (episodeDateConflict(parsedCode, base, input.episodeAirDates)) {
         dateRejectedVideos.push(base);
         unparsedVideos.push(base);
-      } else if (!episodeCodes.includes(code)) {
-        episodeCodes.push(code);
+      } else if (!episodeCodes.includes(parsedCode)) {
+        episodeCodes.push(parsedCode);
       }
     } else {
       unparsedVideos.push(base);
@@ -121,7 +125,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
 
   const needSet = new Set(input.needCodes);
   const coveredCodes = episodeCodes.filter((code) => needSet.has(code));
-  const missingCodes = input.needCodes.filter((code) => !needSet.has(code) || !episodeCodes.includes(code));
+  const missingCodes = input.needCodes.filter((need) => !needSet.has(need) || !episodeCodes.includes(need));
 
   const hasJunk = junkSignals.length > 0;
   // TV: a video that does not parse to an episode code is junk (sample/花絮/预告
@@ -162,28 +166,48 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
   };
 }
 
+/** 活动页 title 计数版(issue #29 用户拍板):「代码识别出 N 集,还有 M 集没认出来」。
+ *  明细(逐文件/映射表)放在下面步骤里,title 不再罗列集号长串。 */
+export function digestTitle(d: Pick<StagingDigest, "coveredCodes" | "missingCodes" | "episodeCodes" | "unparsedVideos">): string {
+  const covered = d.coveredCodes.length;
+  const missing = d.missingCodes.length;
+  const unparsed = d.unparsedVideos.length;
+  // review minor:三支统一带「另有 N 个文件看不出集数」——目标缺集(unparsed>0 的文件常
+  // 恰是 AI 映射要认的名单)与文件名不可读是两个语义,同句并存信息递增,不冗余。
+  const unparsedNote = unparsed > 0 ? `,另有 ${unparsed} 个文件看不出集数` : "";
+  if (covered > 0 && missing === 0) {
+    return `代码识别出 ${covered} 集,目标集数已齐${unparsedNote}`;
+  }
+  if (covered > 0) {
+    return `代码识别出 ${covered} 集,还有 ${missing} 集没认出来${unparsedNote}`;
+  }
+  return `代码识别出 0 集,还有 ${missing} 集没认出来${unparsedNote}`;
+}
+
 function summarizeDigest(d: Omit<StagingDigest, "summary">): string {
-  const lines: string[] = [];
-  lines.push(`视频 ${d.videos.length} 个 / 字幕 ${d.subtitles.length} 个`);
-  if (d.episodeCodes.length > 0) {
-    lines.push(`解析出集数: ${d.episodeCodes.join(", ")}`);
+  // issue #29 用户反馈:不要内部术语(脏包/判定/覆盖目标),写一句人话结论:
+  // 转存后检查 → 认出哪几集 / 有几个文件看不出 / 暂时缺哪几集 / 日期拒收说明。
+  const parts: string[] = [];
+  const known = d.episodeCodes.length > 0 ? d.episodeCodes.join(",") : "无";
+  // 日期拒收的文件不算「看不出集数」(原因不同:文件名有日期但与播出日矛盾)。
+  const unparsedCount = d.unparsedVideos.filter((v) => !d.dateRejectedVideos.includes(v)).length;
+  if (d.passes) {
+    // 部分覆盖(passes 但还有缺集):不写「完整」,如实说认出哪些 + 还缺哪些(避免与 args「还缺 N 集」自相矛盾)。
+    const stillMissing = d.missingCodes.length > 0 ? `,还缺 ${d.missingCodes.join(",")}` : "";
+    parts.push(`转存内容已识别:识别出 ${known}${stillMissing}${d.subtitles.length > 0 ? `,含字幕 ${d.subtitles.length} 个` : ""}`);
+  } else {
+    const unparsedNote = unparsedCount > 0 ? `${unparsedCount} 个文件看不出集数` : "";
+    const missingNote = d.missingCodes.length > 0 ? `,还缺 ${d.missingCodes.join(",")}` : "";
+    parts.push(`识别出 ${known}${unparsedNote ? ",另有 " + unparsedNote + missingNote : missingNote}`);
+    if (d.dateRejectedVideos.length > 0) {
+      // 年守卫:文件自带日期与该集播出日矛盾 → 不采信。保留可见(PR #24 契约,测试断言)。
+      parts.push(`季份日期不符剔除 ${d.dateRejectedVideos.join("、")}`);
+    }
+    if (d.junkSignals.length > 0) {
+      parts.push(`含多余文件(${d.junkSignals.join("、")})`);
+    }
   }
-  if (d.dateRejectedVideos.length > 0) {
-    lines.push(`季份日期不符剔除: ${d.dateRejectedVideos.join(" / ")}`);
-  }
-  if (d.unparsedVideos.length > 0) {
-    lines.push(`无法解析集数的视频: ${d.unparsedVideos.join(" / ")}`);
-  }
-  if (d.outOfSeasonCodes.length > 0) {
-    lines.push(`季外集数: ${d.outOfSeasonCodes.join(", ")}`);
-  }
-  if (d.junkSignals.length > 0) {
-    lines.push(`脏包信号: ${d.junkSignals.join(" / ")}`);
-  }
-  lines.push(`覆盖目标: ${d.coveredCodes.length > 0 ? d.coveredCodes.join(", ") : "无"}`);
-  lines.push(`仍缺: ${d.missingCodes.length > 0 ? d.missingCodes.join(", ") : "无"}`);
-  lines.push(`判定: ${d.passes ? "符合，可归位标记" : d.isDirtyPack ? "脏包，需诊断" : "未覆盖目标，需诊断"}`);
-  return lines.join("\n");
+  return parts.join("；");
 }
 
 /**

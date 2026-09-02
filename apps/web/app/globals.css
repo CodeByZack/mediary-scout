@@ -1342,7 +1342,6 @@ p {
   display: flex;
   flex-direction: column;
   gap: 40px;
-  max-width: 760px;
 }
 
 .feed-day-header {
@@ -3006,6 +3005,71 @@ select.setting-control {
   overflow-y: auto;
 }
 
+
+/* ★ 轮次卡片化(issue #29):转存链路按 round 分组,默认折叠,点开展开该轮步骤。 */
+.act-round-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  padding-left: 70px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-card);
+  /* M5:外层只留一档滚动(卡片内部不再各自滚动,避免三层滚轮链);
+     max-height 由外层容器控制,这里不做内层滚动。 */
+  overflow-y: auto;
+}
+/* M5:例行巡检卡内没有海报列,70px 对齐无意义——收窄回 12px。 */
+.routine-step-list .act-round-list {
+  padding-left: 12px;
+}
+.act-round {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  overflow: hidden;
+  /* M4:--bg-elevated 不存在,改用 --bg-raised(#1f1f1f,比 --bg-card 更暗,卡片与容器同深色系)。 */
+  background: var(--bg-raised);
+}
+.act-round-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.act-round-toggle:hover {
+  /* M4:--bg-hover 不存在,用通用浅灰。 */
+  background: rgba(128, 128, 128, 0.08);
+}
+.act-round-title {
+  font-weight: 600;
+  font-size: 13px;
+  min-width: 0;
+}
+.act-round-meta {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+.act-round-count {
+  font-size: 12px;
+  color: var(--text-soft);
+  margin-left: auto;
+}
+.act-round-body {
+  border-top: 1px solid var(--border-soft);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* M5:去掉内层 max-height/overflow,滚动统一交给外层 .act-round-list。 */
+}
+.act-round-decision .act-round-title, .act-round-closing .act-round-title {
+  color: var(--text-soft);
+  font-weight: 500;
+}
+
+
 .act-step {
   display: flex;
   gap: 8px;
@@ -3038,6 +3102,19 @@ select.setting-control {
 .act-step-activity {
   font-size: 13px;
   font-weight: 600;
+}
+
+.act-step-ai {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  color: var(--bg, #fff);
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  vertical-align: 1px;
 }
 
 .act-step-tool {
@@ -3092,15 +3169,14 @@ select.setting-control {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.act-ev-reason {
-  flex: 0 1 auto;
-  min-width: 0;
-  font-size: 11px;
-  opacity: 0.72;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.act-ev-title.act-ev-link {
+  color: var(--accent, #4c8dff);
 }
+.act-ev-title.act-ev-link:hover {
+  text-decoration: underline;
+}
+
+
 .act-ev-grade {
   flex: none;
   width: 16px;

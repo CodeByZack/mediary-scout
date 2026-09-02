@@ -348,6 +348,8 @@ export function createEpisodeStates(input: {
   latestAiredEpisode: number;
   /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD");缺省的集记 null。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)");缺省 title 回落 Episode N。 */
+  episodeNames?: Record<string, string>;
 }): EpisodeState[] {
   return Array.from({ length: input.totalEpisodes }, (_, index) => {
     const episodeNumber = index + 1;
@@ -356,7 +358,7 @@ export function createEpisodeStates(input: {
       trackedSeasonId: input.trackedSeasonId,
       episodeCode: code,
       airDate: input.episodeAirDates?.[code] ?? null,
-      title: `Episode ${episodeNumber}`,
+      title: input.episodeNames?.[code] ?? `Episode ${episodeNumber}`,
       airStatus: episodeNumber <= input.latestAiredEpisode ? "aired" : "unaired",
       obtained: false,
       metadataStatus: "confirmed",

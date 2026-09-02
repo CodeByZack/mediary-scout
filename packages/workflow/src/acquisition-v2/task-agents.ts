@@ -255,6 +255,8 @@ export interface TvAnimeTarget {
   /** TMDB 各集播出日(SxxExx → "YYYY-MM-DD")。巡检/首采接线方从 episode_states
    *  带过来;fast path 用它做年守卫(digest/finalize 拒收日期与播出日矛盾的集)。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx → "Episode 10 (Part 1)")。综艺 Part 锚定数据。 */
+  episodeNames?: Record<string, string>;
   qualityPreference: string;
 }
 

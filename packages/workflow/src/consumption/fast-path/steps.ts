@@ -66,6 +66,28 @@ export function emitStep(
   }
 }
 
+/** 转存轮次的结构化证据(活动页卡片化,issue #29):前端按 round 分组、
+ *  按 decidedBy/pool/transferIndex/linkUrl/videoCount 渲染一张「本轮转存卡片」。
+ *  逐字保持 activity 文案不变,这些字段只进 args,不改变任何现有输出。 */
+export interface TransferStepMeta {
+  /** 第几轮真实转存(仅转存成功时推进;死链/系统阻塞探针不占 round,共用当前轮号)。 */
+  round: number;
+  /** 候选归属池:primary | fallback。 */
+  pool: "primary" | "fallback";
+  /** 选片决策来源:code=唯一A盲转(零 LLM);ai=仲裁器选片。
+   *  语义 = 本池「初始选片」的决策者。循环第 2+ 次转存若由诊断仲裁 retry_other
+   *  (landing.ts)点名 aiNext 推进,其选片来源是 AI —— 前端可从该轮的
+   *  arbitrateDiagnosis retry_other 事件(带 aiNext 与否)另行标注,本字段不覆盖。 */
+  decidedBy: "code" | "ai";
+  /** 本池内第几次转存(1/3 或 1/1…)。 */
+  transferIndex: number;
+  /** 分享链接(providerPayload.url,stdout 红线:只进 args 不落日志)。 */
+  linkUrl?: string;
+  /** 转存后落盘文件总数(含视频/字幕/nfo;vendor 可能混入非视频,前端展示为「N 个文件」)。 */
+  videoCount?: number;
+}
+
+/** fast path 装配选项。 */
 export interface FastPathOptions {
   sandbox: TaskSandbox;
   model: LanguageModel;
@@ -123,7 +145,7 @@ export function fileBaseName(path: string): string {
 /** agent-trace-sink 对 args JSON >2000 字符整体硬截(_truncated)——证据列表必须自带预算,否则 UI 只会看到「参数过长已省略」。 */
 const EVIDENCE_BUDGET = 1800;
 
-function pushWithinBudget<T>(out: T[], rows: T[], budget = EVIDENCE_BUDGET): T[] {
+export function pushWithinBudget<T>(out: T[], rows: T[], budget = EVIDENCE_BUDGET): T[] {
   let size = 2;
   for (const row of rows) {
     const cost = JSON.stringify(row).length + 1;
@@ -138,6 +160,35 @@ function shortCandidateId(id: string): string {
   return id.length > 28 ? "…" + id.slice(-24) : id;
 }
 
+
+/** 紧凑集号列表(活动页卡片证据):集合过大时只报 count + 前 N 项,防整体超预算。 */
+export function compactCodeList(codes: string[], maxItems = 24): { count: number; sample: string[] } {
+  return { count: codes.length, sample: codes.slice(0, maxItems) };
+}
+
+/** 紧凑 AI 映射表(活动页卡片证据):文件名过长/过多时只保留前 N 条、文件名截断。 */
+export function compactMapping(mapping: Record<string, string>, budget = 1600): Array<{ file: string; code: string }> {
+  // issue #29 用户拍板:去掉旧 12 条硬截断——AI 一次认出 20 集时明细必须全量展示
+  // (否则 UI 只见前 12 条)。但全量必须**接字符预算**(trace sink MAX_ARGS_JSON=2000,
+  // 超限整包 collapse 成 {_truncated:true} → UI 连明细都没了):短文件名季(20-28 集)
+  // 现在可全量,超长季自动停在预算线并追一条「其余 N 条未列」占位,永不过线。
+  const entries = Object.entries(mapping);
+  const out: Array<{ file: string; code: string }> = [];
+  let size = 2;
+  for (const [file, code] of entries) {
+    const row = { file: file.length > 48 ? file.slice(0, 45) + "…" : file, code };
+    const cost = JSON.stringify(row).length + 1;
+    if (size + cost > budget) {
+      const rest = entries.length - out.length;
+      if (rest > 0) out.push({ file: `…其余 ${rest} 条未列`, code: "…" });
+      break;
+    }
+    out.push(row);
+    size += cost;
+  }
+  return out;
+}
+
 interface EvidenceCandidate {
   id: string;
   title: string;
@@ -145,11 +196,14 @@ interface EvidenceCandidate {
   reasons: string[];
   seasons?: number[];
   quality?: string;
+  /** issue #29 用户拍板:分享链接(可选,来自 rawSnapshotView 透传)。 */
+  url?: string;
 }
 
 /** L2 证据 payload(预算化):紧凑评级列表,供活动页展开。 */
 export function gradedCandidateEvidence(
   grading: ReturnType<typeof gradeCandidates>,
+  urlById?: Record<string, string>,
 ): EvidenceCandidate[] {
   const rows = grading.ranked.map((candidate) => ({
     id: shortCandidateId(candidate.id),
@@ -158,6 +212,7 @@ export function gradedCandidateEvidence(
     reasons: candidate.reasons.slice(0, 2).map((reason) => reason.slice(0, 70)),
     ...(candidate.seasonNumbers.length > 0 ? { seasons: candidate.seasonNumbers } : {}),
     ...(candidate.quality !== null ? { quality: candidate.quality } : {}),
+    ...(urlById?.[candidate.id] !== undefined ? { url: urlById[candidate.id] } : {}),
   }));
   return pushWithinBudget([], rows);
 }

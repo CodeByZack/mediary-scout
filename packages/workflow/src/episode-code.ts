@@ -91,7 +91,54 @@ export function episodeDateConflict(
   return Math.abs(t1 - t2) / 86400000 > EPISODE_DATE_TOLERANCE_DAYS;
 }
 
-export function episodeCodeFromFileName(name: string, seasons?: number[]): string | null {
+/**
+ * 综艺「第N期」Part 锚定:期号 N + 上/下标记 → TMDB 集号。
+ * TMDB name 形如 "Episode 10 (Part 1)/Episode 10 (Part 2)"(地球超新鲜一季 20 集,
+ * 每期拆两集),与文件名「第10期上/下」一一对应。无 episodeNames 或期号/part 不在表内
+ * → null(调用方回退机械 E(N))。
+ */
+function anchorVarietyPeriod(
+  name: string,
+  periodStr: string,
+  seasonLabel: string,
+  episodeNames?: Record<string, string>,
+): string | null {
+  if (!episodeNames) return null;
+  const n = Number(periodStr);
+  if (!Number.isFinite(n) || n < 1) return null;
+  // 文件名里的上/下标记(紧贴期号,容忍空格:第10期上 / 第10期 上)。
+  const partOfFile = /第\s*\d{1,4}\s*期\s*([上下])/.exec(name)?.[1] ?? null;
+  // 收集该季里期号 == N 的所有集(TMDB name 匹配 "Episode N ...")。
+  const hits: Array<{ code: string; part: number | null }> = [];
+  for (const [code, tmdbName] of Object.entries(episodeNames)) {
+    const em = /Episode\s*(\d{1,4})\b/i.exec(tmdbName);
+    if (!em || Number(em[1]) !== n) continue;
+    const pm = /\(Part\s*(\d{1,2})\)/i.exec(tmdbName);
+    hits.push({ code, part: pm ? Number(pm[1]) : null });
+  }
+  if (hits.length === 0) return null;
+  if (partOfFile === "上") {
+    const hit = hits.find((h) => h.part === 1) ?? hits[0];
+    return hit ? hit.code : null;
+  }
+  if (partOfFile === "下") {
+    const hit = hits.find((h) => h.part === 2) ?? hits[hits.length - 1];
+    return hit ? hit.code : null;
+  }
+  // 无上/下标记:该期唯一集直接用;多 part 取 Part 1(正片主体)。
+  if (hits.length === 1) return hits[0]!.code;
+  const first = hits.find((h) => h.part === 1);
+  return (first ?? hits[0])!.code;
+}
+
+export function episodeCodeFromFileName(
+  name: string,
+  seasons?: number[],
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")。综艺「第N期上/下」锚定:
+   * 期号 N + Part 一一定位集号,免疫「一期拆多集」的 E(N) 机械错位(地球超新鲜案)。
+   * 缺省 = 无锚定,「第N期」仍按旧机械 E(N) 解析(兼容无 TMDB 数据的部署)。 */
+  episodeNames?: Record<string, string>,
+): string | null {
   // 0. 标准 SxxExx — 自带季信息,始终可解析(与 seasons 上下文无关)。
   //    Episode allows up to 4 digits for 1000+ episode anime (One Piece/柯南/蜡笔小新);
   //    \d{1,3} truncated "E1050" → "E105".
@@ -139,6 +186,20 @@ export function episodeCodeFromFileName(name: string, seasons?: number[]): strin
     if (chineseMatch?.[1] && Number(chineseMatch[1]) <= 9999) {
       const derivativeBlocked = chineseMatch[0].endsWith("期") && VARIETY_DERIVATIVE_MARKER.test(name);
       if (!derivativeBlocked) {
+        // 「第N期」Part 锚定(2026-08-31 地球超新鲜案):综艺一期在 TMDB 可能拆多集
+        // (Episode 10 (Part 1/2) = 第10期上/下),机械 E(N) 会系统性错位。有 episodeNames
+        // 时按「期号 + 上/下标记 → Episode N (Part 1/2)」精确锚定;锚不到(该期不在表
+        // 内/无 part 对应)回退机械 E(N)(表缺失场景仍是旧语义,宁可过解析也不退化为
+        // 全包 unparsed 的旧中餐厅问题)。
+        const anchored = anchorVarietyPeriod(
+          name,
+          chineseMatch[1],
+          seasonLabel,
+          episodeNames,
+        );
+        if (anchored !== null) {
+          return anchored;
+        }
         return `S${seasonLabel}E${chineseMatch[1].padStart(2, "0")}`;
       }
       // 「第N期」被衍生黑名单挡掉后,再看是否另有 `第N集/话` 证据(不放过混名)。

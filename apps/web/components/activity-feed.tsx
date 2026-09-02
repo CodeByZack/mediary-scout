@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import Link from "next/link";
 import { CheckCircle2, ChevronDown, ChevronRight, Clock3, Loader2, RotateCcw, TriangleAlert, X } from "lucide-react";
 import { showHref } from "@media-track/workflow/scope";
@@ -17,6 +17,7 @@ import {
   stepDetailView,
   type StepDetailView as StepEvidenceView,
 } from "../lib/step-args-text";
+import { groupStepsIntoRounds, hasRoundStructure, type StepRoundCard } from "../lib/step-rounds";
 import { isDemoModeClient } from "../lib/demo-mode";
 import { demoCompletedItems, demoInProgressActivityItems } from "../lib/demo-session";
 import { useDemoAcquisitions, useDemoInProgress } from "../lib/use-demo-session";
@@ -140,8 +141,85 @@ export function StepStatusIcon({ status }: { status: ActivityStepView["stepStatu
   return <CheckCircle2 size={13} className="act-step-icon act-step-success" aria-hidden />;
 }
 
-/** The expandable step list under a row header: one line per agent tool call,
- *  status icon + 中文 activity + toolName + localized time + key args. */
+/** issue #29 用户拍板(九轮):AI 参与的步骤在标题加「AI」小徽章——toolName 以
+ *  arbitrate 开头(选片/诊断/集数映射仲裁都是 AI 调用)或 args.aiUsed===true。 */
+function stepUsedAI(step: ActivityStepView): boolean {
+  // 九轮复核:arbitrate* 前缀兜底真仲裁(选片/诊断),但 aiUsed 显式 false(no 支零 AI)
+  // 必须压过前缀——八轮的文案分家不能让徽章焊回去。
+  const aiUsed = step.args?.["aiUsed"];
+  if (aiUsed === true) return true;
+  if (aiUsed === false) return false;
+  return step.toolName.startsWith("arbitrate");
+}
+
+/** issue #29 用户拍板(九轮):转存步骤展示分享链接(可点击)。链接来自 args.linkUrl。 */
+function transferLink(step: ActivityStepView): React.ReactNode | null {
+  if (step.toolName !== "transferCandidate") return null;
+  const url = step.args?.["linkUrl"];
+  if (typeof url !== "string" || url.length === 0) return null;
+  return (
+    <a className="act-ev-link" href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}> 🔗分享链接</a>
+  );
+}
+/** 单条步骤行——每个 agent 工具调用一行:状态图标 + activity + 工具名 + 时间 + 关键参数。
+ *  (transferCandidate 步骤在 activity 后追加分享链接,见 transferLink。) */
+function StepRow({ step }: { step: ActivityStepView }) {
+  const detail = stepDetailView(step);
+  const argsText = stepArgsText(step);
+  return (
+    <div className="act-step">
+      <StepStatusIcon status={step.stepStatus} />
+      <div className="act-step-main">
+        <div className="act-step-head">
+          <span className="act-step-activity">{step.activity}{transferLink(step)}{stepUsedAI(step) ? <span className="act-step-ai">AI</span> : null}</span>
+          <span className="act-step-tool">{step.toolName}</span>
+          <span className="act-step-at">{new Date(step.at).toLocaleString("zh-CN")}</span>
+        </div>
+        {step.failReason ? <div className="act-step-fail">{step.failReason}</div> : null}
+        {detail ? <StepEvidence detail={detail} /> : argsText ? <div className="act-step-args">{argsText}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+/** 轮次卡片:默认折叠,点开展开该轮的全部步骤。issue #29。 */
+function RoundCard({ card }: { card: StepRoundCard }) {
+  const [open, setOpen] = useState(false);
+  // B5:卡头点击需阻止冒泡——RoutineCardWrapper 的 <li onClick> 会包住整个步骤区,
+  // 不 stop 的话点卡片会先折叠整条巡检项、卡片被卸载。
+  const toggle = (e: ReactMouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    setOpen((v) => !v);
+  };
+  if (card.kind !== "transfer") {
+    return (
+      <div className={"act-round act-round-" + card.kind}>
+        <div className="act-round-head act-round-toggle" role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e as unknown as ReactMouseEvent<HTMLDivElement>); } }}>
+          <span className="act-round-title">{card.heading}</span>
+          <span className="act-round-count">{card.steps.length} 步</span>
+          <ExpandChevron open={open} />
+        </div>
+        {open ? <div className="act-round-body">{card.steps.map((s) => <StepRow key={s.ordinal} step={s} />)}</div> : null}
+      </div>
+    );
+  }
+  // issue #29 用户拍板:去掉 ✓✗ 判定徽章与 ⚙️⚖️决策 meta——成功与否看内容(归位/失败步骤),
+  // 卡内步骤本身说明一切,不再用红绿框/徽章断言误导(此前 AI 映射成功却显示未命中)。
+  const digest = card.steps.find((s) => s.toolName === "stagingDigest");
+  const videoCount = typeof digest?.args?.["videoCount"] === "number" ? digest.args["videoCount"] : undefined;
+  return (
+    <div className="act-round act-round-transfer">
+      <div className="act-round-head act-round-toggle" role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e as unknown as ReactMouseEvent<HTMLDivElement>); } }}>
+        <span className="act-round-title">{card.heading}</span>
+        {videoCount !== undefined ? <span className="act-round-meta">{videoCount} 个文件</span> : null}
+        <ExpandChevron open={open} />
+      </div>
+      {open ? <div className="act-round-body">{card.steps.map((s) => <StepRow key={s.ordinal} step={s} />)}</div> : null}
+    </div>
+  );
+}
+
+/** 汇总「轮次卡片化」的步骤列表:有结构化 round 的转存步骤 → 卡片;纯老数据 → 扁平。 */
 export function StepList({ steps }: { steps: ActivityStepView[] }) {
   if (steps.length === 0) {
     return (
@@ -150,35 +228,22 @@ export function StepList({ steps }: { steps: ActivityStepView[] }) {
       </div>
     );
   }
+  const hasRounds = hasRoundStructure(steps);
+  if (!hasRounds) {
+    // 老数据:无轮次信息,保持原有扁平列表(行为不变)。
+    return (
+      <div className="act-step-list">
+        {steps.map((step) => <StepRow key={step.ordinal} step={step} />)}
+      </div>
+    );
+  }
+  const cards = groupStepsIntoRounds(steps);
   return (
-    <div className="act-step-list">
-      {steps.map((step) => {
-        const detail = stepDetailView(step);
-        const argsText = stepArgsText(step);
-        return (
-          <div className="act-step" key={step.ordinal}>
-            <StepStatusIcon status={step.stepStatus} />
-            <div className="act-step-main">
-              <div className="act-step-head">
-                <span className="act-step-activity">{step.activity}</span>
-                <span className="act-step-tool">{step.toolName}</span>
-                <span className="act-step-at">{new Date(step.at).toLocaleString("zh-CN")}</span>
-              </div>
-              {step.failReason ? <div className="act-step-fail">{step.failReason}</div> : null}
-              {detail ? (
-                <StepEvidence detail={detail} />
-              ) : argsText ? (
-                <div className="act-step-args">{argsText}</div>
-              ) : null}
-            </div>
-          </div>
-        );
-      })}
+    <div className="act-round-list">
+      {cards.map((card) => <RoundCard key={String(card.round) + "-" + card.kind + "-" + card.steps[0]?.ordinal} card={card} />)}
     </div>
   );
 }
-
-/** §23:候选证据/逐文件解析的结构化展开行(数据源 stepDetailView,纯函数可测)。 */
 function StepEvidence({ detail }: { detail: NonNullable<StepEvidenceView> }) {
   if (detail.kind === "files") {
     return (
@@ -199,14 +264,15 @@ function StepEvidence({ detail }: { detail: NonNullable<StepEvidenceView> }) {
           {row.grade ? (
             <span className={`act-ev-grade act-ev-${row.grade.toLowerCase()}`}>{row.grade}</span>
           ) : null}
-          <span className="act-ev-title" title={row.title}>
-            {row.title}
-          </span>
-          {row.reasons.length > 0 ? (
-            <span className="act-ev-reason" title={row.reasons.join("；")}>
-              {row.reasons.join("；")}
+          {row.url ? (
+            <a className="act-ev-title act-ev-link" href={row.url} target="_blank" rel="noopener noreferrer" title={row.title}>
+              {row.title}
+            </a>
+          ) : (
+            <span className="act-ev-title" title={row.title}>
+              {row.title}
             </span>
-          ) : null}
+          )}
         </div>
       ))}
     </div>
