@@ -7,7 +7,7 @@ import { gradeCandidates, summarizeGrading } from "../../acquisition-v2/candidat
 import { finalizeMovieLanding } from "../../acquisition-v2/finalize-landing.js";
 import type { AgentToolEvent } from "../../acquisition-v2/activity.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
-import { digestMovieStaging } from "../../acquisition-v2/staging-digest.js";
+import { digestMovieStaging, fileBaseName } from "../../acquisition-v2/staging-digest.js";
 import type { MovieTarget } from "../../acquisition-v2/task-agents.js";
 import { pickSubtitle } from "../../acquisition-v2/subtitle-picker.js";
 import type { AssrtProviderPort } from "../../subtitle-provider.js";
@@ -407,7 +407,7 @@ async function runMovieCandidatePhase(
       const dominantName = fileBaseName(digest.videos.find((v) => v.id === digest.dominantVideo)!);
       const codeAcceptDetail = `正片清晰:保留 ${dominantName}，丢弃其余花絮/trailer 等`;
       stepLog(sandbox, target.title, "落盘诊断", codeAcceptDetail, "log");
-      emitStep(onProgress, "diagnoseMovie", "accept", codeAcceptDetail, {
+      emitStep(onProgress, "diagnoseMovie", "verify", codeAcceptDetail, {
         dominantVideo: digest.dominantVideo,
         dominantName,
         verdict: "code-dominant",
@@ -506,7 +506,7 @@ async function runMovieCandidatePhase(
       // 日志:把诊断判据+文件名+年份写出来(#33 映射日志)
       const diagLogDetail = `诊断仲裁: ${diagnosis.reasoning}`;
       stepLog(sandbox, target.title, "落盘诊断", diagLogDetail);
-      emitStep(onProgress, "diagnoseMovie", "accept", diagLogDetail, {
+      emitStep(onProgress, "diagnoseMovie", "verify", diagLogDetail, {
         reasoning: diagnosis.reasoning,
         verdict: "ai",
       });

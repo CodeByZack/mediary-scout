@@ -45,11 +45,6 @@ export interface StagingDigest {
   isDirtyPack: boolean;
   /** Compact LLM-ready summary (the diagnostic arbitrator's input). */
   summary: string;
-  /** ID of the dominant video when multiple videos land but one is clearly the main feature
-   *  (largest by size, others are junk/marker files). Code accepts this without AI escalation. */
-  dominantVideo: string | null;
-  /** True when dominantVideo is set — code can accept directly, no AI needed. */
-  isDominantVideoAcceptable: boolean;
 }
 
 export interface StagingDigestInput {
@@ -73,7 +68,7 @@ export interface StagingDigestInput {
   episodeNames?: Record<string, string>;
 }
 
-function fileBaseName(file: SimTreeFile): string {
+export function fileBaseName(file: SimTreeFile): string {
   return file.path.split("/").pop() ?? file.path;
 }
 
@@ -240,6 +235,11 @@ export interface MovieStagingDigest {
   isDirtyPack: boolean;
   /** Compact LLM-ready summary (the diagnostic arbitrator's input). */
   summary: string;
+  /** ID of the dominant video when multiple videos land but one is clearly the main feature
+   *  (largest by size, others are junk/marker files). Code accepts this without AI escalation. */
+  dominantVideo: string | null;
+  /** True when dominantVideo is set — code can accept directly, no AI needed. */
+  isDominantVideoAcceptable: boolean;
 }
 
 export function digestMovieStaging(files: SimTreeFile[]): MovieStagingDigest {
@@ -265,7 +265,7 @@ export function digestMovieStaging(files: SimTreeFile[]): MovieStagingDigest {
   let isDominantVideoAcceptable = false;
   if (!passes && videos.length > 1) {
     const sorted = [...videos].sort((a, b) => b.sizeBytes - a.sizeBytes);
-    const largest = sorted[0];
+    const largest = sorted[0]!;
     const rest = sorted.slice(1);
     const largestJunk = junkSignals.some((s) => s === fileBaseName(largest));
     const allRestJunk =
