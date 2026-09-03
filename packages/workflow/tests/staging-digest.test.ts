@@ -103,10 +103,37 @@ describe("digestMovieStaging — the movie fast path's one-film judgment", () =>
   });
 
   it("dirty when any video carries a junk signal (预告/花絮/sample)", () => {
+    // 大小相同(默认 1GB each) → 不满足 2x 判据 → 仍是 dirty
     const d = digestMovieStaging([video("流浪地球.2019.4K.mkv"), video("流浪地球.预告.mkv")]);
     expect(d.passes).toBe(false);
     expect(d.isDirtyPack).toBe(true);
     expect(d.junkSignals).toEqual(["流浪地球.预告.mkv"]);
+    expect(d.isDominantVideoAcceptable).toBe(false);
+  });
+  it("code-accepts when one video is clearly dominant and others are all junk", () => {
+    // 主片 3GB，trailer 200MB，花絮 100MB → 主片 > (200+100)*2=600MB → 可代码接受
+    const files: SimTreeFile[] = [
+      { id: "main", path: "Oppenheimer.2023.4K.mkv", sizeBytes: 3_000_000_000, isVideo: true, isSubtitle: false },
+      { id: "trailer", path: "Oppenheimer.trailer.mp4", sizeBytes: 200_000_000, isVideo: true, isSubtitle: false },
+      { id: "extra", path: "Oppenheimer.花絮.mkv", sizeBytes: 100_000_000, isVideo: true, isSubtitle: false },
+    ];
+    const d = digestMovieStaging(files);
+    expect(d.passes).toBe(false);
+    expect(d.isDirtyPack).toBe(true);
+    expect(d.junkSignals).toEqual(["Oppenheimer.trailer.mp4", "Oppenheimer.花絮.mkv"]);
+    expect(d.dominantVideo).toBe("main");
+    expect(d.isDominantVideoAcceptable).toBe(true);
+  });
+  it("does not accept when non-junk video breaks the pattern", () => {
+    // 主片 3GB + trailer 200MB + 另一个正片 2GB → 第二个非脏包视频 → 不可代码接受
+    const files: SimTreeFile[] = [
+      { id: "main", path: "Oppenheimer.2023.4K.mkv", sizeBytes: 3_000_000_000, isVideo: true, isSubtitle: false },
+      { id: "trailer", path: "Oppenheimer.trailer.mp4", sizeBytes: 200_000_000, isVideo: true, isSubtitle: false },
+      { id: "other", path: "Oppenheimer.Part2.mkv", sizeBytes: 2_000_000_000, isVideo: true, isSubtitle: false },
+    ];
+    const d = digestMovieStaging(files);
+    expect(d.dominantVideo).toBe(null);
+    expect(d.isDominantVideoAcceptable).toBe(false);
   });
 
   it("neither passes nor dirty when nothing lands as a video (subtitle-only)", () => {

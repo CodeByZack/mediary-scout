@@ -398,8 +398,67 @@ async function runMovieCandidatePhase(
       };
     }
 
-    // Not one clean film → diagnostic arbitration (escalation #2).
+    // Not one clean film → try code-based dominant-video acceptance first,
+    // fall back to diagnostic arbitration (escalation #2).
     escalated = true;
+    // 多视频但一个明显占优(其余全是花絮/trailer等脏包标记):代码直接 accept，
+    // 省去一轮 LLM。日志里写清判据，出错时可回溯(#33)。
+    if (digest.isDominantVideoAcceptable && digest.dominantVideo !== null) {
+      const dominantName = fileBaseName(digest.videos.find((v) => v.id === digest.dominantVideo)!);
+      const codeAcceptDetail = `正片清晰:保留 ${dominantName}，丢弃其余花絮/trailer 等`;
+      stepLog(sandbox, target.title, "落盘诊断", codeAcceptDetail, "log");
+      emitStep(onProgress, "diagnoseMovie", "accept", codeAcceptDetail, {
+        dominantVideo: digest.dominantVideo,
+        dominantName,
+        verdict: "code-dominant",
+      });
+      if (subtitle) {
+        await landSubtitlesForMovie({
+          sandbox,
+          title: target.title,
+          subtitle,
+          ...(onProgress ? { onProgress } : {}),
+        });
+      }
+      try {
+        const arMovie = await finalizeMovieLanding({ sandbox, digest });
+        const arOrganizeDetail = `归位到媒体库:标为已入库`;
+        stepLog(sandbox, target.title, "归位", arOrganizeDetail);
+        emitStep(onProgress, "finalizeLanding", "organize", arOrganizeDetail, { ok: true });
+      } catch (error) {
+        await clearMovieLanding(sandbox).catch(() => {});
+        const organizeFailDetail = error instanceof Error ? error.message : String(error);
+        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
+        const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+        return {
+          done: await concludeUncovered(sandbox, {
+            text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
+            steps: ctx.attempted.size,
+            escalated,
+            reason: error instanceof Error ? error.message : String(error),
+          }),
+          escalated,
+          deadRetries,
+        };
+      }
+      const doneDetail = `已完成:影片已入库(${codeAcceptDetail})`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
+      return {
+        done: {
+          text: codeAcceptDetail,
+          steps: ctx.attempted.size,
+          coverage: await sandbox.finish(),
+          escalated,
+        },
+        escalated,
+        deadRetries,
+      };
+    }
+    // 代码判不了 → 诊断仲裁(AI)。
     const diagnosis = await arbitrateMovieDiagnosis({
       model,
       summary: digest.summary,
@@ -444,6 +503,13 @@ async function runMovieCandidatePhase(
           deadRetries,
         };
       }
+      // 日志:把诊断判据+文件名+年份写出来(#33 映射日志)
+      const diagLogDetail = `诊断仲裁: ${diagnosis.reasoning}`;
+      stepLog(sandbox, target.title, "落盘诊断", diagLogDetail);
+      emitStep(onProgress, "diagnoseMovie", "accept", diagLogDetail, {
+        reasoning: diagnosis.reasoning,
+        verdict: "ai",
+      });
       const doneDetail = `已完成:影片已入库(${diagnosis.reasoning})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "finish", "finalize", doneDetail);
