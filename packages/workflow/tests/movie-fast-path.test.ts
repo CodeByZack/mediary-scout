@@ -212,6 +212,8 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     const organizers: string[] = [];
     const diagnostics: string[] = [];
     const diagArgs: Record<string, unknown>[] = [];
+    const transferArgs: Record<string, unknown>[] = [];
+    const digestArgs: Record<string, unknown>[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
       model: throwModel(), // 代码直收必须零 LLM——模型被调用就爆炸
@@ -222,6 +224,8 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
           diagnostics.push(e.activity ?? "");
           diagArgs.push(e.args ?? {});
         }
+        if (e.toolName === "transferCandidate") transferArgs.push(e.args ?? {});
+        if (e.toolName === "stagingDigest") digestArgs.push(e.args ?? {});
       },
     });
 
@@ -236,6 +240,18 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     expect(diagnostics[0]).toContain("流浪地球.预告.mkv");
     // 显式 aiUsed:false——前端 stepArgsText 对 true 有硬编码文案(必1 那类回归守卫)。
     expect(diagArgs[0]?.["aiUsed"]).toBe(false);
+    // issue #29 卡片化契约:转存/落盘 digest 带结构化轮次字段(前端按此渲染轮次卡)。
+    expect(transferArgs[0]).toMatchObject({
+      round: 1,
+      pool: "primary",
+      decidedBy: "code",
+      transferIndex: 1,
+    });
+    expect(digestArgs[0]).toMatchObject({
+      round: 1,
+      passes: false,
+      videoCount: 2, // transfer.staging.length(全量落盘文件,口径与 TV 一致)
+    });
     expect(result.coverage.coverageMet).toBe(true);
     // Only the largest video (the film) survives; the trailer + wrapper are gone.
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
@@ -408,15 +424,24 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
 
     // 4 A-grades → arbitrator picks c1; c1/c2/c3 are dead links (not counted),
     // c4 lands — exactly ONE real transfer attempt.
+    const transferArgs: Record<string, unknown>[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
       model: textModel('{"candidateId":"c1","reasoning":"选第一个"}'),
       target: movieTarget,
+      onProgress: (e) => {
+        if (e.toolName === "transferCandidate") transferArgs.push(e.args ?? {});
+      },
     });
 
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["MOVIE"]);
     expect(result.steps).toBe(1);
+    // issue #29 A3:死链候选发两条 transferCandidate(354 正常转存 emit + 388 死链 emit),
+    // 都带 round=1(探针不占 round,与真实转存同号并入同卡)——前端不渲染「未记录轮次」空卡;
+    // decidedBy 来自选片仲裁(4 A 无唯一 top → "ai")。
+    expect(transferArgs.map((a) => a["round"])).toEqual([1, 1, 1, 1, 1, 1, 1]);
+    expect(transferArgs.map((a) => a["decidedBy"])).toEqual(["ai", "ai", "ai", "ai", "ai", "ai", "ai"]);
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);
@@ -762,6 +787,7 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       aliases: ["The Wandering Earth"],
     });
 
+    const transferArgs: Record<string, unknown>[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
       model: sequentialModel([
@@ -771,6 +797,9 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
         '{"action":"retry_other","reasoning":"多影片脏包"}', // c3 → 试尽 → 兜底
       ]),
       target: aliasTarget,
+      onProgress: (e) => {
+        if (e.toolName === "transferCandidate") transferArgs.push(e.args ?? {});
+      },
     });
 
     // P2-R1:primary 优先的鉴别力——新流程必经 primary 选片仲裁(escalated=true);
@@ -783,6 +812,11 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       "流浪地球 (2019).mkv",
     ]);
     expect(searches.length).toBe(2); // primary 预搜 1 + 兜底重搜 1
+    // issue #29 卡片化:round 跨池单调递增(primary 3 次 1/2/3 + 兜底第 1 次 round=4,
+    // transferIndex 本池内计数=1)——与 tv.ts 同口径,跨池单调是本改动最易回归的点。
+    expect(transferArgs.map((a) => a["round"])).toEqual([1, 2, 3, 4]);
+    expect(transferArgs.map((a) => a["pool"])).toEqual(["primary", "primary", "primary", "fallback"]);
+    expect(transferArgs.map((a) => a["transferIndex"])).toEqual([1, 2, 3, 1]);
   });
 });
 

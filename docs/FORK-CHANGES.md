@@ -676,6 +676,15 @@ movie-fast-path 补「选片 AI + 代码直收」交叉格用例(escalated 保�
 `round/passes/videoCount`——活动页电影获取记录从此按「转存轮次卡」渲染,不再扁平列表。
 前端零改动(step-rounds.ts 分组逻辑已通用)。
 
+**卡片化复核修订**(子代理 REQUEST_CHANGES 窄口径):死链/系统阻塞探针补
+round(照抄 TV #29 A3,landing.ts:426-455 同款——探针不占轮号、并入当前轮卡,杜绝
+「未记录轮次」空卡);字幕步骤(viewSubtitleSnapshot/transferSubtitle)补 round 并入轮卡;
+`videoCount` 口径改为 `transfer.staging.length`(与 TV/前端「N 个文件」文案一致);
+noVideo 分支 digest 补 passes/videoCount/round;build-fpk.yml 版本回退三元简化。
+测试补钉:code-accept 零 LLM 用例断言 round/pool/decidedBy/transferIndex + digest
+round/passes/videoCount;P2-R1 兜底用例断言跨池单调(round 1/2/3/4、pool
+primary×3+fallback、transferIndex 1/2/3/1);死链用例断言探针与真实转存同 round=1。
+
 ### 1. 规范视频改名（canonical video rename）
 
 **提交**: `3e64c28` — feat(workflow): canonical video rename on staging normalization

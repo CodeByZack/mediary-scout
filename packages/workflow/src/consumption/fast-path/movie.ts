@@ -104,8 +104,10 @@ async function landSubtitlesForMovie(options: {
   title: string;
   subtitle: NonNullable<MovieFastPathOptions["subtitle"]>;
   onProgress?: (event: AgentToolEvent) => void;
+  /** 当前转存轮号:字幕步骤也带 round,并入该轮转存卡(issue #29 A3 同源语义)。 */
+  round: number;
 }): Promise<void> {
-  const { sandbox, title, subtitle, onProgress } = options;
+  const { sandbox, title, subtitle, onProgress, round } = options;
   try {
     // 1. Read the pre-warmed assrt snapshot. The orchestrator primes it BEFORE
     //    dispatch (same gate: non-CN + capable drive), so read-only first — an
@@ -122,7 +124,7 @@ async function landSubtitlesForMovie(options: {
       candidates = sandbox.subtitleCandidates();
     }
     stepLog(sandbox, title, "字幕", `assrt 候选 ${candidates.length} 条`);
-    emitStep(onProgress, "viewSubtitleSnapshot", "pick", `assrt 候选 ${candidates.length} 条`);
+    emitStep(onProgress, "viewSubtitleSnapshot", "pick", `assrt 候选 ${candidates.length} 条`, { round });
     if (candidates.length === 0) {
       return; // no packages — video alone is fine
     }
@@ -133,26 +135,26 @@ async function landSubtitlesForMovie(options: {
     });
     if (!pick.picked) {
       stepLog(sandbox, title, "字幕", pick.reason, "warn");
-      emitStep(onProgress, "viewSubtitleSnapshot", "pick", pick.reason);
+      emitStep(onProgress, "viewSubtitleSnapshot", "pick", pick.reason, { round });
       return;
     }
     stepLog(sandbox, title, "字幕", pick.reason);
-    emitStep(onProgress, "viewSubtitleSnapshot", "pick", pick.reason);
+    emitStep(onProgress, "viewSubtitleSnapshot", "pick", pick.reason, { round });
 
     // 3. Land its files into staging (soft-fail).
     const landed = await sandbox.transferSubtitle({ candidateId: pick.picked.id });
     if (landed.status === "succeeded") {
       stepLog(sandbox, title, "字幕", `落地 ${landed.landedFilenames.length} 个字幕文件`);
-      emitStep(onProgress, "transferSubtitle", "pick", `落地 ${landed.landedFilenames.length} 个字幕文件`);
+      emitStep(onProgress, "transferSubtitle", "pick", `落地 ${landed.landedFilenames.length} 个字幕文件`, { round });
     } else {
       stepLog(sandbox, title, "字幕", `落地失败:${landed.error ?? "无文件落盘"}`, "warn");
-      emitStep(onProgress, "transferSubtitle", "pick", `落地失败:${landed.error ?? "无文件落盘"}`);
+      emitStep(onProgress, "transferSubtitle", "pick", `落地失败:${landed.error ?? "无文件落盘"}`, { round });
     }
   } catch (error) {
     // Never block the video on a subtitle hiccup.
     const message = error instanceof Error ? error.message : String(error);
     stepLog(sandbox, title, "字幕", `阶段异常:${message}`, "warn");
-    emitStep(onProgress, "viewSubtitleSnapshot", "pick", `字幕阶段异常:${message}`);
+    emitStep(onProgress, "viewSubtitleSnapshot", "pick", `字幕阶段异常:${message}`, { round });
   }
 }
 
@@ -180,6 +182,7 @@ async function finishMovieAccept(options: {
       sandbox,
       title: target.title,
       subtitle,
+      round: ctx.attempted.size,
       ...(onProgress ? { onProgress } : {}),
     });
   }
@@ -362,7 +365,13 @@ async function runMovieCandidatePhase(
       stepLog(sandbox, target.title, "转存失败", blockDetail, "error");
       const doneDetail = `失败(系统阻塞:${transfer.systemicBlock.reason})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "transferCandidate", "transfer", blockDetail);
+      // issue #29 A3(与 landing.ts 对齐):systemic 也是转存轮事件,补 round 防前端
+      // 误判为老数据序号卡(否则卡片模式每遇系统阻塞就出一张「未记录轮次」空卡)。
+      emitStep(onProgress, "transferCandidate", "transfer", blockDetail, {
+        candidateId: current,
+        round: ctx.attempted.size + 1,
+        decidedBy: grading.uniqueTopGrade ? "code" : "ai",
+      });
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
         done: {
@@ -385,7 +394,13 @@ async function runMovieCandidatePhase(
     const deadTitle = grading.ranked.find((c) => c.id === current)?.title ?? "该候选";
     const deadDetail = `《${deadTitle}》死链(转存未落盘)${next ? `,重试换一条候选(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",没有可换的"}`;
       stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
-      emitStep(onProgress, "transferCandidate", "transfer", deadDetail, { candidateId: current });
+      // issue #29 A3(与 landing.ts 对齐):dead 探针也归当前轮——探针不占 round,
+      // 与紧随其后的真实转存同号,并入同一张卡(否则每遇死链就出一张「未记录轮次」空卡)。
+      emitStep(onProgress, "transferCandidate", "transfer", deadDetail, {
+        candidateId: current,
+        round: ctx.attempted.size + 1,
+        decidedBy: grading.uniqueTopGrade ? "code" : "ai",
+      });
       current = next;
       continue;
     }
@@ -403,7 +418,11 @@ async function runMovieCandidatePhase(
       const next = nextCandidate(grading, ctx.tried);
       const noVideoDetail = `没有落盘任何视频(仅字幕/杂项),清空后换一条候选${next ? "" : "(没有可换的,终止)"}`;
       stepLog(sandbox, target.title, "digest 验证", noVideoDetail, "warn");
-      emitStep(onProgress, "stagingDigest", "verify", noVideoDetail);
+      emitStep(onProgress, "stagingDigest", "verify", noVideoDetail, {
+        passes: false,
+        videoCount: 0,
+        round: ctx.attempted.size,
+      });
       current = next;
       continue;
     }
@@ -432,7 +451,8 @@ async function runMovieCandidatePhase(
     // 前端把 digest 并入该轮转存卡(passes/videoCount 供判定与「N 个文件」展示)。
     emitStep(onProgress, "stagingDigest", "verify", digestDetail, {
       passes: digest.passes,
-      videoCount: digest.videos.length,
+      // 口径与 TV 一致(landing.ts:491):落盘文件总数(含视频/字幕/nfo),前端文案「N 个文件」。
+      videoCount: transfer.staging.length,
       round: ctx.attempted.size,
     });
 
@@ -446,6 +466,7 @@ async function runMovieCandidatePhase(
           sandbox,
           title: target.title,
           subtitle,
+          round: ctx.attempted.size,
           ...(onProgress ? { onProgress } : {}),
         });
       }
