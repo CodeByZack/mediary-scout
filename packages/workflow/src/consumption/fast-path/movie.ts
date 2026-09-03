@@ -25,6 +25,7 @@ import {
   logStorageProvider,
   nextCandidate,
   stepLog,
+  type TransferStepMeta,
 } from "./steps.js";
 
 /** The movie fast path (§6.5 sibling): the film's happy path runs in CODE, with
@@ -342,7 +343,15 @@ async function runMovieCandidatePhase(
     const currentTitle = grading.ranked.find((c) => c.id === current)?.title ?? "";
     const transferDetail = `转存《${currentTitle || "候选"}》到暂存区(第 ${ctx.attempted.size - poolTransferBase + 1} 次转存)`;
     stepLog(sandbox, target.title, "转存", transferDetail);
-    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current, ...(currentTitle ? { title: currentTitle } : {}), ...(urlById?.[current] !== undefined ? { linkUrl: urlById[current] } : {}) });
+    // issue #29:转存步骤的结构化证据(卡片化,与 tv.ts 对齐)。round 跨池单调递增,
+    // 给前端「第几轮转存」;movie 补上后活动页记录也按轮次卡片渲染。
+    const transferMeta: TransferStepMeta = {
+      round: ctx.attempted.size + 1,
+      pool: poolLabel === "兜底" ? "fallback" : "primary",
+      decidedBy: grading.uniqueTopGrade ? "code" : "ai",
+      transferIndex: ctx.attempted.size - poolTransferBase + 1,
+    };
+    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current, ...(currentTitle ? { title: currentTitle } : {}), ...transferMeta, ...(urlById?.[current] !== undefined ? { linkUrl: urlById[current] } : {}) });
     const transfer = await sandbox.transferCandidate({
       snapshotId: candidateSnapshotId(view, current),
       candidateId: current,
@@ -419,7 +428,13 @@ async function runMovieCandidatePhase(
       digestDetail,
       digest.passes || digest.dominant !== null ? "log" : "warn",
     );
-    emitStep(onProgress, "stagingDigest", "verify", digestDetail);
+    // issue #29:digest 步骤结构化证据(卡片化判定)。round 与转存轮次一致,
+    // 前端把 digest 并入该轮转存卡(passes/videoCount 供判定与「N 个文件」展示)。
+    emitStep(onProgress, "stagingDigest", "verify", digestDetail, {
+      passes: digest.passes,
+      videoCount: digest.videos.length,
+      round: ctx.attempted.size,
+    });
 
     // One clean film → flatten + mark in code, zero LLM.
     if (digest.passes) {

@@ -671,6 +671,11 @@ escalated=false 钉死,AI accept escalated=true 钉死 + 归位 emit 覆盖 + �
 movie-fast-path 补「选片 AI + 代码直收」交叉格用例(escalated 保留 true)与 code 支
 `aiUsed===false` 断言(必1 回归守卫)。
 
+**movie 获取记录卡片化补全**(issue #29 补全):movie 侧 `transferCandidate` 补
+`TransferStepMeta`(round/pool/decidedBy/transferIndex,与 tv.ts 一致)、`stagingDigest` 补
+`round/passes/videoCount`——活动页电影获取记录从此按「转存轮次卡」渲染,不再扁平列表。
+前端零改动(step-rounds.ts 分组逻辑已通用)。
+
 ### 1. 规范视频改名（canonical video rename）
 
 **提交**: `3e64c28` — feat(workflow): canonical video rename on staging normalization
