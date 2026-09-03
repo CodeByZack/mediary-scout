@@ -654,7 +654,8 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 🤖 徽章由 `arbitrate*` 前缀提供(activity-feed.tsx stepUsedAI)。
 
 **结构**:两个诊断 accept 收尾(code 直收/AI accept)抽为 `finishMovieAccept` 共用(干净支
-保持原样,同一收尾语义但文案不同),归位 emitStep 唯一出处(issue #29 曾两次因复制分支漏 emit 返工);`finalizeMovieLanding` 透传
+保持原样——同一收尾语义但结论文案不同,归位 emitStep 干净支自有一份,code/AI 两支共用,
+issue #29 曾两次因复制分支漏 emit 返工,抽出减少漂移面);`finalizeMovieLanding` 透传
 `keepVideoId`(与日志 dropped 名单一致,杜绝「日志保留 X 实际留下 Y」脱钩)。
 `MovieStagingDigest` 的 dominant 判据结果收成一个 `MovieDominantVerdict` 结构
 (keptName/keptBytes/dropped[{name,bytes}]/ratio/minBytes/junkMaxBytes)。

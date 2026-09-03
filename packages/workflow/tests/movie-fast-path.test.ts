@@ -204,6 +204,9 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
           files: [
             { path: "trailer/流浪地球.预告.mkv", sizeBytes: 100_000_000 },
             { path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 },
+            // 字幕:不参与 dominant 判据(只数视频),但让落盘文件总数=3——
+            // videoCount 断言因此区分「全量 staging.length」与「只数视频」两种实现。
+            { path: "流浪地球.zh.ass", sizeBytes: 50_000 },
           ],
         },
       },
@@ -250,11 +253,12 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     expect(digestArgs[0]).toMatchObject({
       round: 1,
       passes: false,
-      videoCount: 2, // transfer.staging.length(全量落盘文件,口径与 TV 一致)
+      videoCount: 3, // transfer.staging.length(全量落盘文件:2 视频+1 字幕,口径与 TV 一致)
     });
     expect(result.coverage.coverageMet).toBe(true);
     // Only the largest video (the film) survives; the trailer + wrapper are gone.
-    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path).sort()).toEqual([
+      "流浪地球 (2019).ass",
       "流浪地球 (2019).mkv",
     ]);
   });
