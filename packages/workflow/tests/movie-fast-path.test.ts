@@ -205,13 +205,17 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
 
     const organizers: string[] = [];
     const diagnostics: string[] = [];
+    const diagArgs: Record<string, unknown>[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
       model: throwModel(), // 代码直收必须零 LLM——模型被调用就爆炸
       target: movieTarget,
       onProgress: (e) => {
         if (e.toolName === "finalizeLanding") organizers.push(e.activity ?? "");
-        if (e.toolName === "arbitrateDiagnosis") diagnostics.push(e.activity ?? "");
+        if (e.toolName === "arbitrateDiagnosis") {
+          diagnostics.push(e.activity ?? "");
+          diagArgs.push(e.args ?? {});
+        }
       },
     });
 
@@ -224,8 +228,43 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     expect(diagnostics.length).toBe(1);
     expect(diagnostics[0]).toContain("正片清晰");
     expect(diagnostics[0]).toContain("流浪地球.预告.mkv");
+    // 显式 aiUsed:false——前端 stepArgsText 对 true 有硬编码文案(必1 那类回归守卫)。
+    expect(diagArgs[0]?.["aiUsed"]).toBe(false);
     expect(result.coverage.coverageMet).toBe(true);
     // Only the largest video (the film) survives; the trailer + wrapper are gone.
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+  });
+
+  it("选片仲裁升级后,dominant 代码直收必须保留 escalated=true 且不再调 AI (交叉格,对齐 fast-path.test.ts:145)", async () => {
+    // 两个 B 级候选(无唯一 A)→ 选片仲裁(AI 1 次)选中 c1 → c1 转存落盘 dominant 满足
+    // (2GB 正片 + 100MB 预告)→ 代码直收(零 AI)→ escalated 不能掉回 false。
+    const { sandbox, movieDir, storage } = await createMovieSetup({
+      candidates: [
+        { id: "c1", title: "流浪地球.2019.4K" }, // A 级(标题+年份)
+        { id: "c2", title: "流浪地球.2019.1080p" }, // 同为 A 级 → 无唯一 top → 选片仲裁必触发
+      ],
+      packs: {
+        c1: {
+          files: [
+            { path: "trailer/流浪地球.预告.mkv", sizeBytes: 100_000_000 },
+            { path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 },
+          ],
+        },
+      },
+    });
+
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      // 只有选片仲裁会调模型(1 次);代码直收阶段若再调就是第二次,文本会错位 → 暴露回归。
+      model: sequentialModel(['{"candidateId":"c1","reasoning":"选 c1"}']),
+      target: movieTarget,
+    });
+
+    // 选片 AI 参与过 → 升级信号保留(代码直收只省掉"诊断"那次调用,不清历史)。
+    expect(result.escalated).toBe(true);
+    expect(result.coverage.coverageMet).toBe(true);
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);

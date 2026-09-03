@@ -649,7 +649,7 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 **日志契约**(issue #33 映射日志):`digest 验证` 文案分三支(干净直收/代码直收/交仲裁,
 代码直收支降为 log 不 warn);`arbitrateDiagnosis` 步骤 code 支写「保留 X (体积),丢弃
 [名单+体积](判据 主片>其余和×2…)」+ `aiUsed:false`,AI 支写「诊断仲裁(N 个视频:名单):reasoning」
-+ `aiUsed:true`——前端 ⚙️/🤖 徽章按 `aiUsed` 显式值(issue #29 已有该字段)。
++ AI 支**不传** `aiUsed`(`step-args-text` 对 `aiUsed:true` 硬编码渲染「AI 已介入集数映射」,
 
 **结构**:两个诊断 accept 收尾(code 直收/AI accept)抽为 `finishMovieAccept` 共用(干净支
 保持原样,同一收尾语义但文案不同),归位 emitStep 唯一出处(issue #29 曾两次因复制分支漏 emit 返工);`finalizeMovieLanding` 透传
@@ -658,6 +658,11 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 (keptName/keptBytes/dropped[{name,bytes}]/ratio/minBytes/junkMaxBytes)。
 
 **测试**:staging-digest 29 用例(含 dominant 直收/非脏包中断/最大件脏包/恰好 2x/全 0 体积/
+**二轮复核修订**(APRROVE 前提):AI 支 emit **不传** `aiUsed`(`step-args-text.ts:91`
+对 true 硬编码渲染「AI 已介入集数映射」——TV 集数映射专用文案,movie 挂上即错;🤖 徽章靠
+`arbitrate*` 前缀);`finishMovieAccept` 注释修正为两支共用 + 传 `deadRetries` 最新值;
+`finalizeMovieLanding` 加 keepVideoId 防御(不在 videos 里→退回 largest-sort,防删光假入库);
+新增 movie 版「选片 AI + 代码直收」交叉格测试 + code 支 `aiUsed===false` 断言。
 低于下限/超大附件/单视频不置位 边界);movie-fast-path 26 用例(代码直收零 LLM +
 escalated=false 钉死,AI accept escalated=true 钉死 + 归位 emit 覆盖)。
 

@@ -312,10 +312,13 @@ export async function finalizeMovieLanding(
   // before flattening so flattenMovie renames only the film (two same-named
   // canonical renames would collide).
   if (digest.videos.length > 1) {
-    const extras =
-      options.keepVideoId !== undefined
-        ? digest.videos.filter((v) => v.id !== options.keepVideoId).map((f) => f.id)
-        : [...digest.videos].sort((a, b) => b.sizeBytes - a.sizeBytes).slice(1).map((f) => f.id);
+    // issue #33:keepVideoId 给了就用它决定删谁(与日志 dropped 名单严格一致)。
+    // 防御:keepVideoId 不在 videos 里(id 不同源/调用方写错)→ 退回旧的 largest-sort,
+    // 绝不 filter 删光全部视频后 markObtained 空转假入库(sandbox.ts markObtained 不校验落盘)。
+    const keepValid = options.keepVideoId !== undefined && digest.videos.some((v) => v.id === options.keepVideoId);
+    const extras = keepValid
+      ? digest.videos.filter((v) => v.id !== options.keepVideoId).map((f) => f.id)
+      : [...digest.videos].sort((a, b) => b.sizeBytes - a.sizeBytes).slice(1).map((f) => f.id);
     await sandbox.deleteFiles({ directory: "staging", fileIds: extras });
   }
 

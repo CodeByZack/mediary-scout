@@ -155,9 +155,11 @@ async function landSubtitlesForMovie(options: {
   }
 }
 
-/** movie accept 的统一收尾(issue #33 抽离,三支共用——干净直收 / 代码直收 / AI accept):
+/** movie accept 的统一收尾(issue #33 抽离,两个诊断 accept 支共用——代码直收 / AI accept):
  *  字幕落盘(软目标) → finalizeMovieLanding(删附件+flatten+mark) → 归位 step → done。
- *  本函数是「归位 emitStep」的唯一出处——issue #29 曾两次因复制分支漏 emit 返工,抽出来杜绝漂移。 */
+ *  干净直收(passes)支因结论文案不同(完成:影片已入库 vs 已完成:…(detail))保留原逻辑,
+ *  但本 helper 与其使用同一收尾顺序——issue #29 曾两次因复制分支漏 emit 返工,抽出
+ *  code/AI 两处共用,减少漂移面。 */
 async function finishMovieAccept(options: {
   ctx: MoviePoolContext;
   digest: MovieStagingDigest;
@@ -166,8 +168,10 @@ async function finishMovieAccept(options: {
   keepVideoId?: string;
   /** 是否已发生 AI 升级(代码直收=false;AI accept=true——由调用方按实际给,不虚增)。 */
   escalated: boolean;
+  /** 死链探测次数最新值(循环内 deadRetries += 1 可能已发生,不读 ctx 陈旧值)。 */
+  deadRetries: number;
 }): Promise<MoviePhaseOutcome> {
-  const { ctx, digest, detail, keepVideoId, escalated } = options;
+  const { ctx, digest, detail, keepVideoId, escalated, deadRetries } = options;
   const { sandbox, target, subtitle, onProgress } = ctx;
 
   if (subtitle) {
@@ -204,7 +208,7 @@ async function finishMovieAccept(options: {
         reason: error instanceof Error ? error.message : String(error),
       }),
       escalated,
-      deadRetries: ctx.deadRetries,
+      deadRetries,
     };
   }
   const doneDetail = `已完成:影片已入库(${detail})`;
@@ -218,7 +222,7 @@ async function finishMovieAccept(options: {
       escalated,
     },
     escalated,
-    deadRetries: ctx.deadRetries,
+    deadRetries,
   };
 }
 
@@ -431,7 +435,7 @@ async function runMovieCandidatePhase(
         });
       }
       try {
-        const finalized = await finalizeMovieLanding({ sandbox, digest });
+        await finalizeMovieLanding({ sandbox, digest });
         // issue #29 九轮拍板:与 TV 一致,不罗列集号(明细在 rename 列表里)。
         // 九轮复核:movie.length 是 flatten 后目录清单(含零移动/字幕),不实——去掉计数。
         const organizeDetail = `归位到媒体库:标为已入库`;
@@ -497,6 +501,7 @@ async function runMovieCandidatePhase(
         detail: codeAcceptDetail,
         keepVideoId: digest.dominant.id,
         escalated, // 当前局部值:code 直收不新增升级,存在则保留
+        deadRetries, // 循环内死链探针可能已累加,带出最新值
       });
     }
     // 代码判不了 → 诊断仲裁(AI)。
@@ -512,8 +517,10 @@ async function runMovieCandidatePhase(
       // 写进日志,再走统一收尾;emit 在归位之前,时序与 code 支一致。
       const aiDetail = `诊断仲裁(${digest.videos.length} 个视频:${digest.videos.map((v) => fileBaseName(v)).join(" / ")}): ${diagnosis.reasoning || "正片可收"}`;
       stepLog(sandbox, target.title, "诊断", aiDetail, "log");
+      // 注意:不传 aiUsed:true——step-args-text.ts:91 会把它渲染成「AI 已介入集数映射」,
+      // 那是 TV 集数映射专用文案,movie 没有集数映射,挂上去是错误文案。🤖 徽章由
+      // arbitrate* 前缀提供(activity-feed.tsx stepUsedAI),无需显式 true。
       emitStep(onProgress, "arbitrateDiagnosis", "verify", aiDetail, {
-        aiUsed: true,
         reasoning: diagnosis.reasoning,
       });
       return finishMovieAccept({
@@ -521,6 +528,7 @@ async function runMovieCandidatePhase(
         digest,
         detail: aiDetail,
         escalated,
+        deadRetries,
       });
     }
     if (diagnosis.action === "abandon") {
