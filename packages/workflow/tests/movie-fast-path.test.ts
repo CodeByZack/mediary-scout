@@ -33,16 +33,22 @@ function textModel(text: string) {
   });
 }
 
-/** Model returning a scripted sequence of texts, one per doGenerate call. */
-function sequentialModel(texts: string[]) {
+/** Model returning a scripted sequence of texts, one per doGenerate call.
+ *  onCall(text) hooks each invocation — the cross-graph test asserts aiCalls===1
+ *  directly (no reliance on schema-incompatibility coincidences). */
+function sequentialModel(texts: string[], onCall?: (text: string) => void) {
   let i = 0;
   return new MockLanguageModelV3({
-    doGenerate: async () => ({
-      content: [{ type: "text" as const, text: texts[i++] ?? texts[texts.length - 1]! }],
-      finishReason: { unified: "stop" as const, raw: "stop" as const },
-      usage: USAGE,
-      warnings: [],
-    }),
+    doGenerate: async () => {
+      const text = texts[i++] ?? texts[texts.length - 1]!;
+      onCall?.(text);
+      return {
+        content: [{ type: "text" as const, text }],
+        finishReason: { unified: "stop" as const, raw: "stop" as const },
+        usage: USAGE,
+        warnings: [],
+      };
+    },
   });
 }
 
@@ -238,7 +244,7 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
   });
 
   it("选片仲裁升级后,dominant 代码直收必须保留 escalated=true 且不再调 AI (交叉格,对齐 fast-path.test.ts:145)", async () => {
-    // 两个 B 级候选(无唯一 A)→ 选片仲裁(AI 1 次)选中 c1 → c1 转存落盘 dominant 满足
+    // 双 A 候选(同为 A 级,无唯一 top)→ 选片仲裁(AI 1 次)选中 c1 → c1 转存落盘 dominant 满足
     // (2GB 正片 + 100MB 预告)→ 代码直收(零 AI)→ escalated 不能掉回 false。
     const { sandbox, movieDir, storage } = await createMovieSetup({
       candidates: [
@@ -255,14 +261,18 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
       },
     });
 
+    let aiCalls = 0;
     const result = await runMovieFastPathAcquisition({
       sandbox,
-      // 只有选片仲裁会调模型(1 次);代码直收阶段若再调就是第二次,文本会错位 → 暴露回归。
-      model: sequentialModel(['{"candidateId":"c1","reasoning":"选 c1"}']),
+      // 只有选片仲裁会调模型(1 次);代码直收阶段若再调,计数即 >1 → 暴露回归。
+      model: sequentialModel(['{"candidateId":"c1","reasoning":"选 c1"}'], () => {
+        aiCalls += 1;
+      }),
       target: movieTarget,
     });
 
     // 选片 AI 参与过 → 升级信号保留(代码直收只省掉"诊断"那次调用,不清历史)。
+    expect(aiCalls).toBe(1); // 唯一一次调用是选片仲裁;diagnostic 阶段零 AI
     expect(result.escalated).toBe(true);
     expect(result.coverage.coverageMet).toBe(true);
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
