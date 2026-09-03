@@ -8,7 +8,7 @@ import { finalizeMovieLanding } from "../../acquisition-v2/finalize-landing.js";
 import type { AgentToolEvent } from "../../acquisition-v2/activity.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import { digestMovieStaging } from "../../acquisition-v2/staging-digest.js";
-import type { MovieTarget } from "../../acquisition-v2/task-agents.js";
+import type { MovieTarget } from "../../acquisition-v2/target-types.js";
 import { pickSubtitle } from "../../acquisition-v2/subtitle-picker.js";
 import type { AssrtProviderPort } from "../../subtitle-provider.js";
 import { MAX_DEAD_LINK_RETRIES, MAX_FALLBACK_TRANSFER_ATTEMPTS, MAX_TRANSFER_ATTEMPTS } from "./budgets.js";
