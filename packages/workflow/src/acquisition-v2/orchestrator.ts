@@ -1,7 +1,6 @@
 import type { LanguageModel } from "ai";
 import type { AgentDecision, AuditEvent, ResourceSnapshot, TransferAttempt } from "../domain.js";
 import type { ResourceProvider, StorageExecutor } from "../ports.js";
-import type { AcquisitionAgentResult } from "./agent-loop.js";
 import type { AgentToolEvent } from "./activity.js";
 import { CandidateRegistry } from "./candidate-registry.js";
 import type { DeadLinkStore } from "./dead-links.js";
@@ -11,7 +10,7 @@ import { TaskSandbox } from "./sandbox.js";
 import { getStorageBrand } from "../storage-brands.js";
 import { AssrtSubtitleProvider, type AssrtProviderPort } from "../subtitle-provider.js";
 import type { SearchProfile } from "./search-profile.js";
-import { needForMovie, needForTvTarget, type MovieTarget, type TvAnimeTarget } from "./task-agents.js";
+import { needForMovie, needForTvTarget, type MovieTarget, type TvAnimeTarget } from "./target-types.js";
 import { runFastPathAcquisition } from "../consumption/fast-path/tv.js";
 import { runMovieFastPathAcquisition } from "../consumption/fast-path/movie.js";
 
@@ -78,7 +77,14 @@ export interface AcquisitionV2Outcome {
   transferAttempts: TransferAttempt[];
 }
 
-export interface RunAcquisitionV2Result extends AcquisitionAgentResult {
+/** Result shape from the fast path — mirrors the old AcquisitionAgentResult + adds outcome/audit. */
+export interface RunAcquisitionV2Result {
+  /** The model's final free text (after it stopped calling tools). */
+  text: string;
+  /** Number of loop steps the model took. */
+  steps: number;
+  /** Final honest coverage picture, read from the sandbox after the run. */
+  coverage: { coverageMet: boolean; obtained: string[]; missing: string[]; subtitleFallback: boolean };
   outcome: AcquisitionV2Outcome;
   auditEvents: AuditEvent[];
 }

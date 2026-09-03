@@ -6,7 +6,7 @@ import { digestStaging, digestTitle, type StagingDigest } from "../../acquisitio
 import { normalizeSearchKeyword } from "../../planning-search-gate.js";
 import type { AgentToolEvent } from "../../acquisition-v2/activity.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
-import type { TvAnimeTarget } from "../../acquisition-v2/task-agents.js";
+import type { TvAnimeTarget } from "../../acquisition-v2/target-types.js";
 import { MAX_DEAD_LINK_RETRIES, MAX_FALLBACK_SEARCHES } from "./budgets.js";
 import {
   compactCodeList,
