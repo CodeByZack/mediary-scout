@@ -68,7 +68,7 @@ export interface StagingDigestInput {
   episodeNames?: Record<string, string>;
 }
 
-function fileBaseName(file: SimTreeFile): string {
+export function fileBaseName(file: SimTreeFile): string {
   return file.path.split("/").pop() ?? file.path;
 }
 
@@ -235,6 +235,11 @@ export interface MovieStagingDigest {
   isDirtyPack: boolean;
   /** Compact LLM-ready summary (the diagnostic arbitrator's input). */
   summary: string;
+  /** ID of the dominant video when multiple videos land but one is clearly the main feature
+   *  (largest by size, others are junk/marker files). Code accepts this without AI escalation. */
+  dominantVideo: string | null;
+  /** True when dominantVideo is set — code can accept directly, no AI needed. */
+  isDominantVideoAcceptable: boolean;
 }
 
 export function digestMovieStaging(files: SimTreeFile[]): MovieStagingDigest {
@@ -254,17 +259,36 @@ export function digestMovieStaging(files: SimTreeFile[]): MovieStagingDigest {
   const isDirtyPack = hasJunk || videos.length > 1;
   const passes = videos.length === 1 && !hasJunk;
 
+  // 多视频 + 一个明显占优 + 其余全是脏包标记 → 代码可直接 accept，无需 AI 仲裁。
+  // 判据：最大视频体积 > 其余所有视频之和的 2 倍，且其余视频的 basename 全命中脏包标记。
+  let dominantVideo: string | null = null;
+  let isDominantVideoAcceptable = false;
+  if (!passes && videos.length > 1) {
+    const sorted = [...videos].sort((a, b) => b.sizeBytes - a.sizeBytes);
+    const largest = sorted[0]!;
+    const rest = sorted.slice(1);
+    const largestJunk = junkSignals.some((s) => s === fileBaseName(largest));
+    const allRestJunk =
+      rest.length > 0 && rest.every((v) => junkSignals.includes(fileBaseName(v)));
+    if (!largestJunk && allRestJunk && largest.sizeBytes > rest.reduce((s, v) => s + v.sizeBytes, 0) * 2) {
+      dominantVideo = largest.id;
+      isDominantVideoAcceptable = true;
+    }
+  }
+
   const summary = [
     `视频 ${videos.length} 个 / 字幕 ${subtitles.length} 个`,
     videos.length === 0
       ? "未落盘任何视频（空转/仅字幕/杂项）"
       : `视频: ${videos.map((v) => fileBaseName(v)).join(" / ")}`,
     junkSignals.length > 0 ? `脏包信号: ${junkSignals.join(" / ")}` : null,
-    `判定: ${passes ? "一部正片，可归位标记" : isDirtyPack ? "非单部正片/脏包，需诊断" : "无视频，需换候选"}`,
+    dominantVideo !== null
+      ? `判定: 正片清晰(最大视频 ${fileBaseName(videos.find((v) => v.id === dominantVideo)!)}, 其余为花絮/trailer 等)`
+      : `判定: ${passes ? "一部正片，可归位标记" : isDirtyPack ? "非单部正片/脏包，需诊断" : "无视频，需换候选"}`,
   ]
     .filter((line): line is string => line !== null)
     .join("\n");
 
-  return { videos, subtitles, junkSignals, passes, isDirtyPack, summary };
+  return { videos, subtitles, junkSignals, passes, isDirtyPack, dominantVideo, isDominantVideoAcceptable, summary };
 }
 
