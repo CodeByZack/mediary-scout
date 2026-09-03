@@ -122,6 +122,11 @@ jobs:
             V="${{ inputs.tag }}"
             V="${V#v}"
           fi
+          # 不带 tag 的手动构建:V 为空 → build-fpk.sh 回退读 package.json;
+          # 上传 path 必须用同一个版本号,否则 artifact 路径匹配失败(if-no-files-found: error)。
+          if [ -z "${V}" ]; then
+            V="$(node -p "require(process.env.npm_package_json ? process.env.npm_package_json : \"./package.json\").version || \"1.0.0\"")" || V="1.0.0"
+          fi
           echo "version=${V}" >> "${GITHUB_OUTPUT}"
 
       # 复用现有打包脚本：tsc workflow + next build standalone + 填充 app/server + fnpack build。
