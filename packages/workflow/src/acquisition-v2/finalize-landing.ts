@@ -71,7 +71,7 @@ export function seasonFromEpisodeCode(code: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
-function fileBaseName(path: string): string {
+function basenameOf(path: string): string {
   return path.split("/").pop() ?? path;
 }
 
@@ -111,8 +111,8 @@ export function buildSeasonMoves(
 
   const acceptedCodes = new Set<string>();
   for (const video of digest.videos) {
-    if (junkNames.has(fileBaseName(video.path))) continue;
-    const base = fileBaseName(video.path);
+    if (junkNames.has(basenameOf(video.path))) continue;
+    const base = basenameOf(video.path);
     const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons);
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
@@ -125,8 +125,8 @@ export function buildSeasonMoves(
     push(season, video.id);
   }
   for (const subtitle of digest.subtitles) {
-    if (junkNames.has(fileBaseName(subtitle.path))) continue;
-    const base = fileBaseName(subtitle.path);
+    if (junkNames.has(basenameOf(subtitle.path))) continue;
+    const base = basenameOf(subtitle.path);
     const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons);
     if (code) {
       const season = seasonFromEpisodeCode(code);
@@ -168,7 +168,7 @@ export async function finalizeLanding(
   const junkNames = new Set(digest.junkSignals);
   const plannedCodes = new Set<string>();
   for (const video of digest.videos) {
-    const base = fileBaseName(video.path);
+    const base = basenameOf(video.path);
     if (junkNames.has(base)) continue;
     const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons);
     if (!code) continue;
@@ -204,7 +204,7 @@ export async function finalizeLanding(
     renamed.push(...result.renamed);
     // 原名 → 网盘文件名 一一对应：每次真实转存落盘后的规范化改名都留痕。失败项也列出,
     // 让用户能看到哪个文件没改成功。
-    const baseById = new Map(digest.videos.map((video) => [video.id, fileBaseName(video.path)]));
+    const baseById = new Map(digest.videos.map((video) => [video.id, basenameOf(video.path)]));
     const errorByFileId = new Map((result.errors ?? []).map((e) => [e.fileId, e.error]));
     for (const { fileId, newName } of renames) {
       const source = baseById.get(fileId) ?? fileId;
@@ -250,7 +250,7 @@ export async function finalizeLanding(
   //    accept 空洞 → mark 假入库 → syncSeasonNeed 把没下到的集数写成已拿到)。
   const renamedToCodes = renamed
     .map((name) => {
-      const base = fileBaseName(name);
+      const base = basenameOf(name);
       const code = episodeCodeFromFileName(base, seasons);
       return code ?? null;
     })
@@ -289,6 +289,10 @@ export async function finalizeLanding(
 export interface FinalizeMovieLandingOptions {
   sandbox: TaskSandbox;
   digest: MovieStagingDigest;
+  /** issue #33:代码直收时指定保留的正片 id(与 digest.dominant.id 一致)。给了就
+   *  只删其它视频——删除名单与日志中的 dropped 完全一致,不会出现"日志说保留 X
+   *  实际留下 Y"。缺省=按"最大视频"旧规则(兼容旧调用)。 */
+  keepVideoId?: string;
 }
 
 export interface FinalizeMovieLandingResult {
@@ -308,8 +312,13 @@ export async function finalizeMovieLanding(
   // before flattening so flattenMovie renames only the film (two same-named
   // canonical renames would collide).
   if (digest.videos.length > 1) {
-    const bySize = [...digest.videos].sort((a, b) => b.sizeBytes - a.sizeBytes);
-    const extras = bySize.slice(1).map((file) => file.id);
+    // issue #33:keepVideoId 给了就用它决定删谁(与日志 dropped 名单严格一致)。
+    // 防御:keepVideoId 不在 videos 里(id 不同源/调用方写错)→ 退回旧的 largest-sort,
+    // 绝不 filter 删光全部视频后 markObtained 空转假入库(sandbox.ts markObtained 不校验落盘)。
+    const keepValid = options.keepVideoId !== undefined && digest.videos.some((v) => v.id === options.keepVideoId);
+    const extras = keepValid
+      ? digest.videos.filter((v) => v.id !== options.keepVideoId).map((f) => f.id)
+      : [...digest.videos].sort((a, b) => b.sizeBytes - a.sizeBytes).slice(1).map((f) => f.id);
     await sandbox.deleteFiles({ directory: "staging", fileIds: extras });
   }
 

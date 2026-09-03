@@ -32,6 +32,7 @@
 | 2026-08-30 | fix | **PR #25 两阶段候选池重构**(§27):primary/兜底池独立转存预算、跨池共享死链/升级,结账行两池分别显示 |
 | 2026-08-30 | fix | **PR #25 追加:综艺「第N期」→ TMDB Part 锚定 + 期号一致性校验**(§28,关 issue 系列):门闩移除、Part 锚定、AI 假集号防线 |
 | 2026-09-01 | feat | **PR #25 追加:活动页/通知页转存轮次卡片化**(§29,issue #29):fast path 各步骤结构化字段(round/pool/decidedBy/…)+ StepList 升级为默认折叠的轮次卡片(⚙️代码/🤖AI/✓✗判定),活动页+通知页共用 |
+| 2026-09-03 | feat | **PR #37 movie 落盘诊断去 LLM 深化**(issue #33):多视频包最大正片明显占优(体积下限+附件上限+2x 判据)代码直收、判据与删除名单进日志、三支收尾抽 finishMovieAccept 共用、finalize 透传 keepVideoId(与日志删除名单一致) |
 
 ---
 
@@ -629,6 +630,61 @@ AI 映射成功却显示「✗ 未命中」红框;第二个「搜索与选片」
 ---
 
 ## 详细记录
+
+
+### 30. movie 落盘诊断去 LLM 深化（PR #37，issue #33）
+
+**目标**:落盘多视频时,若最大视频明显占优且其余全是脏包附件(sample/trailer/花絮等),
+代码直接 accept,省掉一轮 LLM 诊断仲裁;同时把「为什么这么判」写进日志,出错可回溯。
+
+**判据**(`staging-digest.ts` 常量 `MOVIE_DOMINANT_MIN_BYTES=300MB` /
+`MOVIE_DOMINANT_JUNK_MAX_BYTES=1.5GB` / `MOVIE_DOMINANT_RATIO=2`)——全部满足才
+代码直收,否则交 AI:
+1. 最大视频本身不是脏包;
+2. 其余视频**全部**命中脏包标记(按 id Set 判,防同名 basename 误判);
+3. 其余每个 ≤ 1.5GB(防 2GB trailer 被代码静默删);
+4. 最大视频 ≥ 300MB(防误命名的短片/预告被当正片假入库);
+5. 最大视频 > 其余总和 × 2(严格大于,恰好边界偏保守交 AI)。
+
+**日志契约**(issue #33 映射日志):`digest 验证` 文案分三支(干净直收/代码直收/交仲裁,
+代码直收支降为 log 不 warn);`arbitrateDiagnosis` 步骤 code 支写「保留 X (体积),丢弃
+[名单+体积](判据 主片>其余和×2…)」+ `aiUsed:false`(显式压前缀);AI 支写
+「诊断仲裁(N 个视频:名单):reasoning」且**不传** `aiUsed`——`step-args-text.ts:91` 对
+`aiUsed:true` 硬编码渲染「AI 已介入集数映射」是 TV 集数映射专用文案,movie 挂上即错;
+🤖 徽章由 `arbitrate*` 前缀提供(activity-feed.tsx stepUsedAI)。
+
+**结构**:两个诊断 accept 收尾(code 直收/AI accept)抽为 `finishMovieAccept` 共用(干净支
+保持原样——同一收尾语义但结论文案不同,归位 emitStep 干净支自有一份,code/AI 两支共用,
+issue #29 曾两次因复制分支漏 emit 返工,抽出减少漂移面);`finalizeMovieLanding` 透传
+`keepVideoId`(与日志 dropped 名单一致,杜绝「日志保留 X 实际留下 Y」脱钩)。
+`MovieStagingDigest` 的 dominant 判据结果收成一个 `MovieDominantVerdict` 结构
+(keptName/keptBytes/dropped[{name,bytes}]/ratio/minBytes/junkMaxBytes)。
+
+**测试**:staging-digest 29 用例(含 dominant 直收/非脏包中断/最大件脏包/恰好 2x/全 0 体积/
+低于下限/超大附件/单视频不置位 边界);movie-fast-path 27 用例(代码直收零 LLM +
+escalated=false 钉死,AI accept escalated=true 钉死 + 归位 emit 覆盖 + 选片 AI→代码直收
+交叉格)。
+
+**二轮复核修订**(APPROVE 前提):AI 支 emit **不传** `aiUsed`(`step-args-text.ts:91`
+对 true 硬编码渲染「AI 已介入集数映射」——TV 集数映射专用文案,movie 挂上即错;🤖 徽章靠
+`arbitrate*` 前缀);`finishMovieAccept` 注释修正为两支共用 + 传 `deadRetries` 最新值;
+`finalizeMovieLanding` 加 keepVideoId 防御(不在 videos 里→退回 largest-sort,防删光假入库);
+movie-fast-path 补「选片 AI + 代码直收」交叉格用例(escalated 保留 true)与 code 支
+`aiUsed===false` 断言(必1 回归守卫)。
+
+**movie 获取记录卡片化补全**(issue #29 补全):movie 侧 `transferCandidate` 补
+`TransferStepMeta`(round/pool/decidedBy/transferIndex,与 tv.ts 一致)、`stagingDigest` 补
+`round/passes/videoCount`——活动页电影获取记录从此按「转存轮次卡」渲染,不再扁平列表。
+前端零改动(step-rounds.ts 分组逻辑已通用)。
+
+**卡片化复核修订**(子代理 REQUEST_CHANGES 窄口径):死链/系统阻塞探针补
+round(照抄 TV #29 A3,landing.ts:426-455 同款——探针不占轮号、并入当前轮卡,杜绝
+「未记录轮次」空卡);字幕步骤(viewSubtitleSnapshot/transferSubtitle)补 round 并入轮卡;
+`videoCount` 口径改为 `transfer.staging.length`(与 TV/前端「N 个文件」文案一致);
+noVideo 分支 digest 补 passes/videoCount/round;build-fpk.yml 版本回退三元简化。
+测试补钉:code-accept 零 LLM 用例断言 round/pool/decidedBy/transferIndex + digest
+round/passes/videoCount;P2-R1 兜底用例断言跨池单调(round 1/2/3/4、pool
+primary×3+fallback、transferIndex 1/2/3/1);死链用例断言探针与真实转存同 round=1。
 
 ### 1. 规范视频改名（canonical video rename）
 

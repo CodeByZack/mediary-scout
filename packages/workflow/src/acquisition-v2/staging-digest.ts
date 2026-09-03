@@ -17,6 +17,13 @@ import type { SimTreeFile } from "./storage-115-simulator.js";
 const JUNK_FILE_MARKER =
   /(^|[.\s\-_])sample([.\s\-_]|$)|样本|广告|花絮|预告|采访|访谈|making|behind\s*the\s*scenes|trailer|mv\b|ost\b/i;
 
+/** 主片 vs 附件判据常量(issue #33):代码把多视频包直收为正片前必须同时满足——
+ *  最大视频体积 ≥ 绝对下限、其余全部命中脏包标记、其余每个 ≤ 附件体积上限、
+ *  最大视频 > 其余总和的 ratio 倍(严格大于)。任一不满足就交 AI 诊断仲裁。 */
+export const MOVIE_DOMINANT_MIN_BYTES = 300 * 1024 * 1024; // 主片绝对下限(300MB,防误命名的预告/短片被当正片)
+export const MOVIE_DOMINANT_JUNK_MAX_BYTES = 1.5 * 1024 * 1024 * 1024; // 单附件上限(1.5GB,防 2GB "trailer" 被静默删)
+export const MOVIE_DOMINANT_RATIO = 2; // 主片 > 其余总和 × 2(严格大于)
+
 export interface StagingDigest {
   /** Video files (isVideo), in landing order. */
   videos: SimTreeFile[];
@@ -68,7 +75,7 @@ export interface StagingDigestInput {
   episodeNames?: Record<string, string>;
 }
 
-function fileBaseName(file: SimTreeFile): string {
+export function fileBaseName(file: SimTreeFile): string {
   return file.path.split("/").pop() ?? file.path;
 }
 
@@ -224,6 +231,20 @@ function summarizeDigest(d: Omit<StagingDigest, "summary">): string {
  *
  * Subtitles are never junk (they ride the film, per §1.14).
  */
+/** 代码直收判据的完整证据(issue #33)——日志回溯用,包含被删名单与体积。 */
+export interface MovieDominantVerdict {
+  /** 保留的正片 id(flattenMovie 只改名它)。 */
+  id: string;
+  keptName: string;
+  keptBytes: number;
+  /** 作为附件被丢弃的视频(名字+体积,日志原样打出)。 */
+  dropped: { name: string; bytes: number }[];
+  /** 实际生效的判据(主片 > 其余和 × ratio,且主片 ≥ minBytes、附件 ≤ junkMaxBytes)。 */
+  ratio: number;
+  minBytes: number;
+  junkMaxBytes: number;
+}
+
 export interface MovieStagingDigest {
   videos: SimTreeFile[];
   subtitles: SimTreeFile[];
@@ -235,18 +256,28 @@ export interface MovieStagingDigest {
   isDirtyPack: boolean;
   /** Compact LLM-ready summary (the diagnostic arbitrator's input). */
   summary: string;
+  /** 代码直收判据的结果:多视频包中最大视频明显占优且其余全为脏包附件时非 null
+   *  (fast path 零 LLM 直收);null = 交 AI 诊断仲裁。dropped 名单供日志回溯。 */
+  dominant: MovieDominantVerdict | null;
 }
 
 export function digestMovieStaging(files: SimTreeFile[]): MovieStagingDigest {
   const videos = files.filter((file) => file.isVideo);
   const subtitles = files.filter((file) => file.isSubtitle);
-  const junkSignals: string[] = [];
 
+  // 脏包标记按 basename 判,记 id 集合(避免依赖"同名 basename 唯一";junkSignals
+  // 只留人话名单,去重)。
+  const junkIds = new Set<string>();
+  const seenJunk = new Set<string>();
+  const junkSignals: string[] = [];
   for (const video of videos) {
     const base = fileBaseName(video);
-    const junk = JUNK_FILE_MARKER.exec(base);
-    if (junk) {
-      junkSignals.push(base);
+    if (JUNK_FILE_MARKER.test(base)) {
+      junkIds.add(video.id);
+      if (!seenJunk.has(base)) {
+        seenJunk.add(base);
+        junkSignals.push(base);
+      }
     }
   }
 
@@ -254,17 +285,50 @@ export function digestMovieStaging(files: SimTreeFile[]): MovieStagingDigest {
   const isDirtyPack = hasJunk || videos.length > 1;
   const passes = videos.length === 1 && !hasJunk;
 
+  // 多视频包:最大视频明显占优 + 其余全部命中脏包标记 → 代码直收(零 LLM)。
+  // 判据(全部满足才直收,否则交 AI):主片本身不是脏包、其余每个是脏包、
+  // 其余每个 ≤ junkMaxBytes(防 2GB "trailer" 被删)、主片 ≥ minBytes(防误命名短片
+  // 被当正片)、主片 > 其余总和 × ratio(严格大于;恰好边界偏保守,交 AI)。
+  let dominant: MovieDominantVerdict | null = null;
+  if (videos.length > 1) {
+    const sorted = [...videos].sort((a, b) => b.sizeBytes - a.sizeBytes);
+    const largest = sorted[0]!;
+    const rest = sorted.slice(1);
+    const restSum = rest.reduce((s, v) => s + v.sizeBytes, 0);
+    const allRestJunk = rest.every((v) => junkIds.has(v.id));
+    const withinJunkCap = rest.every((v) => v.sizeBytes <= MOVIE_DOMINANT_JUNK_MAX_BYTES);
+    if (
+      !junkIds.has(largest.id) &&
+      allRestJunk &&
+      withinJunkCap &&
+      largest.sizeBytes >= MOVIE_DOMINANT_MIN_BYTES &&
+      largest.sizeBytes > restSum * MOVIE_DOMINANT_RATIO
+    ) {
+      dominant = {
+        id: largest.id,
+        keptName: fileBaseName(largest),
+        keptBytes: largest.sizeBytes,
+        dropped: rest.map((v) => ({ name: fileBaseName(v), bytes: v.sizeBytes })),
+        ratio: MOVIE_DOMINANT_RATIO,
+        minBytes: MOVIE_DOMINANT_MIN_BYTES,
+        junkMaxBytes: MOVIE_DOMINANT_JUNK_MAX_BYTES,
+      };
+    }
+  }
+
   const summary = [
     `视频 ${videos.length} 个 / 字幕 ${subtitles.length} 个`,
     videos.length === 0
       ? "未落盘任何视频（空转/仅字幕/杂项）"
       : `视频: ${videos.map((v) => fileBaseName(v)).join(" / ")}`,
     junkSignals.length > 0 ? `脏包信号: ${junkSignals.join(" / ")}` : null,
-    `判定: ${passes ? "一部正片，可归位标记" : isDirtyPack ? "非单部正片/脏包，需诊断" : "无视频，需换候选"}`,
+    dominant !== null
+      ? `判定: 正片清晰(保留 ${dominant.keptName},丢弃${dominant.dropped.map((d) => d.name).join(" / ")}),代码直收`
+      : `判定: ${passes ? "一部正片，可归位标记" : isDirtyPack ? "非单部正片/脏包，需诊断" : "无视频，需换候选"}`,
   ]
     .filter((line): line is string => line !== null)
     .join("\n");
 
-  return { videos, subtitles, junkSignals, passes, isDirtyPack, summary };
+  return { videos, subtitles, junkSignals, passes, isDirtyPack, dominant, summary };
 }
 

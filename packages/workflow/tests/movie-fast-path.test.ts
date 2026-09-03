@@ -33,16 +33,22 @@ function textModel(text: string) {
   });
 }
 
-/** Model returning a scripted sequence of texts, one per doGenerate call. */
-function sequentialModel(texts: string[]) {
+/** Model returning a scripted sequence of texts, one per doGenerate call.
+ *  onCall(text) hooks each invocation — the cross-graph test asserts aiCalls===1
+ *  directly (no reliance on schema-incompatibility coincidences). */
+function sequentialModel(texts: string[], onCall?: (text: string) => void) {
   let i = 0;
   return new MockLanguageModelV3({
-    doGenerate: async () => ({
-      content: [{ type: "text" as const, text: texts[i++] ?? texts[texts.length - 1]! }],
-      finishReason: { unified: "stop" as const, raw: "stop" as const },
-      usage: USAGE,
-      warnings: [],
-    }),
+    doGenerate: async () => {
+      const text = texts[i++] ?? texts[texts.length - 1]!;
+      onCall?.(text);
+      return {
+        content: [{ type: "text" as const, text }],
+        finishReason: { unified: "stop" as const, raw: "stop" as const },
+        usage: USAGE,
+        warnings: [],
+      };
+    },
   });
 }
 
@@ -188,9 +194,83 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     expect(result.coverage.missing).toEqual(["MOVIE"]);
   });
 
-  it("escalates to the diagnostic arbitrator on a dirty landing (2 videos), honors accept, keeps the largest film", async () => {
+  it("code-accepts a dominant-video landing with ZERO LLM (issue #33), keeps the largest film, emits organize", async () => {
+    // 2GB 正片 + 100MB 预告 = 满足 dominant 判据(2GB > 100MB×2、≥300MB、附件≤1.5GB)
+    // → 代码直收,绝不调模型。
     const { sandbox, movieDir, storage } = await createMovieSetup({
       candidates: [{ id: "c1", title: "流浪地球.2019.4K" }], // unique A → blind transfer
+      packs: {
+        c1: {
+          files: [
+            { path: "trailer/流浪地球.预告.mkv", sizeBytes: 100_000_000 },
+            { path: "流浪地球.2019.4K.mkv", sizeBytes: 2_000_000_000 },
+            // 字幕:不参与 dominant 判据(只数视频),但让落盘文件总数=3——
+            // videoCount 断言因此区分「全量 staging.length」与「只数视频」两种实现。
+            { path: "流浪地球.zh.ass", sizeBytes: 50_000 },
+          ],
+        },
+      },
+    });
+
+    const organizers: string[] = [];
+    const diagnostics: string[] = [];
+    const diagArgs: Record<string, unknown>[] = [];
+    const transferArgs: Record<string, unknown>[] = [];
+    const digestArgs: Record<string, unknown>[] = [];
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: throwModel(), // 代码直收必须零 LLM——模型被调用就爆炸
+      target: movieTarget,
+      onProgress: (e) => {
+        if (e.toolName === "finalizeLanding") organizers.push(e.activity ?? "");
+        if (e.toolName === "arbitrateDiagnosis") {
+          diagnostics.push(e.activity ?? "");
+          diagArgs.push(e.args ?? {});
+        }
+        if (e.toolName === "transferCandidate") transferArgs.push(e.args ?? {});
+        if (e.toolName === "stagingDigest") digestArgs.push(e.args ?? {});
+      },
+    });
+
+    // 零 LLM 直收:不虚增 AI 升级信号(issue #33 / landing.ts:594 同族事故)。
+    expect(result.escalated).toBe(false);
+    // issue #29 复核:accept 后必须 emit 归位步骤(flatten 执行了,UI 要可见)。
+    expect(organizers.length).toBe(1);
+    expect(organizers[0]).toContain("归位到媒体库");
+    // 代码直收的判据日志:被删名单+体积进诊断步骤,出错可回溯。
+    expect(diagnostics.length).toBe(1);
+    expect(diagnostics[0]).toContain("正片清晰");
+    expect(diagnostics[0]).toContain("流浪地球.预告.mkv");
+    // 显式 aiUsed:false——前端 stepArgsText 对 true 有硬编码文案(必1 那类回归守卫)。
+    expect(diagArgs[0]?.["aiUsed"]).toBe(false);
+    // issue #29 卡片化契约:转存/落盘 digest 带结构化轮次字段(前端按此渲染轮次卡)。
+    expect(transferArgs[0]).toMatchObject({
+      round: 1,
+      pool: "primary",
+      decidedBy: "code",
+      transferIndex: 1,
+    });
+    expect(digestArgs[0]).toMatchObject({
+      round: 1,
+      passes: false,
+      videoCount: 3, // transfer.staging.length(全量落盘文件:2 视频+1 字幕,口径与 TV 一致)
+    });
+    expect(result.coverage.coverageMet).toBe(true);
+    // Only the largest video (the film) survives; the trailer + wrapper are gone.
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path).sort()).toEqual([
+      "流浪地球 (2019).ass",
+      "流浪地球 (2019).mkv",
+    ]);
+  });
+
+  it("选片仲裁升级后,dominant 代码直收必须保留 escalated=true 且不再调 AI (交叉格,对齐 fast-path.test.ts:145)", async () => {
+    // 双 A 候选(同为 A 级,无唯一 top)→ 选片仲裁(AI 1 次)选中 c1 → c1 转存落盘 dominant 满足
+    // (2GB 正片 + 100MB 预告)→ 代码直收(零 AI)→ escalated 不能掉回 false。
+    const { sandbox, movieDir, storage } = await createMovieSetup({
+      candidates: [
+        { id: "c1", title: "流浪地球.2019.4K" }, // A 级(标题+年份)
+        { id: "c2", title: "流浪地球.2019.1080p" }, // 同为 A 级 → 无唯一 top → 选片仲裁必触发
+      ],
       packs: {
         c1: {
           files: [
@@ -201,22 +281,54 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
       },
     });
 
+    let aiCalls = 0;
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      // 只有选片仲裁会调模型(1 次);代码直收阶段若再调,计数即 >1 → 暴露回归。
+      model: sequentialModel(['{"candidateId":"c1","reasoning":"选 c1"}'], () => {
+        aiCalls += 1;
+      }),
+      target: movieTarget,
+    });
+
+    // 选片 AI 参与过 → 升级信号保留(代码直收只省掉"诊断"那次调用,不清历史)。
+    expect(aiCalls).toBe(1); // 唯一一次调用是选片仲裁;diagnostic 阶段零 AI
+    expect(result.escalated).toBe(true);
+    expect(result.coverage.coverageMet).toBe(true);
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+  });
+
+  it("escalates to the diagnostic arbitrator when the landing is NOT dominantly clean, honors accept", async () => {
+    // 两个视频都不是脏包(AI 才有发言权,代码判不了)→ 必须调 AI 仲裁,escalated=true。
+    const { sandbox, movieDir, storage } = await createMovieSetup({
+      candidates: [{ id: "c1", title: "流浪地球.2019.4K" }], // unique A → blind transfer
+      packs: {
+        c1: {
+          files: [
+            { path: "流浪地球.正片1.mkv", sizeBytes: 3_000_000_000 },
+            { path: "流浪地球.正片2.mkv", sizeBytes: 2_500_000_000 }, // 非脏包 → 不满足判据
+          ],
+        },
+      },
+    });
+
     const organizers: string[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
-      model: textModel('{"action":"accept","reasoning":"预告片不影响正片"}'),
+      model: textModel('{"action":"accept","reasoning":"两个正片文件,保留大的"}'),
       target: movieTarget,
       onProgress: (e) => {
         if (e.toolName === "finalizeLanding") organizers.push(e.activity ?? "");
       },
     });
 
-    expect(result.escalated).toBe(true);
-    // issue #29 复核:movie accept 分支也必须 emit 归位步骤(flatten 执行了,UI 要可见)。
+    expect(result.escalated).toBe(true); // AI 参与了 → 真升级信号
+    // issue #29 复核:AI accept 分支也必须 emit 归位步骤。
     expect(organizers.length).toBe(1);
     expect(organizers[0]).toContain("归位到媒体库");
     expect(result.coverage.coverageMet).toBe(true);
-    // Only the largest video (the film) survives; the trailer + wrapper are gone.
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);
@@ -316,15 +428,24 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
 
     // 4 A-grades → arbitrator picks c1; c1/c2/c3 are dead links (not counted),
     // c4 lands — exactly ONE real transfer attempt.
+    const transferArgs: Record<string, unknown>[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
       model: textModel('{"candidateId":"c1","reasoning":"选第一个"}'),
       target: movieTarget,
+      onProgress: (e) => {
+        if (e.toolName === "transferCandidate") transferArgs.push(e.args ?? {});
+      },
     });
 
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["MOVIE"]);
     expect(result.steps).toBe(1);
+    // issue #29 A3:死链候选发两条 transferCandidate(354 正常转存 emit + 388 死链 emit),
+    // 都带 round=1(探针不占 round,与真实转存同号并入同卡)——前端不渲染「未记录轮次」空卡;
+    // decidedBy 来自选片仲裁(4 A 无唯一 top → "ai")。
+    expect(transferArgs.map((a) => a["round"])).toEqual([1, 1, 1, 1, 1, 1, 1]);
+    expect(transferArgs.map((a) => a["decidedBy"])).toEqual(["ai", "ai", "ai", "ai", "ai", "ai", "ai"]);
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);
@@ -670,6 +791,7 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       aliases: ["The Wandering Earth"],
     });
 
+    const transferArgs: Record<string, unknown>[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
       model: sequentialModel([
@@ -679,6 +801,9 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
         '{"action":"retry_other","reasoning":"多影片脏包"}', // c3 → 试尽 → 兜底
       ]),
       target: aliasTarget,
+      onProgress: (e) => {
+        if (e.toolName === "transferCandidate") transferArgs.push(e.args ?? {});
+      },
     });
 
     // P2-R1:primary 优先的鉴别力——新流程必经 primary 选片仲裁(escalated=true);
@@ -691,6 +816,11 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       "流浪地球 (2019).mkv",
     ]);
     expect(searches.length).toBe(2); // primary 预搜 1 + 兜底重搜 1
+    // issue #29 卡片化:round 跨池单调递增(primary 3 次 1/2/3 + 兜底第 1 次 round=4,
+    // transferIndex 本池内计数=1)——与 tv.ts 同口径,跨池单调是本改动最易回归的点。
+    expect(transferArgs.map((a) => a["round"])).toEqual([1, 2, 3, 4]);
+    expect(transferArgs.map((a) => a["pool"])).toEqual(["primary", "primary", "primary", "fallback"]);
+    expect(transferArgs.map((a) => a["transferIndex"])).toEqual([1, 2, 3, 1]);
   });
 });
 

@@ -7,7 +7,7 @@ import { gradeCandidates, summarizeGrading } from "../../acquisition-v2/candidat
 import { finalizeMovieLanding } from "../../acquisition-v2/finalize-landing.js";
 import type { AgentToolEvent } from "../../acquisition-v2/activity.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
-import { digestMovieStaging } from "../../acquisition-v2/staging-digest.js";
+import { digestMovieStaging, fileBaseName, type MovieStagingDigest } from "../../acquisition-v2/staging-digest.js";
 import type { MovieTarget } from "../../acquisition-v2/target-types.js";
 import { pickSubtitle } from "../../acquisition-v2/subtitle-picker.js";
 import type { AssrtProviderPort } from "../../subtitle-provider.js";
@@ -25,6 +25,7 @@ import {
   logStorageProvider,
   nextCandidate,
   stepLog,
+  type TransferStepMeta,
 } from "./steps.js";
 
 /** The movie fast path (§6.5 sibling): the film's happy path runs in CODE, with
@@ -103,8 +104,10 @@ async function landSubtitlesForMovie(options: {
   title: string;
   subtitle: NonNullable<MovieFastPathOptions["subtitle"]>;
   onProgress?: (event: AgentToolEvent) => void;
+  /** 当前转存轮号:字幕步骤也带 round,并入该轮转存卡(issue #29 A3 同源语义)。 */
+  round: number;
 }): Promise<void> {
-  const { sandbox, title, subtitle, onProgress } = options;
+  const { sandbox, title, subtitle, onProgress, round } = options;
   try {
     // 1. Read the pre-warmed assrt snapshot. The orchestrator primes it BEFORE
     //    dispatch (same gate: non-CN + capable drive), so read-only first — an
@@ -121,7 +124,7 @@ async function landSubtitlesForMovie(options: {
       candidates = sandbox.subtitleCandidates();
     }
     stepLog(sandbox, title, "字幕", `assrt 候选 ${candidates.length} 条`);
-    emitStep(onProgress, "viewSubtitleSnapshot", "pick", `assrt 候选 ${candidates.length} 条`);
+    emitStep(onProgress, "viewSubtitleSnapshot", "pick", `assrt 候选 ${candidates.length} 条`, { round });
     if (candidates.length === 0) {
       return; // no packages — video alone is fine
     }
@@ -132,27 +135,99 @@ async function landSubtitlesForMovie(options: {
     });
     if (!pick.picked) {
       stepLog(sandbox, title, "字幕", pick.reason, "warn");
-      emitStep(onProgress, "viewSubtitleSnapshot", "pick", pick.reason);
+      emitStep(onProgress, "viewSubtitleSnapshot", "pick", pick.reason, { round });
       return;
     }
     stepLog(sandbox, title, "字幕", pick.reason);
-    emitStep(onProgress, "viewSubtitleSnapshot", "pick", pick.reason);
+    emitStep(onProgress, "viewSubtitleSnapshot", "pick", pick.reason, { round });
 
     // 3. Land its files into staging (soft-fail).
     const landed = await sandbox.transferSubtitle({ candidateId: pick.picked.id });
     if (landed.status === "succeeded") {
       stepLog(sandbox, title, "字幕", `落地 ${landed.landedFilenames.length} 个字幕文件`);
-      emitStep(onProgress, "transferSubtitle", "pick", `落地 ${landed.landedFilenames.length} 个字幕文件`);
+      emitStep(onProgress, "transferSubtitle", "pick", `落地 ${landed.landedFilenames.length} 个字幕文件`, { round });
     } else {
       stepLog(sandbox, title, "字幕", `落地失败:${landed.error ?? "无文件落盘"}`, "warn");
-      emitStep(onProgress, "transferSubtitle", "pick", `落地失败:${landed.error ?? "无文件落盘"}`);
+      emitStep(onProgress, "transferSubtitle", "pick", `落地失败:${landed.error ?? "无文件落盘"}`, { round });
     }
   } catch (error) {
     // Never block the video on a subtitle hiccup.
     const message = error instanceof Error ? error.message : String(error);
     stepLog(sandbox, title, "字幕", `阶段异常:${message}`, "warn");
-    emitStep(onProgress, "viewSubtitleSnapshot", "pick", `字幕阶段异常:${message}`);
+    emitStep(onProgress, "viewSubtitleSnapshot", "pick", `字幕阶段异常:${message}`, { round });
   }
+}
+
+/** movie accept 的统一收尾(issue #33 抽离,两个诊断 accept 支共用——代码直收 / AI accept):
+ *  字幕落盘(软目标) → finalizeMovieLanding(删附件+flatten+mark) → 归位 step → done。
+ *  干净直收(passes)支因结论文案不同(完成:影片已入库 vs 已完成:…(detail))保留原逻辑,
+ *  但本 helper 与其使用同一收尾顺序——issue #29 曾两次因复制分支漏 emit 返工,抽出
+ *  code/AI 两处共用,减少漂移面。 */
+async function finishMovieAccept(options: {
+  ctx: MoviePoolContext;
+  digest: MovieStagingDigest;
+  /** 收尾详情人话(doneDetail 尾部 + done.text)。 */
+  detail: string;
+  keepVideoId?: string;
+  /** 是否已发生 AI 升级(代码直收=false;AI accept=true——由调用方按实际给,不虚增)。 */
+  escalated: boolean;
+  /** 死链探测次数最新值(循环内 deadRetries += 1 可能已发生,不读 ctx 陈旧值)。 */
+  deadRetries: number;
+}): Promise<MoviePhaseOutcome> {
+  const { ctx, digest, detail, keepVideoId, escalated, deadRetries } = options;
+  const { sandbox, target, subtitle, onProgress } = ctx;
+
+  if (subtitle) {
+    await landSubtitlesForMovie({
+      sandbox,
+      title: target.title,
+      subtitle,
+      round: ctx.attempted.size,
+      ...(onProgress ? { onProgress } : {}),
+    });
+  }
+  try {
+    await finalizeMovieLanding({
+      sandbox,
+      digest,
+      ...(keepVideoId !== undefined ? { keepVideoId } : {}),
+    });
+    // issue #29 九轮拍板:与 TV 一致,不罗列集号;归位 emit 在进 finalize 后必发。
+    const organizeDetail = `归位到媒体库:标为已入库`;
+    stepLog(sandbox, target.title, "归位", organizeDetail);
+    emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, { ok: true });
+  } catch (error) {
+    await clearMovieLanding(sandbox).catch(() => {});
+    const organizeFailDetail = error instanceof Error ? error.message : String(error);
+    stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
+    emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
+    const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
+    stepLog(sandbox, target.title, "结论", doneDetail);
+    emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+    return {
+      done: await concludeUncovered(sandbox, {
+        text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
+        steps: ctx.attempted.size,
+        escalated,
+        reason: error instanceof Error ? error.message : String(error),
+      }),
+      escalated,
+      deadRetries,
+    };
+  }
+  const doneDetail = `已完成:影片已入库(${detail})`;
+  stepLog(sandbox, target.title, "结论", doneDetail);
+  emitStep(onProgress, "finish", "finalize", doneDetail);
+  return {
+    done: {
+      text: detail,
+      steps: ctx.attempted.size,
+      coverage: await sandbox.finish(),
+      escalated,
+    },
+    escalated,
+    deadRetries,
+  };
 }
 
 /** 一个候选池（primary 或兜底）的「选片 + 转存循环」回合(movie 版)。跨池共享
@@ -271,7 +346,15 @@ async function runMovieCandidatePhase(
     const currentTitle = grading.ranked.find((c) => c.id === current)?.title ?? "";
     const transferDetail = `转存《${currentTitle || "候选"}》到暂存区(第 ${ctx.attempted.size - poolTransferBase + 1} 次转存)`;
     stepLog(sandbox, target.title, "转存", transferDetail);
-    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current, ...(currentTitle ? { title: currentTitle } : {}), ...(urlById?.[current] !== undefined ? { linkUrl: urlById[current] } : {}) });
+    // issue #29:转存步骤的结构化证据(卡片化,与 tv.ts 对齐)。round 跨池单调递增,
+    // 给前端「第几轮转存」;movie 补上后活动页记录也按轮次卡片渲染。
+    const transferMeta: TransferStepMeta = {
+      round: ctx.attempted.size + 1,
+      pool: poolLabel === "兜底" ? "fallback" : "primary",
+      decidedBy: grading.uniqueTopGrade ? "code" : "ai",
+      transferIndex: ctx.attempted.size - poolTransferBase + 1,
+    };
+    emitStep(onProgress, "transferCandidate", "transfer", transferDetail, { candidateId: current, ...(currentTitle ? { title: currentTitle } : {}), ...transferMeta, ...(urlById?.[current] !== undefined ? { linkUrl: urlById[current] } : {}) });
     const transfer = await sandbox.transferCandidate({
       snapshotId: candidateSnapshotId(view, current),
       candidateId: current,
@@ -282,7 +365,13 @@ async function runMovieCandidatePhase(
       stepLog(sandbox, target.title, "转存失败", blockDetail, "error");
       const doneDetail = `失败(系统阻塞:${transfer.systemicBlock.reason})`;
       stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "transferCandidate", "transfer", blockDetail);
+      // issue #29 A3(与 landing.ts 对齐):systemic 也是转存轮事件,补 round 防前端
+      // 误判为老数据序号卡(否则卡片模式每遇系统阻塞就出一张「未记录轮次」空卡)。
+      emitStep(onProgress, "transferCandidate", "transfer", blockDetail, {
+        candidateId: current,
+        round: ctx.attempted.size + 1,
+        decidedBy: grading.uniqueTopGrade ? "code" : "ai",
+      });
       emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
         done: {
@@ -305,7 +394,13 @@ async function runMovieCandidatePhase(
     const deadTitle = grading.ranked.find((c) => c.id === current)?.title ?? "该候选";
     const deadDetail = `《${deadTitle}》死链(转存未落盘)${next ? `,重试换一条候选(${deadRetries}/${MAX_DEAD_LINK_RETRIES})` : ",没有可换的"}`;
       stepLog(sandbox, target.title, "转存失败", deadDetail, "warn");
-      emitStep(onProgress, "transferCandidate", "transfer", deadDetail, { candidateId: current });
+      // issue #29 A3(与 landing.ts 对齐):dead 探针也归当前轮——探针不占 round,
+      // 与紧随其后的真实转存同号,并入同一张卡(否则每遇死链就出一张「未记录轮次」空卡)。
+      emitStep(onProgress, "transferCandidate", "transfer", deadDetail, {
+        candidateId: current,
+        round: ctx.attempted.size + 1,
+        decidedBy: grading.uniqueTopGrade ? "code" : "ai",
+      });
       current = next;
       continue;
     }
@@ -323,26 +418,43 @@ async function runMovieCandidatePhase(
       const next = nextCandidate(grading, ctx.tried);
       const noVideoDetail = `没有落盘任何视频(仅字幕/杂项),清空后换一条候选${next ? "" : "(没有可换的,终止)"}`;
       stepLog(sandbox, target.title, "digest 验证", noVideoDetail, "warn");
-      emitStep(onProgress, "stagingDigest", "verify", noVideoDetail);
+      emitStep(onProgress, "stagingDigest", "verify", noVideoDetail, {
+        passes: false,
+        videoCount: 0,
+        round: ctx.attempted.size,
+      });
       current = next;
       continue;
     }
 
     // issue #29 用户拍板:activity 人话化——但 movie 的 digest.summary 同时是诊断仲裁 LLM 输入,
     // 保持富信息(文件名单/脏包信号);UI 用 digestDetail 人话结论。
-    const digestDetail = digest.passes
-      ? `一部正片(视频 ${digest.videos.length} / 字幕 ${digest.subtitles.length})`
-      : digest.isDirtyPack
-        ? `不是单部正片(${digest.videos.length} 个视频文件${digest.junkSignals.length > 0 ? ",含广告/花絮等多余文件" : ""}),交给诊断仲裁`
-        : "没有落盘任何视频,换一条候选";
+    // issue #33:三支——干净直收(1 部正片) / 代码直收(多视频但正片明显占优) / 交诊断仲裁。
+    let digestDetail: string;
+    if (digest.passes) {
+      digestDetail = `一部正片(视频 ${digest.videos.length} / 字幕 ${digest.subtitles.length})`;
+    } else if (digest.dominant !== null) {
+      digestDetail = `多视频但正片明显占优:保留 ${digest.dominant.keptName},丢弃 ${digest.dominant.dropped.map((d) => d.name).join(" / ") || "(无)"},代码直收`;
+    } else if (digest.isDirtyPack) {
+      digestDetail = `不是单部正片(${digest.videos.length} 个视频文件${digest.junkSignals.length > 0 ? ",含广告/花絮等多余文件" : ""}),交给诊断仲裁`;
+    } else {
+      digestDetail = "没有落盘任何视频,换一条候选";
+    }
     stepLog(
       sandbox,
       target.title,
       "digest 验证",
       digestDetail,
-      digest.passes ? "log" : "warn",
+      digest.passes || digest.dominant !== null ? "log" : "warn",
     );
-    emitStep(onProgress, "stagingDigest", "verify", digestDetail);
+    // issue #29:digest 步骤结构化证据(卡片化判定)。round 与转存轮次一致,
+    // 前端把 digest 并入该轮转存卡(passes/videoCount 供判定与「N 个文件」展示)。
+    emitStep(onProgress, "stagingDigest", "verify", digestDetail, {
+      passes: digest.passes,
+      // 口径与 TV 一致(landing.ts:491):落盘文件总数(含视频/字幕/nfo),前端文案「N 个文件」。
+      videoCount: transfer.staging.length,
+      round: ctx.attempted.size,
+    });
 
     // One clean film → flatten + mark in code, zero LLM.
     if (digest.passes) {
@@ -354,11 +466,12 @@ async function runMovieCandidatePhase(
           sandbox,
           title: target.title,
           subtitle,
+          round: ctx.attempted.size,
           ...(onProgress ? { onProgress } : {}),
         });
       }
       try {
-        const finalized = await finalizeMovieLanding({ sandbox, digest });
+        await finalizeMovieLanding({ sandbox, digest });
         // issue #29 九轮拍板:与 TV 一致,不罗列集号(明细在 rename 列表里)。
         // 九轮复核:movie.length 是 flatten 后目录清单(含零移动/字幕),不实——去掉计数。
         const organizeDetail = `归位到媒体库:标为已入库`;
@@ -398,7 +511,36 @@ async function runMovieCandidatePhase(
       };
     }
 
-    // Not one clean film → diagnostic arbitration (escalation #2).
+    // Not one clean film → try code-based dominant-video acceptance first
+    // (issue #33:多视频但最大视频明显占优+其余为花絮/trailer等 → 零 LLM 直收),
+    // fall back to diagnostic arbitration (escalation #2).
+    if (digest.dominant !== null) {
+      // 代码直收:zero LLM——不新增 AI 升级,但也绝不抹掉前面选片仲裁已置的 escalated
+      // (fast-path.test.ts:145 交叉格契约)。日志:判据数字 + 被删名单+体积,出错可回溯(#33)。
+      const droppedList = digest.dominant.dropped
+        .map((d) => `${d.name}(${(d.bytes / (1024 * 1024)).toFixed(0)}MB)`)
+        .join(", ");
+      const codeAcceptDetail =
+        `正片清晰:保留 ${digest.dominant.keptName} (${(digest.dominant.keptBytes / (1024 * 1024)).toFixed(0)}MB),` +
+        `丢弃 ${droppedList || "(无)"}(判据 主片>其余和×${digest.dominant.ratio} 且附件≤${digest.dominant.junkMaxBytes / (1024 * 1024)}MB)`;
+      stepLog(sandbox, target.title, "诊断", codeAcceptDetail, "log");
+      emitStep(onProgress, "arbitrateDiagnosis", "verify", codeAcceptDetail, {
+        aiUsed: false,
+        dominant: {
+          kept: digest.dominant.keptName,
+          dropped: digest.dominant.dropped.map((d) => d.name),
+        },
+      });
+      return finishMovieAccept({
+        ctx,
+        digest,
+        detail: codeAcceptDetail,
+        keepVideoId: digest.dominant.id,
+        escalated, // 当前局部值:code 直收不新增升级,存在则保留
+        deadRetries, // 循环内死链探针可能已累加,带出最新值
+      });
+    }
+    // 代码判不了 → 诊断仲裁(AI)。
     escalated = true;
     const diagnosis = await arbitrateMovieDiagnosis({
       model,
@@ -407,56 +549,23 @@ async function runMovieCandidatePhase(
       year: target.year,
     });
     if (diagnosis.action === "accept") {
-      // Same subtitle stage as the clean-pass: land subtitles before flatten so
-      // video + subtitles get renamed together.
-      if (subtitle) {
-        await landSubtitlesForMovie({
-          sandbox,
-          title: target.title,
-          subtitle,
-          ...(onProgress ? { onProgress } : {}),
-        });
-      }
-      try {
-        const arMovie = await finalizeMovieLanding({ sandbox, digest });
-        // issue #29 复核揪出:movie 诊断 accept 分支与 TV 同型漏 emit——flatten/归位都执行了,
-        // 但 UI 看不到「归位到媒体库」步骤。与干净路径同款补上。
-        // issue #29 九轮拍板:同上,不罗列集号。
-        const arOrganizeDetail = `归位到媒体库:标为已入库`;
-        stepLog(sandbox, target.title, "归位", arOrganizeDetail);
-        emitStep(onProgress, "finalizeLanding", "organize", arOrganizeDetail, { ok: true });
-      } catch (error) {
-        await clearMovieLanding(sandbox).catch(() => {});
-        const organizeFailDetail = error instanceof Error ? error.message : String(error);
-        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
-        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
-        const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
-        stepLog(sandbox, target.title, "结论", doneDetail);
-        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
-        return {
-          done: await concludeUncovered(sandbox, {
-            text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
-            steps: ctx.attempted.size,
-            escalated,
-            reason: error instanceof Error ? error.message : String(error),
-          }),
-          escalated,
-          deadRetries,
-        };
-      }
-      const doneDetail = `已完成:影片已入库(${diagnosis.reasoning})`;
-      stepLog(sandbox, target.title, "结论", doneDetail);
-      emitStep(onProgress, "finish", "finalize", doneDetail);
-      return {
-        done: {
-          text: `${diagnosis.reasoning}`,
-          steps: ctx.attempted.size,
-          coverage: await sandbox.finish(),
-          escalated,
-        },
+      // issue #33 映射日志:AI 支把输入名单(喂给 AI 的 digest.summary 含全量文件)一起
+      // 写进日志,再走统一收尾;emit 在归位之前,时序与 code 支一致。
+      const aiDetail = `诊断仲裁(${digest.videos.length} 个视频:${digest.videos.map((v) => fileBaseName(v)).join(" / ")}): ${diagnosis.reasoning || "正片可收"}`;
+      stepLog(sandbox, target.title, "诊断", aiDetail, "log");
+      // 注意:不传 aiUsed:true——step-args-text.ts:91 会把它渲染成「AI 已介入集数映射」,
+      // 那是 TV 集数映射专用文案,movie 没有集数映射,挂上去是错误文案。🤖 徽章由
+      // arbitrate* 前缀提供(activity-feed.tsx stepUsedAI),无需显式 true。
+      emitStep(onProgress, "arbitrateDiagnosis", "verify", aiDetail, {
+        reasoning: diagnosis.reasoning,
+      });
+      return finishMovieAccept({
+        ctx,
+        digest,
+        detail: aiDetail,
         escalated,
         deadRetries,
-      };
+      });
     }
     if (diagnosis.action === "abandon") {
       await clearMovieLanding(sandbox);
