@@ -188,7 +188,9 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     expect(result.coverage.missing).toEqual(["MOVIE"]);
   });
 
-  it("escalates to the diagnostic arbitrator on a dirty landing (2 videos), honors accept, keeps the largest film", async () => {
+  it("code-accepts a dominant-video landing with ZERO LLM (issue #33), keeps the largest film, emits organize", async () => {
+    // 2GB 正片 + 100MB 预告 = 满足 dominant 判据(2GB > 100MB×2、≥300MB、附件≤1.5GB)
+    // → 代码直收,绝不调模型。
     const { sandbox, movieDir, storage } = await createMovieSetup({
       candidates: [{ id: "c1", title: "流浪地球.2019.4K" }], // unique A → blind transfer
       packs: {
@@ -202,21 +204,62 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     });
 
     const organizers: string[] = [];
+    const diagnostics: string[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
-      model: textModel('{"action":"accept","reasoning":"预告片不影响正片"}'),
+      model: throwModel(), // 代码直收必须零 LLM——模型被调用就爆炸
+      target: movieTarget,
+      onProgress: (e) => {
+        if (e.toolName === "finalizeLanding") organizers.push(e.activity ?? "");
+        if (e.toolName === "arbitrateDiagnosis") diagnostics.push(e.activity ?? "");
+      },
+    });
+
+    // 零 LLM 直收:不虚增 AI 升级信号(issue #33 / landing.ts:594 同族事故)。
+    expect(result.escalated).toBe(false);
+    // issue #29 复核:accept 后必须 emit 归位步骤(flatten 执行了,UI 要可见)。
+    expect(organizers.length).toBe(1);
+    expect(organizers[0]).toContain("归位到媒体库");
+    // 代码直收的判据日志:被删名单+体积进诊断步骤,出错可回溯。
+    expect(diagnostics.length).toBe(1);
+    expect(diagnostics[0]).toContain("正片清晰");
+    expect(diagnostics[0]).toContain("流浪地球.预告.mkv");
+    expect(result.coverage.coverageMet).toBe(true);
+    // Only the largest video (the film) survives; the trailer + wrapper are gone.
+    expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
+      "流浪地球 (2019).mkv",
+    ]);
+  });
+
+  it("escalates to the diagnostic arbitrator when the landing is NOT dominantly clean, honors accept", async () => {
+    // 两个视频都不是脏包(AI 才有发言权,代码判不了)→ 必须调 AI 仲裁,escalated=true。
+    const { sandbox, movieDir, storage } = await createMovieSetup({
+      candidates: [{ id: "c1", title: "流浪地球.2019.4K" }], // unique A → blind transfer
+      packs: {
+        c1: {
+          files: [
+            { path: "流浪地球.正片1.mkv", sizeBytes: 3_000_000_000 },
+            { path: "流浪地球.正片2.mkv", sizeBytes: 2_500_000_000 }, // 非脏包 → 不满足判据
+          ],
+        },
+      },
+    });
+
+    const organizers: string[] = [];
+    const result = await runMovieFastPathAcquisition({
+      sandbox,
+      model: textModel('{"action":"accept","reasoning":"两个正片文件,保留大的"}'),
       target: movieTarget,
       onProgress: (e) => {
         if (e.toolName === "finalizeLanding") organizers.push(e.activity ?? "");
       },
     });
 
-    expect(result.escalated).toBe(true);
-    // issue #29 复核:movie accept 分支也必须 emit 归位步骤(flatten 执行了,UI 要可见)。
+    expect(result.escalated).toBe(true); // AI 参与了 → 真升级信号
+    // issue #29 复核:AI accept 分支也必须 emit 归位步骤。
     expect(organizers.length).toBe(1);
     expect(organizers[0]).toContain("归位到媒体库");
     expect(result.coverage.coverageMet).toBe(true);
-    // Only the largest video (the film) survives; the trailer + wrapper are gone.
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);

@@ -94,6 +94,8 @@ describe("digestMovieStaging — the movie fast path's one-film judgment", () =>
     expect(d.passes).toBe(true);
     expect(d.isDirtyPack).toBe(false);
     expect(d.videos).toHaveLength(1);
+    // 单视频是干净直收,不该判定为 dominant 包(防"单视频也置位"回归)
+    expect(d.dominant).toBe(null);
   });
 
   it("dirty when ≥2 videos land (collection / film+trailer bundle)", () => {
@@ -103,15 +105,15 @@ describe("digestMovieStaging — the movie fast path's one-film judgment", () =>
   });
 
   it("dirty when any video carries a junk signal (预告/花絮/sample)", () => {
-    // 大小相同(默认 1GB each) → 不满足 2x 判据 → 仍是 dirty
+    // 大小相同(默认 1GB each) → 主片 1GB 不 > 1GB×2 → 不满足判据 → 交 AI(dirty)
     const d = digestMovieStaging([video("流浪地球.2019.4K.mkv"), video("流浪地球.预告.mkv")]);
     expect(d.passes).toBe(false);
     expect(d.isDirtyPack).toBe(true);
     expect(d.junkSignals).toEqual(["流浪地球.预告.mkv"]);
-    expect(d.isDominantVideoAcceptable).toBe(false);
+    expect(d.dominant).toBe(null);
   });
   it("code-accepts when one video is clearly dominant and others are all junk", () => {
-    // 主片 3GB，trailer 200MB，花絮 100MB → 主片 > (200+100)*2=600MB → 可代码接受
+    // 主片 3GB，trailer 200MB，花絮 100MB → 主片 > 其余和×2 且均 ≥300MB/≤1.5GB → 代码直收
     const files: SimTreeFile[] = [
       { id: "main", path: "Oppenheimer.2023.4K.mkv", sizeBytes: 3_000_000_000, isVideo: true, isSubtitle: false },
       { id: "trailer", path: "Oppenheimer.trailer.mp4", sizeBytes: 200_000_000, isVideo: true, isSubtitle: false },
@@ -121,19 +123,68 @@ describe("digestMovieStaging — the movie fast path's one-film judgment", () =>
     expect(d.passes).toBe(false);
     expect(d.isDirtyPack).toBe(true);
     expect(d.junkSignals).toEqual(["Oppenheimer.trailer.mp4", "Oppenheimer.花絮.mkv"]);
-    expect(d.dominantVideo).toBe("main");
-    expect(d.isDominantVideoAcceptable).toBe(true);
+    expect(d.dominant?.id).toBe("main");
+    expect(d.dominant?.keptName).toBe("Oppenheimer.2023.4K.mkv");
+    // dropped 名单 = 可变回溯的完整证据(名字+体积)
+    expect(d.dominant?.dropped).toEqual([
+      { name: "Oppenheimer.trailer.mp4", bytes: 200_000_000 },
+      { name: "Oppenheimer.花絮.mkv", bytes: 100_000_000 },
+    ]);
   });
   it("does not accept when non-junk video breaks the pattern", () => {
-    // 主片 3GB + trailer 200MB + 另一个正片 2GB → 第二个非脏包视频 → 不可代码接受
+    // 主片 3GB + trailer 200MB + 另一个正片 2GB → 第二个非脏包视频 → 不可代码接受,交 AI
     const files: SimTreeFile[] = [
       { id: "main", path: "Oppenheimer.2023.4K.mkv", sizeBytes: 3_000_000_000, isVideo: true, isSubtitle: false },
       { id: "trailer", path: "Oppenheimer.trailer.mp4", sizeBytes: 200_000_000, isVideo: true, isSubtitle: false },
       { id: "other", path: "Oppenheimer.Part2.mkv", sizeBytes: 2_000_000_000, isVideo: true, isSubtitle: false },
     ];
     const d = digestMovieStaging(files);
-    expect(d.dominantVideo).toBe(null);
-    expect(d.isDominantVideoAcceptable).toBe(false);
+    expect(d.dominant).toBe(null);
+  });
+  it("does not accept when the largest video itself carries a junk signal", () => {
+    // 最大件是"花絮"(脏包标记),不可能是正片 → 交 AI
+    const files: SimTreeFile[] = [
+      { id: "main", path: "Oppenheimer.2023.4K.花絮.mkv", sizeBytes: 3_000_000_000, isVideo: true, isSubtitle: false },
+      { id: "trailer", path: "Oppenheimer.trailer.mp4", sizeBytes: 200_000_000, isVideo: true, isSubtitle: false },
+    ];
+    const d = digestMovieStaging(files);
+    expect(d.dominant).toBe(null);
+  });
+  it("does not accept at exactly 2x (strict >)", () => {
+    // 主片恰为其余 2 倍 → 严格大于不满足 → 交 AI(保守)
+    const files: SimTreeFile[] = [
+      { id: "main", path: "Oppenheimer.2023.4K.mkv", sizeBytes: 400_000_000, isVideo: true, isSubtitle: false },
+      { id: "trailer", path: "Oppenheimer.trailer.mp4", sizeBytes: 200_000_000, isVideo: true, isSubtitle: false },
+    ];
+    const d = digestMovieStaging(files);
+    expect(d.dominant).toBe(null);
+  });
+  it("does not accept when sizes are all zero (no evidence)", () => {
+    const files: SimTreeFile[] = [
+      { id: "main", path: "Oppenheimer.2023.4K.mkv", sizeBytes: 0, isVideo: true, isSubtitle: false },
+      { id: "trailer", path: "Oppenheimer.trailer.mp4", sizeBytes: 0, isVideo: true, isSubtitle: false },
+    ];
+    const d = digestMovieStaging(files);
+    expect(d.dominant).toBe(null);
+  });
+  it("does not accept when the main video is below the absolute floor", () => {
+    // 主片 500MB 达标,但需 ≥300MB;这里 150MB 正片 + 50MB 花絮 → 主片低于下限 → 交 AI
+    // (防误命名的短片/预告被当正片代码假入库)
+    const files: SimTreeFile[] = [
+      { id: "main", path: "Movie.2023.4K.mp4", sizeBytes: 150_000_000, isVideo: true, isSubtitle: false },
+      { id: "extra", path: "Movie.2023.花絮.mp4", sizeBytes: 50_000_000, isVideo: true, isSubtitle: false },
+    ];
+    const d = digestMovieStaging(files);
+    expect(d.dominant).toBe(null);
+  });
+  it("does not accept an oversized junk file (2GB trailer would be silently deleted)", () => {
+    // 其余件 2GB > junkMax 1.5GB → 不直收,防"2GB 的 trailer"被代码删掉
+    const files: SimTreeFile[] = [
+      { id: "main", path: "Oppenheimer.2023.4K.mkv", sizeBytes: 8_000_000_000, isVideo: true, isSubtitle: false },
+      { id: "trailer", path: "Oppenheimer.trailer.mp4", sizeBytes: 2_000_000_000, isVideo: true, isSubtitle: false },
+    ];
+    const d = digestMovieStaging(files);
+    expect(d.dominant).toBe(null);
   });
 
   it("neither passes nor dirty when nothing lands as a video (subtitle-only)", () => {
@@ -141,6 +192,7 @@ describe("digestMovieStaging — the movie fast path's one-film judgment", () =>
     expect(d.passes).toBe(false);
     expect(d.isDirtyPack).toBe(false);
     expect(d.videos).toHaveLength(0);
+    expect(d.dominant).toBe(null);
   });
 });
 describe("digestStaging — overrides (功能2 AI 集数映射)", () => {
