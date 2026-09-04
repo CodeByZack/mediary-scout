@@ -88,9 +88,13 @@ export async function tryEpisodeMapping(options: {
   // AI 看到的文件 = 全部落盘视频(含代码"已解析"的)减去确认的衍生内容
   // (彩蛋/直拍/加更/预告/广告等——它们本就不该有集号,交给 AI 只会浪费 token)。
   const DERIVATIVE = /(sample|样本|广告|花絮|预告|trailer|彩蛋|直拍|加更|幕后|专访|宣传|前瞻|总宣|花絮|特辑)/i;
+  // issue #39 复核:allFiles 过滤再减 digest.junkSignals(单一真源=digest 的附件判定,
+  // 含 ost/mv/making/采访 等 DERIVATIVE 缺的词)——否则"已判附件、必然被 finalize 丢弃"的
+  // 文件仍会送去问 AI,答案被 ram() 忽略却打出「AI 识别出 N 集」冒报(issue #29 review ① 同族)。
+  const junkSet = new Set(digest.junkSignals);
   const allFiles = digest.videos
     .map((v) => v.path.split("/").pop() ?? v.path)
-    .filter((name) => !DERIVATIVE.test(name));
+    .filter((name) => !junkSet.has(name) && !DERIVATIVE.test(name));
   if (allFiles.length === 0) {
     return "no"; // 全是衍生内容 → 无正片可映射。
   }

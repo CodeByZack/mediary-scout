@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { digestMovieStaging, digestStaging, digestTitle } from "../src/acquisition-v2/staging-digest.js";
 import type { SimTreeFile } from "../src/acquisition-v2/storage-115-simulator.js";
 
-function video(name: string, id = name): SimTreeFile {
-  return { id, path: name, sizeBytes: 1_000_000_000, isVideo: true, isSubtitle: false };
+function video(name: string, sizeBytes = 1_000_000_000, id = name): SimTreeFile {
+  return { id, path: name, sizeBytes, isVideo: true, isSubtitle: false };
 }
 function sub(name: string, id = name): SimTreeFile {
   return { id, path: name, sizeBytes: 1_000_000, isVideo: false, isSubtitle: true };
@@ -25,14 +25,16 @@ describe("digestStaging — TV", () => {
     expect(d.subtitles).toHaveLength(1);
   });
 
-  it("flags a dirty pack when a sample file lands", () => {
+  it("sample 附件不再判脏:集数覆盖 need 即收尾(issue #39 用户拍板——不区分严重/轻微附件)", () => {
+    // sample 命中 JUNK → 只进 junkSignals(finalize 丢弃),不否决整包;E01 覆盖 → passes=true。
     const d = digestStaging({
       files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.S01E01.sample.mkv")],
       ...tvInput,
     });
-    expect(d.isDirtyPack).toBe(true);
-    expect(d.passes).toBe(false);
-    expect(d.junkSignals.length).toBeGreaterThan(0);
+    expect(d.isDirtyPack).toBe(false);
+    expect(d.passes).toBe(true);
+    expect(d.junkSignals).toEqual(["狂飙.S01E01.sample.mkv"]);
+    expect(d.coveredCodes).toEqual(["S01E01"]);
   });
 
   it("flags a dirty pack when a TV video has no episode code AND no junk marker (unknown file)", () => {
@@ -69,14 +71,32 @@ describe("digestStaging — TV", () => {
     expect(d.junkSignals).toEqual(["狂飙.预告.mkv"]);
   });
 
-  it("issue #39: 正片 + sample → 仍判脏(sample 是严重脏包,疑似预览包)", () => {
+
+  it("issue #39 防线:附件恰好带集号(Show.S01E01.预告.mkv)→ 不进 episodeCodes(防假覆盖→假入库)", () => {
+    // 包内只有"预告"文件(命中 JUNK 标记),即使文件名带 S01E01 集号也不认作正片——
+    // finalize 会丢弃它,若计入 coveredCodes 会标记已入库但文件被丢(假入库)。
     const d = digestStaging({
-      files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.S01E01.sample.mkv")],
+      files: [video("Show.S01E01.预告.mkv")],
       ...tvInput,
     });
-    expect(d.isDirtyPack).toBe(true);
+    expect(d.episodeCodes).toEqual([]);
+    expect(d.coveredCodes).toEqual([]);
+    expect(d.missingCodes).toEqual(["S01E01", "S01E02", "S01E03"]);
     expect(d.passes).toBe(false);
-    expect(d.junkSignals).toEqual(["狂飙.S01E01.sample.mkv"]);
+    expect(d.junkSignals).toEqual(["Show.S01E01.预告.mkv"]);
+  });
+
+  it("issue #39 防线:AI 集数映射(overrides)也救不回附件——continue 先于 override", () => {
+    // 即便 AI/overrides 给附件一个集号,digest 循环里 JUNK 命中在 parse 之前 continue,
+    // 附件不进 episodeCodes(钉住关键顺序,将来有人重排循环就靠它)。
+    const d = digestStaging({
+      files: [video("Show.S01E01.预告.mkv")],
+      overrides: { "Show.S01E01.预告.mkv": "S01E01" },
+      ...tvInput,
+    });
+    expect(d.episodeCodes).toEqual([]);
+    expect(d.coveredCodes).toEqual([]);
+    expect(d.passes).toBe(false);
   });
 
   it("reports out-of-season codes without failing coverage of in-season ones", () => {
@@ -113,13 +133,13 @@ describe("digestStaging — movie", () => {
     expect(d.episodeCodes).toEqual([]);
   });
 
-  it("flags junk even for a movie (sample file)", () => {
-    const d = digestStaging({
-      files: [video("奥本海默 (2023).mkv"), video("奥本海默 sample.mkv")],
-      seasons: [],
-      needCodes: ["MOVIE"],
-    });
-    expect(d.isDirtyPack).toBe(true);
+  it("movie sample 文件:dominant 判据把 sample 当附件丢(奥本海默 1GB > sample 100MB×2)", () => {
+    // movie 走 digestMovieStaging(PR #37):sample 命中 JUNK → dominant 判据的"其余全是脏包"成立，
+    // 1GB 主片 > 100MB sample×2 → 代码直收(保留主片、丢弃 sample)。
+    const d = digestMovieStaging([video("奥本海默 (2023).mkv"), video("奥本海默 sample.mkv", 100_000_000)]);
+    expect(d.dominant?.id).toBe("奥本海默 (2023).mkv");
+    expect(d.dominant?.dropped).toEqual([{ name: "奥本海默 sample.mkv", bytes: 100_000_000 }]);
+    expect(d.junkSignals).toEqual(["奥本海默 sample.mkv"]);
   });
 });
 

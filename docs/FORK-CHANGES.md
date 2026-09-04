@@ -33,32 +33,42 @@
 | 2026-08-30 | fix | **PR #25 追加:综艺「第N期」→ TMDB Part 锚定 + 期号一致性校验**(§28,关 issue 系列):门闩移除、Part 锚定、AI 假集号防线 |
 | 2026-09-01 | feat | **PR #25 追加:活动页/通知页转存轮次卡片化**(§29,issue #29):fast path 各步骤结构化字段(round/pool/decidedBy/…)+ StepList 升级为默认折叠的轮次卡片(⚙️代码/🤖AI/✓✗判定),活动页+通知页共用 |
 | 2026-09-03 | feat | **PR #37 movie 落盘诊断去 LLM 深化**(issue #33):多视频包最大正片明显占优(体积下限+附件上限+2x 判据)代码直收、判据与删除名单进日志、三支收尾抽 finishMovieAccept 共用、finalize 透传 keepVideoId(与日志删除名单一致) |
+| 2026-09-04 | fix | **PR #42 TV 脏包判定收紧**(issue #39):附件(花絮/预告/sample/广告)一律不判脏、只进 junkSignals 待 finalize 丢弃,集数覆盖 need 即收尾(用户拍板不区分严重/轻微);JUNK 正则 ost/mv/making 加分隔符守卫(修 Lost/Ghost 误报);映射输入减 junkSignals(消词表漂移) |
 
 ---
 
 ## 详细记录
 
-### 31. TV 脏包判定收紧——区分严重脏包与轻微附件（issue #39）
+### 31. TV 脏包判定收紧——附件不否决整包,集数满足即收尾（issue #39）
 
-**问题**:`digestStaging` 的 `hasJunk`(任何视频命中 JUNK_FILE_MARKER)→ `isDirtyPack=true`
-→ 正片集号齐全但混入花絮/预告附件的包被整体判脏换候选,正片全丢。综艺/纪录片
-正片+花絮混装是常态,这种过度惩罚导致有效包被弃。
+**问题(症状修正版)**:`digestStaging` 的 `hasJunk`(任何视频命中 JUNK_FILE_MARKER)→
+`isDirtyPack=true` → 部分覆盖(need 10 集、包内 8 集正片 + 花絮)时整包判脏 → 白烧一轮
+映射 AI → 换候选 → 8 集正片全丢。综艺/纪录片正片+花絮混装是常态,这种过度惩罚导致有效包被弃。
 
-**修法(方案 B)**:`staging-digest.ts` 新增 `CRITICAL_JUNK_MARKER`(sample/样本/广告),
-`digestStaging` 循环重构——命中 JUNK_FILE_MARKER 的视频只进 `junkSignals`(finalize-landing
-跳过改名/归位、wipe 时丢弃),**不参与集号解析与覆盖判定**(防"附件恰好带集号"假覆盖
-→ 标记已入库但文件被丢);`isDirtyPack` 收紧为 `hasCriticalJunk || tvHasUnparsedVideoJunk`,
-其中 `tvHasUnparsedVideoJunk` 现在只算"无标记的未知未解析文件"(可能是正片藏集号,
-交 AI 集数映射 §2.2)。花絮/预告/trailer/ost 等轻微附件不再判脏——正片覆盖 need 时
-`passes=true`,finalize 保留正片、丢弃附件(已有 junk 丢弃机制,零 LLM)。
+**附带修掉一个真实假收尾**(子代理复核发现,比 issue 描述更硬):pre-PR 时 need=[E01]、
+包内只有 `Show.S01E01.预告.mkv` → covered=[E01]、missing=[] → landing 收尾分支不看
+isDirtyPack → finalize 一个没 rename、mark 空,却 `verdict=accept` + 文案「已完成:S01E01
+已入库」且不再试别的候选。post-PR:附件不计数 → missing=[E01] → 换候选,假收尾消除。
 
-**安全性**:附件从集号解析中排除,杜绝 `Show.S01E01.预告.mkv` 这类"附件带集号"
-被误认作正片导致假入库;严重脏包 sample/广告 仍判脏(疑似预览/广告混编包交 AI/换候选)。
-Movie 路径不动(`digestMovieStaging` 独立 + PR #37 dominant 直收已覆盖)。
+**修法(用户拍板:不区分严重/轻微附件,集数满足即收尾)**:`staging-digest.ts` 的
+`digestStaging` 循环重构——命中 JUNK_FILE_MARKER 的视频**只进 `junkSignals`**
+(finalize-landing 跳过改名/归位、wipe 时丢弃),**不参与集号解析与覆盖判定**(防
+"附件恰好带集号"如 `Show.S01E01.预告.mkv` 被误认作正片 → 假覆盖 → 标记已入库但文件被丢)。
+`isDirtyPack` 收紧为 `tvHasUnparsedVideoJunk`(仅"无标记的未知未解析文件",可能是正片
+藏集号,交 AI 集数映射 §2.2)。附件(含 sample/广告/花絮/预告)一律不判脏——集数覆盖 need
+即 `passes=true`,finalize 保留正片、丢弃附件(已有 junk 丢弃机制,零 LLM)。
+TV 已无诊断仲裁(`arbitrateDiagnosis` 生产零调用方),未被集数覆盖就是换候选。
 
-**测试**:staging-digest 改 1(无集号未知→脏,原用 `幕后花絮` 改无标记未知文件)+
-加 3(正片+花絮→passes、正片+预告→passes、正片+sample→仍脏);TV 集成(fast-path/
-variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
+**其他**:`JUNK_FILE_MARKER` 的 `ost`/`mv`/`making` 加分隔符守卫(修 `Lost`/`Ghost`
+等剧名被当附件删除的误报,子代理实测对照表:只翻这 3 类、真附件零漏判);`tryEpisodeMapping`
+的 allFiles 过滤再减 `junkSignals`(消第三词表漂移,防「AI 识别出 N 集」冒报)。
+Movie 路径不动(`digestMovieStaging` 独立 + PR #37 dominant 直收已覆盖;dominant 判据
+同时受益于正则边界修复)。
+
+**测试**:staging-digest 改 3(sample→附件不判脏、未知无标记→脏、movie sample→dominant)
++ 加 2(附件带集号防线×2:裸文件名 + overrides 救不回);fast-path 加端到端(部分覆盖
++ 花絮 → 零 AI 入库、E01E02 保留、花絮清理、missing 诚实报 E03);TV 集成
+(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 ### 1. 规范视频改名（canonical video rename）
 
 **提交**: `3e64c28` — feat(workflow): canonical video rename on staging normalization

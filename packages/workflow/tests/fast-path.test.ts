@@ -283,6 +283,42 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     ]);
   });
 
+  it("issue #39: 部分覆盖 + 花絮附件 → 零 AI 入库(正片保留、附件丢弃,不再整体判脏换候选)", async () => {
+    // need=[E01,E02,E03],包=E01+E02+幕后花絮(部分覆盖 + 轻微附件)。
+    // 此前:hasJunk → 判脏 → 换候选(2 集正片全丢);现在:花絮不计集号、不判脏 → passes=true
+    // → clean finalize 保留 E01+E02、丢弃花絮,全程零 AI(throwModel)。
+    const { sandbox, s1, storage } = await createSetup({
+      candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],
+      packs: {
+        c1: {
+          files: [
+            { path: "狂飙.S01E01.1080p.mkv", sizeBytes: 1_000_000_000 },
+            { path: "狂飙.S01E02.1080p.mkv", sizeBytes: 1_000_000_000 },
+            { path: "幕后花絮.mkv", sizeBytes: 50_000_000 },
+          ],
+        },
+      },
+      need: ["S01E01", "S01E02", "S01E03"],
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: throwModel(), // 附件场景零 AI——模型被调就爆炸
+      target: { ...target, missingEpisodes: ["S01E01", "S01E02", "S01E03"] },
+      isChineseNative: false,
+    });
+
+    expect(result.escalated).toBe(false); // 零 AI:附件场景不升级
+    // 部分覆盖(E01+E02 of E01-E03)→ 已入库 2 集,结账诚实报 E03 仍缺(不伪造全覆盖)。
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.coverage.missing).toEqual(["S01E03"]);
+    // 两集正片改名归位,花絮被丢弃(进 junkSignals → finalize 跳过 + wipe 清除)。
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+      "狂飙.S01E02.mkv",
+    ]);
+  });
+
   it("issue #29 八轮拍板: AI 映射覆盖缺集后直接收尾(无第二次诊断仲裁)——fansub 包保住映射集 (S03,原 2026-08-21 bugfix)", async () => {
     let aiCalls = 0;
     // 末日地堡 S03 缺 S08:包是 fansub 风格 `末日地堡 - 08.mkv`(文件名夹标题,
