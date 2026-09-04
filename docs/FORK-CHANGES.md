@@ -105,6 +105,28 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 
 **测试**:candidate-grader(23)、fast-path(36)、consumption-evidence(11)、staging-digest(33)全绿,无回归。
 
+### 34. 识别规则可配置系统 Phase 0——数据层与 ruleset 加载器(issue #44)
+
+**目标**(issue #44):让用户在 UI 上编辑集数解析正则和 AI 仲裁 Prompt,适应不同作品的命名习惯。分四期落地,本期为 Phase 0(建表 + ruleset.ts)。
+
+**约定(用户拍板)**:
+- 集数解析正则以**实际代码为准**(issue 标题写「7 条」是笔误,实际 6 条:规则 0 SxxExx / 1 变体 / 2 E01 / 3 1x01 / 4 第N集·话·期 / 5 纯数字);
+- AI Prompt 只配 **4 个**仍在生产的:SELECTION_SYSTEM(TV 选片)、EPISODE_MAPPING_SYSTEM(TV 集数映射)、MOVIE_SELECTION_SYSTEM(Movie 选片)、MOVIE_DIAGNOSIS_SYSTEM(Movie 诊断)——TV 诊断 DIAGNOSIS_SYSTEM/arbitrateDiagnosis 在 main 上**零调用点**(#33/#42 后 TV 诊断已代码化),不开放配置。
+
+**改动**:
+- sqlite.ts 加 2 张表:rule_patterns(rule_id PK, role, expression, label, sort_order, is_default, created_at)、prompt_overrides(arbitration_kind PK, prompt_text, is_active)。**偏离 issue DDL 一处**:rule_patterns 增加 role 列(season-episode / episode-only),因为解析代码依赖捕获组位置(group1=季、group2=集 / group1=集号),自定义规则必须声明角色才能被安全消费;
+- 新增 ruleset.ts(225 行):RulePattern/PromptOverride 类型、BUILTIN_RULE_PATTERNS(6 条,逐一镜像 episode-code.ts 的解析正则)、ARBITRATION_KINDS(4 个)、compileRulePattern(安全编译,非法返回 null)、countCaptureGroups(跳过转义/字符类/非捕获/前瞻后顾;命名捕获组 (?<name> 正确计入)、validateRuleExpression(先校验 role 合法,再验可编译 + 必需捕获组数:season-episode ≥ 2、episode-only ≥ 1;组数大于必需宽容放行,顺序/空匹配由 Phase 1 apply 侧运行时拒)、loadRulePatterns(表空 → 内置深拷贝;内置行覆盖表达式;内置行损坏 → 回退该条内置;非空表中缺失的内置 = 用户停用;自定义损坏/未知 role 丢弃;expression 读侧 trim;按 sort_order 排序)、loadPromptOverrides(透传,合并逻辑留 Phase 2);
+- **内置正则是「裸正则 + 代码守卫」两层模型(重要设计约束)**:裸正则承载匹配文本,但 digits 的剥扩展名/合理集数守卫/年份排除、chinese 的衍生黑名单/Part 锚定/集话回退、ep-only/cross 的 isPlausibleEpisodeNumber、多季禁用无季规则等语义**不进配置**,由 episode-code.ts 按 ruleId 的固定分支保留(Phase 1 只替换正则文本,保守起见自定义规则走通用 apply);正则不支持 flags(JS 拒内联 (?i),内置靠 [Ss][Ee] 字符类兜底);is_default 默认 1,自定义规则写入需显式 0(Phase 1 UI 注意)。
+- repository.ts:接口 + InMemory 实现各加 listRulePatterns / replaceRulePatterns(整体替换,空数组=清空回退内置)/ listPromptOverrides / replacePromptOverrides;
+- sqlite.ts:SqliteWorkflowRepository 实现同 4 方法(事务内 clear+insert;replaceRulePatterns 用 INSERT OR REPLACE,重复 ruleId 双引擎一致 last-wins;replacePromptOverrides 仍是普通 INSERT,重复 kind 时 SQLite 抛错——Phase 2 触碰 prompt 覆盖时顺手统一为 OR REPLACE);
+- index.ts 导出 ruleset。
+
+**安全边界**(对应 issue):正则保存时 new RegExp 试编译 + 捕获组契约校验(界面标红在 Phase 1);表为空或规则损坏自动回退内置值;prompt 模板化(固定块不可改)在 Phase 2。
+
+**子代理 review(REQUEST_CHANGES → 修订闭环)**:唯一必须修 M1(自定义规则未知 role 被 validateRuleExpression/loadRulePatterns 双双放行,破坏「损坏丢弃」安全边界)已修(validateRuleExpression 开头拒未知 role + 自定义行按损坏丢弃 + 测试);建议改按实落地:共享引用深拷贝(S2)、重复 ruleId 双引擎统一 last-wins(SQLite 改 INSERT OR REPLACE,S3)、读侧 trim 与校验一致(S4)、repo+loader 端到端回退测试(S7)、「≥ 组数 + 顺序/空匹配运行时拒」契约注释(S5);S1/S6/S8 记录在改动列表与安全边界段;I1 行数修正为 225。待复核子代理确认闭环。
+
+**测试**:新增 ruleset.test.ts(19 用例:组计数/校验/编译/加载语义/深拷贝/trim/端到端回退)+ repository-contract 加 3 组 round-trip(含重复 ruleId last-wins)(InMemory 56 + SQLite 59 全绿);workflow 包 tsc 零错误;episode-code(24)无回归。
+
 ### 1. 规范视频改名（canonical video rename）
 
 **提交**: `3e64c28` — feat(workflow): canonical video rename on staging normalization
