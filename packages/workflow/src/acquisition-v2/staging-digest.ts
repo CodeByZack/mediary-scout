@@ -48,9 +48,6 @@ export interface StagingDigest {
   /** Whether the landing cleanly covers ≥1 needed item with no junk — the fast
    *  path can rename/归位/标记 straight away. */
   passes: boolean;
-  /** Whether the landing is a dirty pack (junk present, or TV videos that do not
-   *  parse to episode codes). Escalates to the diagnostic arbitrator. */
-  isDirtyPack: boolean;
   /** Compact LLM-ready summary (the diagnostic arbitrator's input). */
   summary: string;
 }
@@ -139,16 +136,10 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
   const coveredCodes = episodeCodes.filter((code) => needSet.has(code));
   const missingCodes = input.needCodes.filter((need) => !needSet.has(need) || !episodeCodes.includes(need));
 
-  // issue #39(用户拍板):附件(命中 JUNK 标记的文件)一律不判脏——集数满足 need 即收尾,
-  // finalize-landing 按 junkSignals 丢弃附件、保留正片。只有"无标记的未知未解析文件"
-  // (可能是正片藏集号,需 AI 集数映射 §2.2)才判脏。TV: 无集号且无 junk 标记的视频是"未知";
-  // Movie: 主片合法地没有集码,unparsed 不算脏。
-  const tvHasUnparsedVideoJunk = seasonSet.size > 0 && unparsedVideos.length > 0;
-
-  const isDirtyPack = tvHasUnparsedVideoJunk;
   // Coverage: ≥1 needed item landed (TV), or a video landed (movie).
+  // issue #39: passes 只看覆盖率——集号覆盖 need 即收尾,unparsed 文件不否决整包。
   const coveragePasses = seasonSet.size > 0 ? coveredCodes.length > 0 : videos.length > 0;
-  const passes = coveragePasses && !isDirtyPack;
+  const passes = coveragePasses;
 
   return {
     videos,
@@ -161,7 +152,6 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
     coveredCodes,
     missingCodes,
     passes,
-    isDirtyPack,
     summary: summarizeDigest({
       videos,
       subtitles,
@@ -173,7 +163,6 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
       coveredCodes,
       missingCodes,
       passes,
-      isDirtyPack,
     }),
   };
 }

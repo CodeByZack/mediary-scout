@@ -168,7 +168,6 @@ describe("digestStaging — 年守卫 + 综艺包(①④)", () => {
     });
     expect(d.episodeCodes).toEqual(["S10E01", "S10E08"]);
     expect(d.coveredCodes).toEqual(["S10E08"]);
-    expect(d.isDirtyPack).toBe(true);
   });
 
   it("第九季文件(2025 日期)在 S10 任务 + 播出日数据下全部不采信", () => {

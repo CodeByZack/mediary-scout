@@ -285,7 +285,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
 
   it("issue #39 附:包内只有附件(带集号的预告) → 不假收尾,换候选(season 目录空)", async () => {
     // pre-#39:need=[E01]、包内只有 Show.S01E01.预告.mkv → covered=[E01]、missing=[] →
-    // landing 收尾分支不看 isDirtyPack → verdict=accept + 文案「已完成:S01E01 已入库」,
+    // landing 收尾分支不看脏包标记 → verdict=accept + 文案「已完成:S01E01 已入库」,
     // 实际 0 入库且不再试别的候选(假收尾真实 bug)。post-#39:附件不计数 → missing=[E01] → 换候选。
     const { sandbox, s1, storage } = await createSetup({
       candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],

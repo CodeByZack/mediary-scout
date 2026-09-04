@@ -35,9 +35,7 @@ import {
  *
  * 返回值:
  *   - "passed": 映射重建 digest 通过 → 调用方应像干净落地一样 finalize;
- *   - "unmapped-but-clean": 映射唯一且合法,但重建后不覆盖 need → 不是脏包,
- *     换下一个候选;
- *   - "no" / "failed": 非单季、代码已覆盖全部缺集、或映射失败/校验不通过 → 走诊断仲裁。
+ *   - "no" / "failed": 非单季、代码已覆盖全部缺集、或映射失败/校验不通过 → 清暂存换候选。
  *
  * 校验规则(代码,不信任 AI 输出):
  *   1. 文件名必须在本次落盘的全部视频清单里(防幻觉文件名);
@@ -67,7 +65,7 @@ export async function tryEpisodeMapping(options: {
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")—— ram 重建 digest 时透传给
    *  episodeCodeFromFileName 做「第N期」Part 锚定(与年守卫同源)。 */
   episodeNames?: Record<string, string>;
-}): Promise<"passed" | "unmapped-but-clean" | "no" | "failed"> {
+}): Promise<"passed" | "no" | "failed"> {
   const { digest } = options;
   // 仅 TV 单季值得让 AI 映射;movie / 多季 → no。
   if (options.seasons.length !== 1) {
@@ -180,14 +178,7 @@ export async function tryEpisodeMapping(options: {
     emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "passed";
   }
-  if (re.episodeCodes.length > 0 && !re.isDirtyPack) {
-    // 映射上了但没覆盖 need(例如映射出的是别的集数)—— 回收干净但无用。
-    const mapDetail = `AI 识别出 ${Object.keys(clean).length} 集,没有覆盖目标集数,丢弃换候选`;
-    stepLog(options.sandbox, options.targetTitle, "集数映射", mapDetail, "warn");
-    emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", mapDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
-    return "unmapped-but-clean";
-  }
-  // 重建后仍脏(映射不完整/失败)。issue #29 用户拍板(八轮):不需要再让 AI 判断
+  // 重建后未覆盖 need(映射不完整/失败/映射出的不是目标集)。issue #29 用户拍板(八轮):不需要再让 AI 判断
   // 「收不收」——需要的集数 vs 识别出的集数一对比就知道:全覆盖 → 收尾(failed 由
   // 调用方按 missingCodes 分流);没覆盖 → 换候选。这里如实报覆盖结果即可。
   // issue #29 用户拍板:title 计数化——AI 识别出 N 集,还有 M 集没认出来;
@@ -597,7 +588,7 @@ export async function closeOutTvLanding(options: {
     // Movie landings never map episodes — they go straight to the movie diagnosis.
     // issue #29 八轮复核:escalated 不再在映射前预置 true(之前会虚增 aiEscalated——
     // tryEpisodeMapping 的 "no" 返回:多季/代码已全覆盖/全衍生文件不调 AI)。置位推迟到
-    // 确认 AI 参与过的分支出口(passed/unmapped-but-clean/failed)。注意:绝不能在这里
+    // 确认 AI 参与过的分支出口(passed/failed)。注意:绝不能在这里
     // 赋 false——options.escalated 可能已带选片仲裁(AI 挑候选)置的 true(第二轮复核
     // 揪出),覆盖会清掉全程累计 AI 历史 → runCheckout 谎报「零 AI 介入」。
     let landingDigest = digest;
@@ -690,21 +681,6 @@ export async function closeOutTvLanding(options: {
         escalated,
       }, next: null, escalated, deadRetries };
     }
-    if (mappingEscalated === "unmapped-but-clean") {
-      // 映射成功但没覆盖 need → 不是脏包了,但也没拿到需要的集 → 换候选。
-      const leftover = await sandbox.inspectStaging();
-      if (leftover.length > 0) {
-        await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
-      }
-      const next = nextCandidate(grading, tried);
-      // issue #29:换候选不显示 ID(人话)。
-      const retryDetail = `这轮转存没拿到需要的集:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
-      stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size, aiUsed: true });
-      escalated = true; // AI 集数映射参与过(虽未覆盖目标)
-      return { verdict: "retry_other", done: null, next, escalated, deadRetries };
-    }
-
     // issue #29 用户拍板(八轮实测):AI 集数映射后**不再让 AI 判断「收不收」**——
     // 需要的集数 vs 识别出的集数一对比就知道:全覆盖 → 收尾;没覆盖 → 清掉换候选。
     // 此前 failed 会升级诊断仲裁再问一次 AI(accept/retry/abandon),纯属多余(此前
@@ -712,83 +688,19 @@ export async function closeOutTvLanding(options: {
     // 目标全覆盖却因脏包信号再叫 AI)。现在按 landingDigest.missingCodes 决定。
     // issue #29 八轮复核:只有 mappingEscalated === "failed" 才是 AI 集数映射真参与过;
     // "no" 返回(多季/代码已全覆盖/全衍生文件)一次 AI 都没跑,文案不得冒领 AI 归因、
-    // escalated 不得虚增。与 unmapped-but-clean 同源分家。
+    // escalated 不得虚增。
     const mappedByAI = mappingEscalated === "failed";
     if (mappedByAI) {
       escalated = true;
     }
-    if (landingDigest.missingCodes.length === 0) {
-      // 目标集全覆盖(可能有杂项/多余文件——finalize 只补 need,多余文件清理/跳过)。
-      try {
-        // 2026-08-21 bugfix: 必须把 AI 集数映射的 overrides 传给 finalizeLanding ——
-        // 否则纯数字/日漫 fansub 文件名(如 `08.mkv`)重新用裸文件名解析时依然解析
-        // 不出,文件不 rename/不归位/不 mark,最后被 staging wipe 当垃圾清掉。
-        const arAccept = await finalizeLanding({
-          sandbox,
-          digest: landingDigest,
-          canonicalTitle: target.title,
-          seasons,
-          skipCodes: [...onDiskCodes],
-          onlyCodes: needCodes,
-          ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
-          ...(mappingTable ? { overrides: mappingTable } : {}),
-        });
-        // 九轮复核:与归位去集号一致(明细在 files)。
-        const arSkipNote =
-          (arAccept.skippedOnDisk.length > 0
-            ? ` / 已在库跳过 ${arAccept.skippedOnDisk.length} 集`
-            : "") +
-          (arAccept.skippedNotNeeded.length > 0
-            ? ` / 非缺集跳过 ${arAccept.skippedNotNeeded.length} 件`
-            : "");
-        // issue #29 用户拍板(九轮):同上,不罗列集号。
-        const arOrganizeDetail = `归位到 Season 目录${arAccept.movedCount > 0 ? `,移动 ${arAccept.movedCount} 个文件` : ""}${arAccept.discarded.length > 0 ? `,清理 ${arAccept.discarded.length} 个多余文件` : ""}${arSkipNote}`;
-        stepLog(sandbox, target.title, "归位", arOrganizeDetail);
-        const arRenameRows = arAccept.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
-        emitStep(onProgress, "finalizeLanding", "organize", arOrganizeDetail, {
-          ok: true,
-          files: pushWithinBudget<string>([], arRenameRows, 1300),
-        });
-        const acceptCodes = landingDigest.coveredCodes.length > 0 ? landingDigest.coveredCodes.join(",") + " " : "";
-        // 八轮复核:AI 参与过(mappedByAI)才署名「AI 补认」;否则是代码识别直接收尾。
-        const doneDetail = `已完成:${acceptCodes}已入库${mappedByAI ? "(AI 补认)" : ""}`;
-        stepLog(sandbox, target.title, "结论", doneDetail);
-        emitStep(onProgress, "finish", "finalize", doneDetail);
-        return { verdict: "accept", done: {
-          text: `${mappedByAI ? "AI 集数映射" : "代码识别"}:目标集已覆盖,已入库`,
-          steps: attempted.size,
-          coverage: await sandbox.finish(),
-          escalated,
-        }, next: null, escalated, deadRetries };
-      } catch (error) {
-        try {
-          await sandbox.discardStaging();
-        } catch {
-          // already empty.
-        }
-        const organizeFailDetail = error instanceof Error ? error.message : String(error);
-        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
-        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
-        const doneDetail = `失败(归位异常:${error instanceof Error ? error.message : String(error)})`;
-        stepLog(sandbox, target.title, "结论", doneDetail);
-        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
-        return { verdict: "abandon", done: await concludeUncovered(sandbox, {
-          text: `fast path 归位失败:${error instanceof Error ? error.message : String(error)}`,
-          steps: attempted.size,
-          escalated,
-          reason: error instanceof Error ? error.message : String(error),
-        }), next: null, escalated, deadRetries };
-      }
-    }
-    // AI 识别后仍未覆盖全部缺集 → 清掉暂存,机械换下一条候选(与 unmapped-but-clean 同款,
-    // 但不再让 AI 指认下一个——覆盖对比已经说明这包不行,直接试下一条)。
+    // AI 识别后仍未覆盖全部缺集 → 清掉暂存,机械换下一条候选(不再让 AI 指认下一个——覆盖对比已经说明这包不行,直接试下一条)。
     {
       const leftover = await sandbox.inspectStaging();
       if (leftover.length > 0) {
         await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
       }
       const next = nextCandidate(grading, tried);
-      // 八轮复核:AI 参与过才署「AI 识别」;否则(no 路径)复用 unmapped-but-clean 同款中性文案。
+      // 八轮复核:AI 参与过才署「AI 识别」;否则(no 路径)用中性文案。
       const retryDetail = `${mappedByAI ? "AI 识别后仍没拿全缺集" : "这轮转存没拿到需要的集"}:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
       stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
       // 九轮复核(第二轮):aiUsed 显式透出——mappedByAI=false 的 no 支(零 AI)不得挂「AI」徽章。

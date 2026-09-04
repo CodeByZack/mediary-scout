@@ -34,6 +34,7 @@
 | 2026-09-01 | feat | **PR #25 追加:活动页/通知页转存轮次卡片化**(§29,issue #29):fast path 各步骤结构化字段(round/pool/decidedBy/…)+ StepList 升级为默认折叠的轮次卡片(⚙️代码/🤖AI/✓✗判定),活动页+通知页共用 |
 | 2026-09-03 | feat | **PR #37 movie 落盘诊断去 LLM 深化**(issue #33):多视频包最大正片明显占优(体积下限+附件上限+2x 判据)代码直收、判据与删除名单进日志、三支收尾抽 finishMovieAccept 共用、finalize 透传 keepVideoId(与日志删除名单一致) |
 | 2026-09-04 | fix | **PR #42 TV 脏包判定收紧**(issue #39):附件(花絮/预告/sample/广告)一律不判脏、只进 junkSignals 待 finalize 丢弃,集数覆盖 need 即收尾(用户拍板不区分严重/轻微);JUNK 正则 ost/mv/making 加分隔符守卫(修 Lost/Ghost 误报);映射输入减 junkSignals(消词表漂移) |
+| 2026-09-04 | fix | **issue #39 后续:passes 与 isDirtyPack 解耦**——passes 只看覆盖率(集号覆盖 need 即收尾),不再被 isDirtyPack 卡住;isDirtyPack 从 TV StagingDigest 接口移除(仅剩装饰性日志文案,两条分支下游行为完全一样);tryEpisodeMapping 返回简化为 passed / no / failed(删除 unmapped-but-clean);landing 主流程删除 dead missingCodes.length === 0 分支 |
 
 ---
 
@@ -73,6 +74,22 @@ Movie 路径不动(`digestMovieStaging` 独立 + PR #37 dominant 直收已覆盖
 + 加 2(附件带集号防线×2:裸文件名 + overrides 救不回);fast-path 加端到端 2(部分覆盖
 + 花絮 → 零 AI 入库、E01E02 保留、花絮清理、missing 诚实报 E03;纯附件包→不假收尾换候选);
 TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
+
+### 32. issue #39 后续:passes 与 isDirtyPack 解耦——TV 脏包标记不再影响收尾
+
+**问题**:issue #39 将 isDirtyPack 收紧为仅 unparsedVideos.length > 0 后,passes = coveragePasses && !isDirtyPack 仍存在逻辑漏洞——集号已覆盖 need 但包内有未解析文件时,passes=false → 白烧一轮 AI 映射 → 换候选 → 正片全丢,违背「集数满足即收尾」的初衷。
+
+**修法**:
+- passes = coveragePasses(仅看覆盖率,不再被 isDirtyPack 卡住)
+- 从 TV StagingDigest 接口移除 isDirtyPack 字段——landing.ts:183 的 unmapped-but-clean vs failed 两条分支下游行为完全一样(清暂存→换候选),summarizeDigest 也不消费该字段,仅剩装饰性日志文案价值
+- tryEpisodeMapping 返回简化为 "passed" | "no" | "failed"(删除 "unmapped-but-clean")
+- landing.ts 主流程删除 dead if (landingDigest.missingCodes.length === 0) 分支(passes=false 蕴含 coveredCodes.length === 0 蕴含 missingCodes.length > 0)
+- 清理中间变量 tvHasUnparsedVideoJunk(全仓库仅 2 处引用,可直接内联)
+
+**Movie 路径不受影响**:MovieStagingDigest 独立接口,isDirtyPack 逻辑为 hasJunk || videos.length > 1(与 TV 的 unparsedVideos.length > 0 不同),由 digestMovieStaging 独立计算,movie.ts:438 用于诊断仲裁日志文案。
+
+**测试**:staging-digest(33)、variety-episode-landing(19)、fast-path(36)全绿,无回归。
+
 ### 1. 规范视频改名（canonical video rename）
 
 **提交**: `3e64c28` — feat(workflow): canonical video rename on staging normalization

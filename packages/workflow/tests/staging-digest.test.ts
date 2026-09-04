@@ -18,7 +18,6 @@ describe("digestStaging — TV", () => {
       ...tvInput,
     });
     expect(d.passes).toBe(true);
-    expect(d.isDirtyPack).toBe(false);
     expect(d.episodeCodes).toEqual(["S01E01", "S01E02"]);
     expect(d.coveredCodes).toEqual(["S01E01", "S01E02"]);
     expect(d.missingCodes).toEqual(["S01E03"]);
@@ -31,7 +30,6 @@ describe("digestStaging — TV", () => {
       files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.S01E01.sample.mkv")],
       ...tvInput,
     });
-    expect(d.isDirtyPack).toBe(false);
     expect(d.passes).toBe(true);
     expect(d.junkSignals).toEqual(["狂飙.S01E01.sample.mkv"]);
     expect(d.coveredCodes).toEqual(["S01E01"]);
@@ -44,7 +42,6 @@ describe("digestStaging — TV", () => {
       files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.未识别视频.mkv")],
       ...tvInput,
     });
-    expect(d.isDirtyPack).toBe(true);
     expect(d.unparsedVideos).toEqual(["狂飙.未识别视频.mkv"]);
   });
 
@@ -54,7 +51,6 @@ describe("digestStaging — TV", () => {
       ...tvInput,
     });
     expect(d.passes).toBe(true);
-    expect(d.isDirtyPack).toBe(false);
     expect(d.coveredCodes).toEqual(["S01E01", "S01E02"]);
     // 花絮进 junkSignals(finalize-landing 丢弃),不进 episodeCodes(防假覆盖)
     expect(d.junkSignals).toEqual(["幕后花絮.mkv"]);
@@ -67,7 +63,6 @@ describe("digestStaging — TV", () => {
       ...tvInput,
     });
     expect(d.passes).toBe(true);
-    expect(d.isDirtyPack).toBe(false);
     expect(d.junkSignals).toEqual(["狂飙.预告.mkv"]);
   });
 
@@ -115,7 +110,6 @@ describe("digestStaging — TV", () => {
     });
     expect(d.coveredCodes).toEqual([]);
     expect(d.passes).toBe(false);
-    expect(d.isDirtyPack).toBe(false);
   });
 });
 
@@ -127,7 +121,6 @@ describe("digestStaging — movie", () => {
       needCodes: ["MOVIE"],
     });
     expect(d.passes).toBe(true);
-    expect(d.isDirtyPack).toBe(false);
     expect(d.unparsedVideos).toHaveLength(1); // the film itself
     expect(d.episodeCodes).toEqual([]);
   });
@@ -146,7 +139,6 @@ describe("digestMovieStaging — the movie fast path's one-film judgment", () =>
   it("passes exactly one clean video (subtitles ride along, never junk)", () => {
     const d = digestMovieStaging([video("流浪地球.2019.4K.mkv"), sub("流浪地球.zh.ass")]);
     expect(d.passes).toBe(true);
-    expect(d.isDirtyPack).toBe(false);
     expect(d.videos).toHaveLength(1);
     // 单视频是干净直收,不该判定为 dominant 包(防"单视频也置位"回归)
     expect(d.dominant).toBe(null);
@@ -155,14 +147,12 @@ describe("digestMovieStaging — the movie fast path's one-film judgment", () =>
   it("dirty when ≥2 videos land (collection / film+trailer bundle)", () => {
     const d = digestMovieStaging([video("a.mkv"), video("b.mkv")]);
     expect(d.passes).toBe(false);
-    expect(d.isDirtyPack).toBe(true);
   });
 
   it("dirty when any video carries a junk signal (预告/花絮/sample)", () => {
     // 大小相同(默认 1GB each) → 主片 1GB 不 > 1GB×2 → 不满足判据 → 交 AI(dirty)
     const d = digestMovieStaging([video("流浪地球.2019.4K.mkv"), video("流浪地球.预告.mkv")]);
     expect(d.passes).toBe(false);
-    expect(d.isDirtyPack).toBe(true);
     expect(d.junkSignals).toEqual(["流浪地球.预告.mkv"]);
     expect(d.dominant).toBe(null);
   });
@@ -175,7 +165,6 @@ describe("digestMovieStaging — the movie fast path's one-film judgment", () =>
     ];
     const d = digestMovieStaging(files);
     expect(d.passes).toBe(false);
-    expect(d.isDirtyPack).toBe(true);
     expect(d.junkSignals).toEqual(["Oppenheimer.trailer.mp4", "Oppenheimer.花絮.mkv"]);
     expect(d.dominant?.id).toBe("main");
     expect(d.dominant?.keptName).toBe("Oppenheimer.2023.4K.mkv");
@@ -244,7 +233,6 @@ describe("digestMovieStaging — the movie fast path's one-film judgment", () =>
   it("neither passes nor dirty when nothing lands as a video (subtitle-only)", () => {
     const d = digestMovieStaging([sub("流浪地球.zh.ass")]);
     expect(d.passes).toBe(false);
-    expect(d.isDirtyPack).toBe(false);
     expect(d.videos).toHaveLength(0);
     expect(d.dominant).toBe(null);
   });
@@ -272,7 +260,6 @@ describe("digestStaging — overrides (功能2 AI 集数映射)", () => {
     });
     expect(d.episodeCodes).toEqual(["S01E01"]);
     expect(d.unparsedVideos).toEqual(["x.mkv"]);
-    expect(d.isDirtyPack).toBe(true);
   });
 
   it("ignores overrides for files that do not exist in the landing (anti-hallucination)", () => {
