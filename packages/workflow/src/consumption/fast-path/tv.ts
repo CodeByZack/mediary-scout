@@ -36,15 +36,15 @@ export type { FastPathOptions, FastPathResult };
  * judgments (the arbitrator). Flow:
  *
  *   inspect landing point (§6b#8) → candidate grading (code) →
- *     unique A-grade ? transfer : arbitrateSelection →
+ *     A-grade? transfer : arbitrateSelection →
  *     transfer (code) → staging digest (code) → passes ? finalize : arbitrateDiagnosis
  *
- * A clean run (unique A-grade that lands and digests cleanly) makes ZERO LLM
- * calls. Only genuine ambiguity — no unique A-grade, or a dirty/off-target
+ * A clean run (an A-grade that lands and digests cleanly) makes ZERO LLM
+ * calls. Only genuine ambiguity — no A-grade, or a dirty/off-target
  * landing — escalates, and each escalation is one judgment call, not a loop.
  *
  * Two-stage candidate pools (PR #25): the PRIMARY pool (searched by title) is
- * always tried FIRST — a unique A transfers blind, multiple A's go to the
+ * always tried FIRST — an A transfers blind (score picks the winner), multiple A's go to the
  * selection arbitrator. The aliases 兜底 pool only runs when the primary pool
  * has NO A-grade at all, or the primary pool's transfer budget is exhausted
  * without coverage. The two pools carry INDEPENDENT transfer budgets
@@ -93,14 +93,14 @@ async function runTvCandidatePhase(
   const { sandbox, model, target, onProgress, seasons, needCodes, onDiskCodes, urlById } = ctx;
   // 本池起点转存数:预算按「本池增量」独立计算(primary 与兜底互不挤占)。
   const poolTransferBase = ctx.attempted.size;
-  // 2. Pick the first candidate: a unique A-grade transfers blind; otherwise the
-  //    selection arbitrator picks one (escalation #1).
+  // 2. Pick the first candidate: an A-grade transfers blind (score picks the winner);
+  //    otherwise the selection arbitrator picks one (escalation #1).
   let escalated = ctx.escalated;
   let deadRetries = ctx.deadRetries;
   let current: string | null;
   if (grading.uniqueTopGrade && grading.top) {
     current = grading.top.id;
-    // issue #29 用户反馈:不显示候选 ID,只留标题;动作人话化(唯一 A 级,代码直选)。
+    // issue #29 用户反馈:不显示候选 ID,只留标题;动作人话化(A 级,代码直选)。
     const pickDetail = `选中:《${grading.top.title}》(评级 A,代码直选)`;
     stepLog(sandbox, target.title, "选片", pickDetail);
     // issue #29:盲转=代码决策(code);供前端标记「谁选的」。
@@ -360,12 +360,10 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     "评分决策",
     `${gradeDistribution(grading)} → ${
       grading.uniqueTopGrade
-        ? "唯一 A,primary 池盲转"
-        : primaryHasA
-          ? `有 A 但非唯一(${gradeCounts.A} 个),primary 池优先仲裁;转存不足才走别名兜底`
-          : target.aliases.length > 0
-            ? "无 A 候选,直接转入别名兜底(预算 ≤3 轮)"
-            : "无 A 且无别名,直接进入选片"
+        ? "A 级候选,primary 池盲转"
+        : target.aliases.length > 0
+          ? "无 A 候选,直接转入别名兜底(预算 ≤3 轮)"
+          : "无 A 且无别名,直接进入选片"
     }`,
   );
   if (grading.ranked.length > 0) {
@@ -502,13 +500,13 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
 
     const fbCounts = { A: 0, B: 0, C: 0, D: 0 };
     for (const candidate of grading.ranked) fbCounts[candidate.grade] += 1;
-    // issue #29 用户实测 + 复核:文案按 fallback.restored 分支——兜底命中唯一 A 提前停时
+    // issue #29 用户实测 + 复核:文案按 fallback.restored 分支——兜底命中 A 级提前停时
     // 既没耗尽也没合并更没 AI 选(零 LLM 直转),不能无条件写「AI 选择」(与「代码直选」同屏打脸)。
     const fbDetail = fallback.restored
       ? grading.uniqueTopGrade
-        ? `兜底耗尽,合并证据池 ${fallbackView.candidates.length} 条候选,唯一 A 直接转存(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`
+        ? `兜底耗尽,合并证据池 ${fallbackView.candidates.length} 条候选,A 级直接转存(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`
         : `兜底耗尽,合并证据池 ${fallbackView.candidates.length} 条候选,AI 选择(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`
-      : `兜底第 ${fallback.rounds} 轮命中唯一 A,直接转存(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`;
+      : `兜底第 ${fallback.rounds} 轮命中 A 级,直接转存(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`;
     stepLog(sandbox, target.title, "评分", fbDetail);
     stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
     emitStep(onProgress, "gradeCandidates", "search", fbDetail, {

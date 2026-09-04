@@ -74,7 +74,7 @@ export interface TransferStepMeta {
   round: number;
   /** 候选归属池:primary | fallback。 */
   pool: "primary" | "fallback";
-  /** 选片决策来源:code=唯一A盲转(零 LLM);ai=仲裁器选片。
+  /** 选片决策来源:code=A级盲转(零 LLM);ai=仲裁器选片。
    *  语义 = 本池「初始选片」的决策者。循环第 2+ 次转存若由诊断仲裁 retry_other
    *  (landing.ts)点名 aiNext 推进,其选片来源是 AI —— 前端可从该轮的
    *  arbitrateDiagnosis retry_other 事件(带 aiNext 与否)另行标注,本字段不覆盖。 */

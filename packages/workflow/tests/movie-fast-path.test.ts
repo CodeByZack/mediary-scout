@@ -264,12 +264,12 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
   });
 
   it("选片仲裁升级后,dominant 代码直收必须保留 escalated=true 且不再调 AI (交叉格,对齐 fast-path.test.ts:145)", async () => {
-    // 双 A 候选(同为 A 级,无唯一 top)→ 选片仲裁(AI 1 次)选中 c1 → c1 转存落盘 dominant 满足
+    // 双 B 候选(无年份→B 级)→ 选片仲裁(AI 1 次)选中 c1 → c1 转存落盘 dominant 满足
     // (2GB 正片 + 100MB 预告)→ 代码直收(零 AI)→ escalated 不能掉回 false。
     const { sandbox, movieDir, storage } = await createMovieSetup({
       candidates: [
-        { id: "c1", title: "流浪地球.2019.4K" }, // A 级(标题+年份)
-        { id: "c2", title: "流浪地球.2019.1080p" }, // 同为 A 级 → 无唯一 top → 选片仲裁必触发
+        { id: "c1", title: "流浪地球.4K" }, // B 级(标题命中,无年份)
+        { id: "c2", title: "流浪地球.1080p" }, // 同为 B 级 → 无 A → 选片仲裁必触发
       ],
       packs: {
         c1: {
@@ -417,16 +417,16 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
   it("dead links do NOT consume transfer attempts — scans past 3 dead links to the live candidate", async () => {
     const { sandbox, movieDir, storage } = await createMovieSetup({
       candidates: [
-        { id: "c1", title: "流浪地球.2019.4K" },
-        { id: "c2", title: "流浪地球.2019.4K.中字" },
-        { id: "c3", title: "流浪地球.2019.1080p" },
-        { id: "c4", title: "流浪地球 2019" },
+        { id: "c1", title: "流浪地球.4K" },
+        { id: "c2", title: "流浪地球.4K.中字" },
+        { id: "c3", title: "流浪地球.1080p" },
+        { id: "c4", title: "流浪地球" },
       ],
       packs: { c4: { files: [{ path: "流浪地球 (2019).mkv", sizeBytes: 2_000_000_000 }] } },
       failureMessages: { c1: "dead share", c2: "dead share", c3: "dead share" },
     });
 
-    // 4 A-grades → arbitrator picks c1; c1/c2/c3 are dead links (not counted),
+    // 4 B-grades → arbitrator picks c1; c1/c2/c3 are dead links (not counted),
     // c4 lands — exactly ONE real transfer attempt.
     const transferArgs: Record<string, unknown>[] = [];
     const result = await runMovieFastPathAcquisition({
@@ -443,7 +443,7 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     expect(result.steps).toBe(1);
     // issue #29 A3:死链候选发两条 transferCandidate(354 正常转存 emit + 388 死链 emit),
     // 都带 round=1(探针不占 round,与真实转存同号并入同卡)——前端不渲染「未记录轮次」空卡;
-    // decidedBy 来自选片仲裁(4 A 无唯一 top → "ai")。
+    // decidedBy 来自选片仲裁(4 B 无 A → "ai")。
     expect(transferArgs.map((a) => a["round"])).toEqual([1, 1, 1, 1, 1, 1, 1]);
     expect(transferArgs.map((a) => a["decidedBy"])).toEqual(["ai", "ai", "ai", "ai", "ai", "ai", "ai"]);
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
@@ -577,7 +577,7 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     ]);
   });
 
-  it("primary 有 A(非唯一)→ 先在 primary 池仲裁转存,不提前跳兜底(movie twin,PR #25)", async () => {
+  it("primary 有 A→ 先代码直选转存,不提前跳兜底(movie twin,PR #25)", async () => {
     let searches = 0;
     const fallbackMovieTarget: MovieTarget = {
       ...movieTarget,
@@ -586,7 +586,7 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
     const { sandbox, movieDir, storage } = await createMovieSetup({
       candidates: [
         { id: "c1", title: "流浪地球.2019.4K" },
-        { id: "c2", title: "流浪地球.2019.1080p" }, // 两个 A → 无唯一 top → primary 池仲裁
+        { id: "c2", title: "流浪地球.2019.1080p" }, // 两个 A → uniqueTopGrade=true → 代码直选
       ],
       extraResults: {
         "the wandering earth": [{ id: "c3", title: "The Wandering Earth.2019.4K" }],
@@ -605,8 +605,8 @@ describe("runMovieFastPathAcquisition — the movie zero-LLM happy path", () => 
       target: fallbackMovieTarget,
     });
 
-    // PR #25:primary 有 A → 先自己仲裁转存;aliases 兜底只在无 A 或转存失败后才启动。
-    expect(result.escalated).toBe(true); // primary 池仲裁
+    // PR #25:primary 有 A → 先自己代码直选转存;aliases 兜底只在无 A 或转存失败后才启动。
+    expect(result.escalated).toBe(false); // 代码直选(无 AI)
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["MOVIE"]);
     expect(searches).toBe(1); // 只有 primary 预搜,兜底没触发
@@ -762,7 +762,7 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
         流浪地球: [
           { id: "c1", title: "流浪地球.2019.4K.中字" },
           { id: "c2", title: "流浪地球.2019.1080P.中字" },
-          { id: "c3", title: "流浪地球.2019.BluRay.中字" }, // 三个 A → primary 仲裁
+          { id: "c3", title: "流浪地球.2019.BluRay.中字" }, // 三个 A → primary 代码直选
         ],
         "The Wandering Earth": [{ id: "c4", title: "The Wandering Earth.2019.4K.中字" }], // 兜底唯一 A
       },
@@ -794,8 +794,8 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
     const transferArgs: Record<string, unknown>[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
+      // 三个 A → uniqueTopGrade=true → 代码直选(无 AI 选片);3 次诊断 retry_other 仍调 AI。
       model: sequentialModel([
-        '{"candidateId":"c1","reasoning":"选 c1"}', // 选片仲裁(primary 三 A)
         '{"action":"retry_other","reasoning":"多影片脏包"}', // c1 → c2
         '{"action":"retry_other","reasoning":"多影片脏包"}', // c2 → c3
         '{"action":"retry_other","reasoning":"多影片脏包"}', // c3 → 试尽 → 兜底
@@ -806,8 +806,9 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       },
     });
 
-    // P2-R1:primary 优先的鉴别力——新流程必经 primary 选片仲裁(escalated=true);
-    // 旧实现直接兜底盲转唯一 A(零 LLM,escalated=false),此断言对旧实现必失败。
+    // P2-R1:primary 优先的鉴别力——三个 A → 代码直选(无 AI 选片);
+    // 但 primary 仍先试穷(3 次诊断 retry_other 调 AI),兜底只在 primary 试尽后接棒。
+    // 兜底命中唯一 A(c4) → 代码直选 → escalated=true(诊断 AI 保留)。
     expect(result.escalated).toBe(true);
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["MOVIE"]);

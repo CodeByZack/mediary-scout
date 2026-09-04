@@ -21,7 +21,7 @@ function logAiCall(
  * path runs entirely in code until it hits genuine ambiguity, then hands a
  * compact summary to the model and parses one JSON decision back:
  *
- *   1. arbitrateSelection — no unique A-grade among search candidates → pick one
+ *   1. arbitrateSelection — no A-grade among search candidates → pick one
  *      (or decline).
  *   2. arbitrateDiagnosis — a landing failed the staging digest (脏包 / wrong
  *      season / 生肉 / out-of-scope) → accept / retry_other / abandon.
@@ -179,7 +179,7 @@ export function extractJson(text: string): unknown {
   return JSON.parse(stripped.slice(first, last + 1));
 }
 
-/** Arbitrate which candidate to transfer when the grader has no unique A-grade. */
+/** Arbitrate which candidate to transfer when the grader has no A-grade. */
 export async function arbitrateSelection(options: {
   model: LanguageModel;
   /** summarizeGrading output — the compact ranked candidate list. */

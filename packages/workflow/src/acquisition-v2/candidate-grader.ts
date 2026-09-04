@@ -5,7 +5,7 @@ import { normalizeForTitleMatch } from "../planning-search-gate.js";
  * "pick from 300 candidates" by reading the full PanSou snapshot into context —
  * this module does that ranking in CODE instead, so the fast path can transfer a
  * single obvious match without ever calling the LLM, and only escalates to the
- * selection arbitrator when the rules cannot decide (no unique A-grade).
+ * selection arbitrator when the rules cannot decide (no A-grade).
  *
  * The grading rules (§6.3) are all mechanical: normalized title match + a
  * season/episode-code regex + a Chinese-sub marker regex + a dead-link/same-work
@@ -58,8 +58,8 @@ export interface GradingContext {
 export interface GradingResult {
   /** All candidates, ranked best-first (A > B > C > D, then score desc). */
   ranked: GradedCandidate[];
-  /** True when EXACTLY ONE candidate graded A — the fast path can transfer it
-   *  straight away without escalation. Zero or ≥2 A-grades both mean "escalate". */
+  /** True when the best-ranked candidate is A — the fast path can pick it by score
+   *  without AI escalation. Zero A-grades (top is B/C/D) means "escalate". */
   uniqueTopGrade: boolean;
   /** The single A-grade candidate when uniqueTopGrade, else the best candidate. */
   top: GradedCandidate | null;
@@ -356,10 +356,9 @@ export function gradeCandidates(
   graded.sort(
     (a, b) => GRADE_ORDER[a.grade] - GRADE_ORDER[b.grade] || b.score - a.score,
   );
-  const aGrades = graded.filter((g) => g.grade === "A");
   return {
     ranked: graded,
-    uniqueTopGrade: aGrades.length === 1,
+    uniqueTopGrade: graded.length > 0 && graded[0]!.grade === "A",
     top: graded[0] ?? null,
   };
 }

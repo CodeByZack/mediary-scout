@@ -142,10 +142,10 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     ]);
   });
 
-  it("issue #29 八轮交叉格:AI 选片(无唯一 A) + 代码全覆盖脏包 → escalated 保留 true(不虚增也不漏报)", async () => {
-    // 池无唯一 A(c1/c2 打平,靠 AI 选片) → tv.ts 选片仲裁后 escalated=true 传入。
+  it("issue #29 八轮交叉格:代码直选(多A) + 代码全覆盖脏包 → escalated=false(多A 代码按分直选)", async () => {
+    // 两个 A 候选(c1/c2 打平) → uniqueTopGrade=true → 代码按分直选(零 AI)。
     // 转来 code 已全覆盖(S01E01)但带 sample 脏包 → tryEpisodeMapping 返回 "no" 零 AI,
-    // 直接收尾——但选片那次 AI 历史必须在 escalated 里保留(第二轮复核:false 预置会清掉它)。
+    // 直接收尾——escalated 保持 false(无 AI 参与)。
     let aiCalls = 0;
     const { sandbox, s1, storage } = await createSetup({
       candidates: [
@@ -174,9 +174,9 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
       isChineseNative: false,
     });
 
-    // 选片 AI 参与 → escalated=true;digest no 支不重置它。
-    expect(aiCalls).toBe(1);
-    expect(result.escalated).toBe(true);
+    // 多A 代码直选 → escalated=false;digest no 支不重置它。
+    expect(aiCalls).toBe(0);
+    expect(result.escalated).toBe(false);
     expect(result.coverage.coverageMet).toBe(true);
     // sample 不进季目录。
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
@@ -184,11 +184,11 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     ]);
   });
 
-  it("escalates to the selection arbitrator when there is no unique A-grade", async () => {
+  it("escalates to the selection arbitrator when there is no A-grade", async () => {
     const { sandbox, s1, storage } = await createSetup({
       candidates: [
-        { id: "c1", title: "狂飙.S01E01.1080p.中字" },
-        { id: "c2", title: "狂飙.S01E02.1080p.中字" },
+        { id: "c1", title: "狂飙.1080p" },
+        { id: "c2", title: "狂飙 高清" },
       ],
       packs: { c1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
     });
@@ -209,14 +209,14 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
   });
 
   it("gracefully reports no_coverage when the arbitrator returns a TITLE as candidateId (the 狂飙 bug)", async () => {
-    // Two same-title A-grades → no unique top → arbitrator sees only the graded
+    // Two B-grade candidates → no A → arbitrator sees only the graded
     // summary and (the bug) fills the TITLE back as candidateId. The guard must
     // catch it and conclude uncovered — transferCandidate must never throw
     // SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT and kill the whole run.
     const { sandbox } = await createSetup({
       candidates: [
-        { id: "c1", title: "狂飙.S01E01.1080p.中字" },
-        { id: "c2", title: "狂飙.S01E02.1080p.中字" },
+        { id: "c1", title: "狂飙.1080p" },
+        { id: "c2", title: "狂飙 高清" },
       ],
       packs: {},
     });
@@ -684,8 +684,8 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     });
 
     expect(result.escalated).toBe(false);
-    // issue #29 复核:兜底命中唯一 A 提前停(零 LLM)时,activity 不能谎称「AI 选择」。
-    expect(activities.some((a) => a.includes("兜底第 1 轮命中唯一 A"))).toBe(true);
+    // issue #29 复核:兜底命中 A 级提前停(零 LLM)时,activity 不能谎称「AI 选择」。
+    expect(activities.some((a) => a.includes("兜底第 1 轮命中 A 级"))).toBe(true);
     expect(activities.some((a) => a.includes("AI 选择"))).toBe(false);
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["S01E01"]);
@@ -696,7 +696,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     ]);
   });
 
-  it("primary 有 A(非唯一)→ 先在 primary 池仲裁转存，不提前跳兜底(PR #25)", async () => {
+  it("primary 有 A→ 先代码直选转存，不提前跳兜底(PR #25)", async () => {
     let searches = 0;
     const fallbackTarget: TvAnimeTarget = {
       ...target,
@@ -705,7 +705,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     const { sandbox, s1, storage } = await createSetup({
       candidates: [
         { id: "c1", title: "狂飙.S01E01.1080p.中字" },
-        { id: "c2", title: "狂飙.S01E02.1080p.中字" }, // 两个 A → 无唯一 top → primary 仲裁
+        { id: "c2", title: "狂飙.S01E02.1080p.中字" }, // 两个 A → uniqueTopGrade=true → 代码直选
       ],
       extraResults: {
         "the knockout": [{ id: "c3", title: "The Knockout.S01E01.1080p.中字" }],
@@ -723,8 +723,8 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
       isChineseNative: false,
     });
 
-    // PR #25:primary 有 A 必须先自己仲裁转存;aliases 兜底只在无 A 或转存失败后才启动。
-    expect(result.escalated).toBe(true); // primary 池仲裁
+    // PR #25:primary 有 A 必须先自己代码直选转存;aliases 兜底只在无 A 或转存失败后才启动。
+    expect(result.escalated).toBe(false); // 代码直选(无 AI)
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["S01E01"]);
     expect(searches).toBe(1); // 只有 primary 预搜,兜底没触发
@@ -856,14 +856,14 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect(searches.length).toBe(3);
   });
 
-  it("兜底:primary 有 A(非唯一)→ 先 primary 仲裁转存;兜底只在 primary 试尽后接棒(PR #25)", async () => {
+  it("兜底:primary 有 A→ 先代码直选转存;兜底只在 primary 试尽后接棒(PR #25)", async () => {
     const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
       results: {
         狂飙: [
           { id: "c1", title: "狂飙.S01E01.1080p.中字" },
           { id: "c2", title: "狂飙.S01E02.1080p.中字" },
-        ], // 两个同题 A → 无唯一 top → primary 池仲裁
-        足球教练: [{ id: "c3", title: "狂飙.S01E01.1080p.中字" }], // 兜底唯一 A(不会用到)
+        ], // 两个同题 A → uniqueTopGrade=true → 代码直选
+        足球教练: [{ id: "c3", title: "狂飙.S01E01.1080p.中字" }], // 兜底 A(不会用到)
       },
       packs: { c1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
       aliases: ["足球教练"],
@@ -876,8 +876,8 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
       isChineseNative: false,
     });
 
-    // PR #25:primary 有 A → 先自己仲裁转存,不提前跳兜底。
-    expect(result.escalated).toBe(true);
+    // PR #25:primary 有 A → 先自己代码直选转存,不提前跳兜底。
+    expect(result.escalated).toBe(false);
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["S01E01"]);
     expect(searches.length).toBe(1); // 只有 primary,兜底没触发
@@ -888,20 +888,20 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
       results: {
         狂飙: [],
         A1: [
-          { id: "a1", title: "狂飙.S01E01.1080p.中字" },
-          { id: "a1b", title: "狂飙.S01E02.1080p.中字" },
+          { id: "a1", title: "狂飙.1080p" },
+          { id: "a1b", title: "狂飙 高清" },
         ],
         A2: [
-          { id: "a2", title: "狂飙.S01E01.1080p.中字" },
-          { id: "a2b", title: "狂飙.S01E02.1080p.中字" },
+          { id: "a2", title: "狂飙.1080p" },
+          { id: "a2b", title: "狂飙 高清" },
         ],
         A3: [
-          { id: "a3", title: "狂飙.S01E01.1080p.中字" },
-          { id: "a3b", title: "狂飙.S01E02.1080p.中字" },
+          { id: "a3", title: "狂飙.1080p" },
+          { id: "a3b", title: "狂飙 高清" },
         ],
         A4: [
-          { id: "a4", title: "狂飙.S01E01.1080p.中字" },
-          { id: "a4b", title: "狂飙.S01E02.1080p.中字" },
+          { id: "a4", title: "狂飙.1080p" },
+          { id: "a4b", title: "狂飙 高清" },
         ],
       },
       packs: { a3: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
@@ -990,13 +990,13 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect(searches.length).toBe(3); // primary + 失败轮 + 成功轮
   });
 
-  it("primary 有 A 时兜底不再先于仲裁启动;primary 试尽后才接棒兜底(PR #25)", async () => {
+  it("primary 有 A 时兜底不再先于代码直选启动;primary 试尽后才接棒兜底(PR #25)", async () => {
     const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
       results: {
         狂飙: [
           { id: "c1", title: "狂飙.S01E01.1080p.中字" },
           { id: "c2", title: "狂飙.S01E02.1080p.中字" },
-        ], // 两个同题 A → primary 池直接仲裁,兜底无机会启动
+        ], // 两个同题 A → uniqueTopGrade=true → 代码直选,兜底无机会启动
         "The Knockout": [], // 兜底结果(命中 0)根本不会被搜
       },
       packs: { c1: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] } },
@@ -1010,12 +1010,12 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
       isChineseNative: false,
     });
 
-    expect(result.escalated).toBe(true); // primary 仲裁
+    expect(result.escalated).toBe(false); // 代码直选(无 AI)
     expect(result.coverage.coverageMet).toBe(true);
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
     ]);
-    expect(searches.length).toBe(1); // primary 直接仲裁成功,兜底(甚至搜索)都没启动
+    expect(searches.length).toBe(1); // primary 直接代码直选成功,兜底(甚至搜索)都没启动
   });
 
   it("§E 合并池:兜底轮的好候选与 primary 一起进仲裁,转存回各自来源快照(母狮案)", async () => {

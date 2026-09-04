@@ -499,14 +499,14 @@ describe("runScheduledType3Monitoring (V2 engine)", () => {
 
     const outcomes = await runScheduledType3Monitoring({
       repository,
-      // Two A-grade candidates for the broken title force the fast path to
-      // escalate to the selection arbitrator, which calls the (dead) model →
+      // Two B-grade candidates for the broken title → no A → the fast path
+      // escalates to the selection arbitrator, which calls the (dead) model →
       // that season fails; the healthy season is a no-op and never touches it.
       resourceProvider: new FakeResourceProvider({
         keywordResults: {
           "Show broken": [
-            { title: "Show broken S01 全24集", providerPayload: { url: "https://pan.quark.cn/s/a" } },
-            { title: "Show broken 全集", providerPayload: { url: "https://pan.quark.cn/s/b" } },
+            { title: "Show broken 1080p", providerPayload: { url: "https://pan.quark.cn/s/a" } },
+            { title: "Show broken 高清", providerPayload: { url: "https://pan.quark.cn/s/b" } },
           ],
         },
       }),
