@@ -105,7 +105,7 @@ describe("gradeCandidates", () => {
     expect(result.top?.id).toBe("1");
   });
 
-  it("is NOT unique when two candidates both grade A", () => {
+  it("is unique when two candidates both grade A (score picks the winner)", () => {
     const result = gradeCandidates(
       [
         { id: "1", title: "狂飙.S01E01.1080p.中字" },
@@ -113,7 +113,7 @@ describe("gradeCandidates", () => {
       ],
       tvCtx,
     );
-    expect(result.uniqueTopGrade).toBe(false);
+    expect(result.uniqueTopGrade).toBe(true);
   });
 
   it("is NOT unique when nothing grades A (all B/C)", () => {

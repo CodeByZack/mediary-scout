@@ -214,11 +214,11 @@ export function candidateSnapshotId(view: EvidenceView, candidateId: string): st
 
 /**
  * Aliases 兜底重搜 (§C). The fast path's primary search recalls by the bare
- * title ONLY — when it comes back empty, or grades without a unique A-grade
+ * title ONLY — when it comes back empty, or grades without an A-grade
  * (the 泰德·拉索 case: the title search drowns in unrelated hits while the
  * aliases' 足球教练 never gets searched), each alias gets ONE more
  * primeRawSnapshot round, in the order the target carries them — English
- * original first, then the other 译名 (zh-TW/zh-HK) — until a unique A-grade
+ * original first, then the other 译名 (zh-TW/zh-HK) — until an A-grade
  * appears or the budget (≤ MAX_FALLBACK_SEARCHES rounds) runs out.
  *
  * primeRawSnapshot OVERWRITES the prior raw snapshot, so a successful fallback's
@@ -259,7 +259,7 @@ export async function aliasesFallbackReSearch(input: {
   let currentView = view;
   let currentGrading = grading;
   let rounds = 0;
-  let foundUniqueA = false;
+  let foundA = false;
   const roundViews: SnapshotView[] = [];
   for (const alias of aliases) {
     if (rounds >= MAX_FALLBACK_SEARCHES) break;
@@ -287,7 +287,7 @@ export async function aliasesFallbackReSearch(input: {
     currentGrading = grade(nextView.candidates);
     const gradeDetail = `keyword=「${alias}」命中=${nextView.candidates.length} ${
       currentGrading.uniqueTopGrade
-        ? `唯一 A 级《${currentGrading.top?.title}》` // issue #29 铁律①:候选 ID 全链不上 UI,只留标题。
+        ? `A 级候选《${currentGrading.top?.title}》` // issue #29 铁律①:候选 ID 全链不上 UI,只留标题。
         : gradeDistribution(currentGrading)
     }`;
     stepLog(sandbox, title, "兜底评分", gradeDetail);
@@ -304,18 +304,18 @@ export async function aliasesFallbackReSearch(input: {
       candidates: gradedCandidateEvidence(currentGrading, roundUrlById),
     });
     if (nextView.candidates.length > 0 && currentGrading.uniqueTopGrade) {
-      foundUniqueA = true;
-      break; // 唯一 A → 直接转存
+      foundA = true;
+      break; // A 级 → 直接转存
     }
   }
-  // §E: 兜底耗尽仍无唯一 A → 合并 primary + 各轮兜底 的证据池继续仲裁/放弃逻辑。
+  // §E: 兜底耗尽仍无 A 级 → 合并 primary + 各轮兜底 的证据池继续仲裁/放弃逻辑。
   // 旧行为(替换式恢复)两头都出过事故:「最后一个兜底快照为空」覆盖 primary 让
   // 狂飙 45 条候选被丢;反过来只恢复/只看最后一轮,又会吞掉另一侧的好候选
   // (母狮案:兜底第 1 轮搜到「1-3季合集」,恢复 primary 后仲裁根本见不到它)。
   // 合并纯内存操作、按标题去重、primary 优先入池;各轮候选带着自己 observed
   // snapshot 的归属回传给转存寻址(candidateSnapshotId)——零额外 PanSou 请求,
   // 预算语义原样保持。
-  if (!foundUniqueA) {
+  if (!foundA) {
     const candidateSnapshots: Record<string, string> = {};
     const merged: Array<{ id: string; title: string }> = [];
     let primaryCount = 0;

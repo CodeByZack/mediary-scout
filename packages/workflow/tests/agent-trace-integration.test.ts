@@ -37,7 +37,7 @@ function candidate(id: string, index: number, title: string): ResourceCandidate 
   };
 }
 
-/** Two A-grade candidates → the grader has NO unique top → the selection
+/** Two B-grade candidates (no episode evidence) → no A → the selection
  *  arbitrator runs (the only point the fast path may touch the LLM). */
 function twoCandidatesProvider(): ResourceProvider {
   return {
@@ -46,8 +46,8 @@ function twoCandidatesProvider(): ResourceProvider {
       provider: "pansou",
       keyword,
       candidates: [
-        candidate("c1", 0, "示例剧.S01E01.1080p.中字"),
-        candidate("c2", 1, "示例剧.S01E02.1080p.中字"),
+        candidate("c1", 0, "示例剧.1080p"),
+        candidate("c2", 1, "示例剧 高清"),
       ],
       createdAt: "2026-06-15T00:00:00.000Z",
     }),
@@ -158,7 +158,7 @@ describe("agent trace — consumption pipeline wires the durable run record", ()
 
   it("crash-safe: an arbitrator crash rejects the run and never persists a fake snapshot", async () => {
     const repository = new InMemoryWorkflowRepository();
-    // Two A-grade candidates → no unique top → the selection arbitrator runs,
+    // Two B-grade candidates → no A → the selection arbitrator runs,
     // and ITS model call throws mid-run.
     await expect(
       consumeClaimedRun(ctxFor(repository, twoCandidatesProvider())),

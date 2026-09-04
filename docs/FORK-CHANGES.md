@@ -90,6 +90,21 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 
 **测试**:staging-digest(33)、variety-episode-landing(19)、fast-path(36)全绿,无回归。
 
+### 33. 多个 A 级候选改为代码按分数取最高分(issue #40)
+
+**背景**:candidate-grader.ts 的 `uniqueTopGrade` 原本仅在恰好 1 个 A 时为 true,0 个或 ≥2 个 A 都触发 AI 选片仲裁。issue #40 指出:多个 A 都满足同一组判据(标题命中+季对+中字 OK),只是分数因画质/集数等证据略有差异——代码按分数排序取最高的那个完全合理,调 AI 是浪费 token。
+
+**修法**:
+- `uniqueTopGrade = graded.length > 0 && graded[0].grade === "A"`(只要最高级是 A,代码就能决定;只有最高级不是 A 时才需要 AI)
+- 删除 `aGrades` 中间变量(仅用于旧逻辑 `length === 1` 判断)
+- 简化 tv.ts / movie.ts 的评分决策三目:删除已不可达的 `primaryHasA` 分支(原「有 A 但非唯一」),保留「A 级→盲转」/「无 A→兜底或选片」两态
+- landing.ts 的 `foundUniqueA` 重命名为 `foundA`(语义对齐)
+- 全链注释/日志从「唯一 A」改为「A 级」(候选/评分/兜底/选片)
+
+**影响**:热门剧多版本分享场景(如 3 个 A 候选)从 AI 选片仲裁变为代码按分直选——零 LLM 调用,token 节省。分数排序已考虑画质/集数/季号/中字等证据,不会选错。
+
+**测试**:candidate-grader(23)、fast-path(36)、consumption-evidence(11)、staging-digest(33)全绿,无回归。
+
 ### 1. 规范视频改名（canonical video rename）
 
 **提交**: `3e64c28` — feat(workflow): canonical video rename on staging normalization

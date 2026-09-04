@@ -32,11 +32,11 @@ import {
  *  the LLM demoted to the movie arbitrator's two single-call judgments. Flow:
  *
  *   landing-point check (film already in dir → mark MOVIE) →
- *     grade (title + year, code) → unique A ? transfer : arbitrateMovieSelection →
+ *     grade (title + year, code) → A? transfer : arbitrateMovieSelection →
  *     transfer → movie digest (ONE film?) → passes ? flatten+mark : arbitrateMovieDiagnosis
  *
- *  A clean run (a unique A-grade film that lands and digests as one film) makes
- *  ZERO LLM calls. Genuine ambiguity — no unique A-grade, or a landing that is not
+ *  A clean run (an A-grade film that lands and digests as one film) makes
+ *  ZERO LLM calls. Genuine ambiguity — no A-grade, or a landing that is not
  *  one clean film — escalates one judgment call at a time.
  *
  *  Scope: video-first, with an OPTIONAL deterministic subtitle stage for NON-CN
@@ -266,8 +266,9 @@ async function runMovieCandidatePhase(
   let escalated = ctx.escalated;
   let deadRetries = ctx.deadRetries;
 
-  // 2. Pick the first candidate: a unique A-grade (title + year match) transfers
-  //    blind; otherwise the movie selection arbitrator picks one (escalation #1).
+  // 2. Pick the first candidate: an A-grade (title + year match) transfers blind
+  //    (score picks the winner); otherwise the movie selection arbitrator picks one.
+
   let current: string | null;
   if (grading.uniqueTopGrade && grading.top) {
     current = grading.top.id;
@@ -679,12 +680,10 @@ export async function runMovieFastPathAcquisition(
     "评分决策",
     `${gradeDistribution(grading)} → ${
       grading.uniqueTopGrade
-        ? "唯一 A,primary 池盲转"
-        : primaryHasA
-          ? `有 A 但非唯一(${gradeCounts.A} 个),primary 池优先仲裁;转存不足才走别名兜底`
-          : target.aliases.length > 0
-            ? "无 A 候选,直接转入别名兜底(预算 ≤3 轮)"
-            : "无 A 且无别名,直接进入选片"
+        ? "A 级候选,primary 池盲转"
+        : target.aliases.length > 0
+          ? "无 A 候选,直接转入别名兜底(预算 ≤3 轮)"
+          : "无 A 且无别名,直接进入选片"
     }`,
   );
   if (grading.ranked.length > 0) {
@@ -786,13 +785,13 @@ export async function runMovieFastPathAcquisition(
     }
     const fbCounts = { A: 0, B: 0, C: 0, D: 0 };
     for (const candidate of grading.ranked) fbCounts[candidate.grade] += 1;
-    // issue #29 用户实测 + 复核:文案按 fallback.restored 分支——兜底命中唯一 A 提前停时
+    // issue #29 用户实测 + 复核:文案按 fallback.restored 分支——兜底命中 A 级提前停时
     // 既没耗尽也没合并更没 AI 选(零 LLM 直转),不能无条件写「AI 选择」(与「代码直选」同屏打脸)。
     const fbDetail = fallback.restored
       ? grading.uniqueTopGrade
-        ? `兜底耗尽,合并证据池 ${fallbackView.candidates.length} 条候选,唯一 A 直接转存(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`
+        ? `兜底耗尽,合并证据池 ${fallbackView.candidates.length} 条候选,A 级直接转存(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`
         : `兜底耗尽,合并证据池 ${fallbackView.candidates.length} 条候选,AI 选择(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`
-      : `兜底第 ${fallback.rounds} 轮命中唯一 A,直接转存(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`;
+      : `兜底第 ${fallback.rounds} 轮命中 A 级,直接转存(A ${fbCounts.A} / B ${fbCounts.B} / C ${fbCounts.C} / D ${fbCounts.D})`;
     stepLog(sandbox, target.title, "评分", fbDetail);
     stepLog(sandbox, target.title, "评分摘要", evidenceDigestLine(grading));
     emitStep(onProgress, "gradeCandidates", "search", fbDetail);
