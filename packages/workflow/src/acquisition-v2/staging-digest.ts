@@ -17,6 +17,11 @@ import type { SimTreeFile } from "./storage-115-simulator.js";
 const JUNK_FILE_MARKER =
   /(^|[.\s\-_])sample([.\s\-_]|$)|样本|广告|花絮|预告|采访|访谈|making|behind\s*the\s*scenes|trailer|mv\b|ost\b/i;
 
+/** 严重脏包标记(issue #39):sample/样本/广告 命中即判脏——这类文件混入通常意味着
+ *  包是预览/广告混编(疑似非完整正片),交 AI 诊断或换候选;其余(花絮/预告/trailer/ost
+ *  等)为轻微附件,正片覆盖 need 时不判脏,finalize 丢弃附件、保留正片。 */
+const CRITICAL_JUNK_MARKER = /(^|[.\s\-_])sample([.\s\-_]|$)|样本|广告/i;
+
 /** 主片 vs 附件判据常量(issue #33):代码把多视频包直收为正片前必须同时满足——
  *  最大视频体积 ≥ 绝对下限、其余全部命中脏包标记、其余每个 ≤ 附件体积上限、
  *  最大视频 > 其余总和的 ratio 倍(严格大于)。任一不满足就交 AI 诊断仲裁。 */
@@ -98,8 +103,19 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
   // 文件名的匹配对不上 overrides 里给的 key 时按 unparsed 处理(宁可少认不乱认)。
   const overrides = input.overrides ?? {};
 
+  let hasCriticalJunk = false;
   for (const video of videos) {
     const base = fileBaseName(video);
+    // issue #39:命中 JUNK_FILE_MARKER 的视频只进 junkSignals(finalize-landing 跳过改名/
+    // 归位、wipe 时丢弃),不参与集号解析与覆盖判定——防"附件恰好带集号"(如
+    // Show.S01E01.预告.mkv)被误认作正片 → 标记已入库但文件被丢(假入库)。
+    // sample/样本/广告 为严重脏包(CRITICAL_JUNK_MARKER):命中即判脏(包疑似预览/广告混编);
+    // 花絮/预告/trailer/ost 等为轻微附件:正片覆盖 need 时不判脏,finalize 丢弃附件、保留正片。
+    if (JUNK_FILE_MARKER.test(base)) {
+      junkSignals.push(base);
+      if (CRITICAL_JUNK_MARKER.test(base)) hasCriticalJunk = true;
+      continue;
+    }
     const parsedCode =
       overrides[base] ?? episodeCodeFromFileName(base, input.seasons, input.episodeNames);
     if (parsedCode) {
@@ -112,13 +128,9 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
         episodeCodes.push(parsedCode);
       }
     } else {
+      // 无集号且无 junk 标记 → 真正的"未知"文件(可能是正片集号藏在文件名里,
+      // 如 fansub 纯数字/怪命名),交 AI 集数映射(§2.2)。
       unparsedVideos.push(base);
-    }
-    // Junk signal on a video is independent of whether it also parses to a code —
-    // a "Show.S01E01.sample.mkv" parses AND is a sample.
-    const junk = JUNK_FILE_MARKER.exec(base);
-    if (junk) {
-      junkSignals.push(base);
     }
   }
 
@@ -134,13 +146,13 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
   const coveredCodes = episodeCodes.filter((code) => needSet.has(code));
   const missingCodes = input.needCodes.filter((need) => !needSet.has(need) || !episodeCodes.includes(need));
 
-  const hasJunk = junkSignals.length > 0;
-  // TV: a video that does not parse to an episode code is junk (sample/花絮/预告
-  //  hide in the pack). Movie: the main film legitimately has no episode code, so
-  //  unparsed videos are NOT junk there.
+  // issue #39:脏包判定收紧——只有"严重脏包"(sample/广告)或"无标记的未知未解析文件"
+  // (可能是正片藏集号,需 AI 集数映射)才判脏;轻微附件(花絮/预告/trailer/ost)不判脏,
+  // finalize-landing 按 junkSignals 丢弃附件、保留正片(junkSignals 仍含全部标记文件)。
+  // TV: 无集号且无 junk 标记的视频是"未知"。Movie: 主片合法地没有集码,unparsed 不算脏。
   const tvHasUnparsedVideoJunk = seasonSet.size > 0 && unparsedVideos.length > 0;
 
-  const isDirtyPack = hasJunk || tvHasUnparsedVideoJunk;
+  const isDirtyPack = hasCriticalJunk || tvHasUnparsedVideoJunk;
   // Coverage: ≥1 needed item landed (TV), or a video landed (movie).
   const coveragePasses = seasonSet.size > 0 ? coveredCodes.length > 0 : videos.length > 0;
   const passes = coveragePasses && !isDirtyPack;

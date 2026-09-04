@@ -35,13 +35,48 @@ describe("digestStaging — TV", () => {
     expect(d.junkSignals.length).toBeGreaterThan(0);
   });
 
-  it("flags a dirty pack when a TV video has no episode code", () => {
+  it("flags a dirty pack when a TV video has no episode code AND no junk marker (unknown file)", () => {
+    // issue #39:无集号但命中 junk 标记(花絮/预告)→ 附件,不判脏(finalize 丢弃);
+    // 只有"无集号且无 junk 标记"的未知文件(可能是正片藏集号)才判脏交 AI 映射。
     const d = digestStaging({
-      files: [video("狂飙.S01E01.1080p.mkv"), video("幕后花絮.mkv")],
+      files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.未识别视频.mkv")],
       ...tvInput,
     });
     expect(d.isDirtyPack).toBe(true);
-    expect(d.unparsedVideos).toEqual(["幕后花絮.mkv"]);
+    expect(d.unparsedVideos).toEqual(["狂飙.未识别视频.mkv"]);
+  });
+
+  it("issue #39: 正片齐全 + 花絮附件 → passes=true(附件丢弃、正片保留,不再整体判脏换候选)", () => {
+    const d = digestStaging({
+      files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.S01E02.1080p.mkv"), video("幕后花絮.mkv")],
+      ...tvInput,
+    });
+    expect(d.passes).toBe(true);
+    expect(d.isDirtyPack).toBe(false);
+    expect(d.coveredCodes).toEqual(["S01E01", "S01E02"]);
+    // 花絮进 junkSignals(finalize-landing 丢弃),不进 episodeCodes(防假覆盖)
+    expect(d.junkSignals).toEqual(["幕后花絮.mkv"]);
+    expect(d.unparsedVideos).toEqual([]);
+  });
+
+  it("issue #39: 正片 + 预告(trailer)附件 → passes=true(trailer 丢弃)", () => {
+    const d = digestStaging({
+      files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.预告.mkv")],
+      ...tvInput,
+    });
+    expect(d.passes).toBe(true);
+    expect(d.isDirtyPack).toBe(false);
+    expect(d.junkSignals).toEqual(["狂飙.预告.mkv"]);
+  });
+
+  it("issue #39: 正片 + sample → 仍判脏(sample 是严重脏包,疑似预览包)", () => {
+    const d = digestStaging({
+      files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.S01E01.sample.mkv")],
+      ...tvInput,
+    });
+    expect(d.isDirtyPack).toBe(true);
+    expect(d.passes).toBe(false);
+    expect(d.junkSignals).toEqual(["狂飙.S01E01.sample.mkv"]);
   });
 
   it("reports out-of-season codes without failing coverage of in-season ones", () => {
