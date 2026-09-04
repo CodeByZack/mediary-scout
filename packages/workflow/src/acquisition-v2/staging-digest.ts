@@ -12,8 +12,9 @@ import type { SimTreeFile } from "./storage-115-simulator.js";
  * when the landing is not cleanly the needed pack.
  */
 
-/** Junk signals the landing may carry. A video whose filename cannot yield an
- *  episode code (sample / 广告 / 花絮 / 预告 / stray file) is the classic 脏包. */
+/** Junk signals the landing may carry. 附件标记(sample / 花絮 / 预告 / ...):命中者
+ *  只进 junkSignals 待 finalize 丢弃,不参与集号解析与覆盖判定(issue #39——集数满足
+ *  即收尾,附件不否决整包);电视仅"无标记的未知未解析文件"才判脏(可能藏集号,交 AI 映射)。 */
 const JUNK_FILE_MARKER =
   /(^|[.\s\-_])sample([.\s\-_]|$)|样本|广告|花絮|预告|采访|访谈|(^|[.\s\-_])making([.\s\-_]|$)|behind\s*the\s*scenes|trailer|(^|[.\s\-_])mv([.\s\-_]|$)|(^|[.\s\-_])ost([.\s\-_]|$)/i;
 

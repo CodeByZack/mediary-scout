@@ -65,10 +65,14 @@ TV 已无诊断仲裁(`arbitrateDiagnosis` 生产零调用方),未被集数覆�
 Movie 路径不动(`digestMovieStaging` 独立 + PR #37 dominant 直收已覆盖;dominant 判据
 同时受益于正则边界修复)。
 
+**已知取舍(用户拍板的结果)**:TV 侧对「无标记词的预告片包」没有体积/时长防线
+(movie 有 dominant 的 300MB 地板,TV 没有)——sample/广告 不再有任何否决作用,这是刻意的,
+写在这里免得后人以为 sample 还在把关。
+
 **测试**:staging-digest 改 3(sample→附件不判脏、未知无标记→脏、movie sample→dominant)
-+ 加 2(附件带集号防线×2:裸文件名 + overrides 救不回);fast-path 加端到端(部分覆盖
-+ 花絮 → 零 AI 入库、E01E02 保留、花絮清理、missing 诚实报 E03);TV 集成
-(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
++ 加 2(附件带集号防线×2:裸文件名 + overrides 救不回);fast-path 加端到端 2(部分覆盖
++ 花絮 → 零 AI 入库、E01E02 保留、花絮清理、missing 诚实报 E03;纯附件包→不假收尾换候选);
+TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 ### 1. 规范视频改名（canonical video rename）
 
 **提交**: `3e64c28` — feat(workflow): canonical video rename on staging normalization

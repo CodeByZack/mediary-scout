@@ -71,7 +71,6 @@ describe("digestStaging — TV", () => {
     expect(d.junkSignals).toEqual(["狂飙.预告.mkv"]);
   });
 
-
   it("issue #39 防线:附件恰好带集号(Show.S01E01.预告.mkv)→ 不进 episodeCodes(防假覆盖→假入库)", () => {
     // 包内只有"预告"文件(命中 JUNK 标记),即使文件名带 S01E01 集号也不认作正片——
     // finalize 会丢弃它,若计入 coveredCodes 会标记已入库但文件被丢(假入库)。
@@ -351,7 +350,6 @@ describe("digestStaging — 综艺「第N期」Part 锚定(2026-08-31 地球超�
     expect(d.episodeCodes).toEqual([]);
     expect(d.unparsedVideos.length).toBe(1);
   });
-
 
 describe("digestTitle — 活动页标题计数化(issue #29 用户拍板)", () => {
   it("覆盖全部缺集时:代码识别出 N 集,目标集数已齐", () => {
