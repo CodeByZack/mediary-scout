@@ -28,6 +28,8 @@ describe("识别规则 actions (issue #44)", () => {
     process.env.MEDIA_TRACK_DEMO_MODE = "1";
     await expect(actions.saveRulePatternsAction([])).rejects.toBeInstanceOf(DemoReadOnlyError);
     await expect(actions.resetRulePatternsAction()).rejects.toBeInstanceOf(DemoReadOnlyError);
+    await expect(actions.savePromptOverridesAction([])).rejects.toBeInstanceOf(DemoReadOnlyError);
+    await expect(actions.resetPromptOverridesAction()).rejects.toBeInstanceOf(DemoReadOnlyError);
   });
 
   it("M1:留空的内置行保存时剔除(停用),不报错", async () => {
@@ -56,3 +58,59 @@ describe("识别规则 actions (issue #44)", () => {
     expect(await getWorkflowRepository().listRulePatterns()).toEqual([]);
   });
 });
+
+describe("AI 仲裁提示词 actions (issue #44 Phase 2)", () => {
+  let actions: typeof import("./actions");
+  let getWorkflowRepository: typeof import("../lib/workflow-runtime").getWorkflowRepository;
+
+  beforeAll(async () => {
+    [actions, getWorkflowRepository] = await Promise.all([
+      import("./actions"),
+      import("../lib/workflow-runtime").then((m) => m.getWorkflowRepository),
+    ]);
+  }, 30_000);
+
+  beforeEach(async () => {
+    await getWorkflowRepository().replacePromptOverrides([]);
+  });
+
+  afterEach(() => {
+    delete process.env.MEDIA_TRACK_DEMO_MODE;
+  });
+
+  it("保存覆盖(kind → body),空体 kind 不落库", async () => {
+    const res = await actions.savePromptOverridesAction([
+      { arbitrationKind: "selection", promptText: "规则甲\n- 只看 B 级" },
+      { arbitrationKind: "movie-selection", promptText: "   " }, // 空体 = 内置,不写行
+    ]);
+    expect(res.success).toBe(true);
+    const rows = await getWorkflowRepository().listPromptOverrides();
+    expect(rows.map((o) => o.arbitrationKind)).toEqual(["selection"]);
+    expect(rows[0]?.promptText).toBe("规则甲\n- 只看 B 级");
+  });
+
+  it("超长 body → 整批不落库 + errors 逐 kind 返回", async () => {
+    const res = await actions.savePromptOverridesAction([
+      { arbitrationKind: "selection", promptText: "x".repeat(2001) },
+    ]);
+    expect(res.success).toBe(false);
+    expect(res.errors?.["selection"]).toContain("提示词过长");
+    expect(await getWorkflowRepository().listPromptOverrides()).toEqual([]);
+  });
+
+  it("未知 kind → errors,不落库", async () => {
+    const res = await actions.savePromptOverridesAction([
+      { arbitrationKind: "not-a-kind", promptText: "whatever" },
+    ]);
+    expect(res.success).toBe(false);
+    expect(res.errors?.["not-a-kind"]).toBe("未知 kind");
+  });
+
+  it("恢复默认 = 清空 prompt_overrides", async () => {
+    await actions.savePromptOverridesAction([{ arbitrationKind: "selection", promptText: "规则甲" }]);
+    const res = await actions.resetPromptOverridesAction();
+    expect(res.success).toBe(true);
+    expect(await getWorkflowRepository().listPromptOverrides()).toEqual([]);
+  });
+});
+

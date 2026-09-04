@@ -228,6 +228,40 @@ export async function loadPromptOverrides(store: PromptOverrideStore): Promise<P
 }
 
 /**
+ * Prompt body 校验：middle 段必须非空、有长度上限（防误操作写得像超长病历）。
+ * 返回错误文案或 null。
+ */
+export const MAX_PROMPT_BODY_LENGTH = 2000;
+export function validatePromptBody(text: string): string | null {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return "提示词不能为空";
+  if (trimmed.length > MAX_PROMPT_BODY_LENGTH) {
+    return "提示词过长（最多 " + MAX_PROMPT_BODY_LENGTH + " 字符）";
+  }
+  return null;
+}
+
+/**
+ * 把 prompt_overrides 行编译成按 kind 索引的 lookup：kind → body。
+ * 未知 kind / isActive=false 的行跳过（不参与覆盖）。
+ */
+export function compilePromptLookup(overrides: readonly PromptOverride[]): PromptOverrideLookup {
+  const lookup: PromptOverrideLookup = {};
+  for (const override of overrides) {
+    if (!override.isActive) continue;
+    if (!isArbitrationKind(override.arbitrationKind)) continue;
+    const error = validatePromptBody(override.promptText);
+    if (error !== null) continue;
+    lookup[override.arbitrationKind] = override.promptText.trim();
+  }
+  return lookup;
+}
+
+/** kind → body 覆盖表；body = prompt 模板的「中间可编辑段」，head/tail 固定（Phase 2）。 */
+export type PromptOverrideLookup = Partial<Record<ArbitrationKind, string>>;
+
+
+/**
  * 把生效规则集编译成 episode-code.ts 可直接消费的 EpisodeParseRules：
  * 6 个内置 ruleId 落到对应槽位（ep-only → epOnly 键），非内置 ruleId 进 custom
  * （按 patterns 顺序 = sortOrder 升序）。loadRulePatterns 已保证每条可编译，

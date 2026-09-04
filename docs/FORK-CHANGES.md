@@ -127,6 +127,24 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 
 **测试**:新增 ruleset.test.ts(19 用例:组计数/校验/编译/加载语义/深拷贝/trim/端到端回退)+ repository-contract 加 3 组 round-trip(含重复 ruleId last-wins)(InMemory 56 + SQLite 59 全绿);workflow 包 tsc 零错误;episode-code(24)无回归。
 
+### 36. 识别规则可配置系统 Phase 2——AI 仲裁 Prompt 配置(issue #44)
+
+**目标**:四个生产仲裁 prompt 的「规则指令中段」可 UI 编辑;角色定位(head)与 JSON 输出契约(tail)固定不可改(防破坏结构化输出);改动对后续采集任务生效(每次认领加载一次)。
+
+**改动**:
+- arbitrator.ts:四个 prompt 常量拆 head/body/tail(EPISODE_MAPPING/SELECTION/MOVIE_SELECTION/MOVIE_DIAGNOSIS);新增 PROMPT_TEMPLATES(kind → {head,body,tail})与 resolvePromptText(kind, overrides?) = head + (覆盖 body ?? 内置 body) + tail,缺省输出与旧版逐字节一致;四个仲裁函数新增可选 promptOverrides?: PromptOverrideLookup;无效行/未知 kind 一律不参与覆盖;
+- ruleset.ts:validatePromptBody(非空 + ≤2000 字符)与 compilePromptLookup(行 → kind→body 映射,active=false/未知 kind/非法体跳过),复用 isArbitrationKind;loadPromptOverrides 透传(既有);
+- 全链注入(TV + movie 两路):pipeline.consumeClaimedRun 每次认领 loadPromptOverrides + compilePromptLookup(TV/movie 都加载)→ runTvAcquisitionV2 / runMovieAcquisitionV2 → acquire.ts → orchestrator → FastPathOptions / MovieFastPathOptions → arbitrateSelection(tv)/arbitrateEpisodeMapping(landing,含 tryEpisodeMapping helper)/arbitrateMovieSelection + arbitrateMovieDiagnosis(movie)全部拿到;每层可选、缺省旧语义;
+- sqlite.replacePromptOverrides:保留全量替换(DELETE 后插入)+ 输入内重复 kind 改 INSERT OR REPLACE last-wins(补 Phase 0 复核 S3 的不对称);
+- Web:设置页新增「AI 提示词」tab(八 tab):PromptOverridesSection(server:loadPromptOverrides 读生效覆盖,缺失 kind = 内置)→ PromptOverridesForm(client:四 kind 卡片,head/JSON 契约只读展示、body textarea 可编辑、留空 = 内置模板、逐 kind 实时 validatePromptBody、保存/恢复默认 + router.refresh);服务端 savePromptOverridesAction 逐 kind 二次校验(未知 kind/空体/超长),任一失败整批不落库 + errors 逐 kind 返回,空体 draft 不写行;resetPromptOverridesAction 清空表;assertNotDemo 写门;
+- R1(Phase 1 复核建议):RecognitionRulesSection initial 改为「生效集 ∪ 缺失内置」——被停用的内置槽位刷新后仍显示(空表达式占位),可单独恢复,不必整体「恢复默认」.
+
+**安全边界**:head/tail 固定不可改(JSON 契约与角色定位不可破坏);body 只影响模型指令文本,不逃逸到代码路径;校验两端同源(validatePromptBody);长度上限防误操作;非 demo 实例可写(assertNotDemo);空体 = 内置模板(不写覆盖行,表里无行 = 内置,与加载器同源语义).
+
+**测试**:arbitrator-prompts.test.ts 新增 5 用例(缺省重组=head+body+tail、覆盖时 head/tail 固定、四 kind 模板结构、compilePromptLookup 行筛选、validatePromptBody 边界 2000);actions.recognition 扩展 prompt 4 用例(demo 拒写/保存覆盖+空体不落库/超长整批失败 errors 逐 kind/未知 kind/恢复默认清空);settings-tabs-model 更新为八 tab.workflow 9 文件 274 全绿;web 5 套件 33 全绿;workflow tsc + web tsc 零错误;@media-track/workflow dist 已重建.
+
+**复核备注**:待子代理复核.
+
 ### 35. 识别规则可配置系统 Phase 1——解析正则编辑与全链注入(issue #44)
 
 **目标**:Phase 0 的 rule_patterns 表接入实际采集链路——UI 可编辑 6 条内置正则 + 自定义规则,恢复默认,改动对后续采集任务生效。

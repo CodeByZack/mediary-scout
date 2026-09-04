@@ -1,6 +1,6 @@
 import type { MovieWorkflowResult, WorkflowStatus } from "../domain.js";
 import type { BridgedV2Result } from "../acquisition-v2/workflow-v2-bridge.js";
-import { loadEpisodeRules } from "../ruleset.js";
+import { compilePromptLookup, loadEpisodeRules, loadPromptOverrides } from "../ruleset.js";
 import { runTvAcquisitionV2 } from "../acquisition-v2/run-tv-v2.js";
 import { runMovieAcquisitionV2 } from "../movie-workflow-v2.js";
 import type { ClaimedRun, ConsumptionContext, PatrolRun } from "./context.js";
@@ -85,6 +85,8 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
   // 不解析集数(身份判据是标题+年份),跳过加载。
   const episodeRules =
     ctx.kind === "movie_init" ? undefined : await loadEpisodeRules(ctx.repository);
+  // issue #44 Phase 2:AI 仲裁 prompt 覆盖(kind → body)。TV/movie 都要。
+  const promptLookup = compilePromptLookup(await loadPromptOverrides(ctx.repository));
   switch (ctx.kind) {
     case "type2_init": {
       const claimed = requireClaimed(ctx);
@@ -128,6 +130,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
           ),
         ),
         ...(episodeRules !== undefined ? { episodeRules } : {}),
+        ...(Object.keys(promptLookup).length > 0 ? { promptOverrides: promptLookup } : {}),
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,
@@ -177,6 +180,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
         model: ctx.model,
         workflowRunId: claimed.runId,
         ...(episodeRules !== undefined ? { episodeRules } : {}),
+        ...(Object.keys(promptLookup).length > 0 ? { promptOverrides: promptLookup } : {}),
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,
@@ -222,6 +226,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
         moviesParentDirectoryId: resolveMoviesParent(ctx),
         now,
         deadLinkStore: ctx.repository,
+        ...(Object.keys(promptLookup).length > 0 ? { promptOverrides: promptLookup } : {}),
         onProgress: progressAndTraceSink({
           repository: ctx.repository,
           workflowRunId: claimed.runId,
@@ -288,6 +293,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
           ),
         ),
         ...(episodeRules !== undefined ? { episodeRules } : {}),
+        ...(Object.keys(promptLookup).length > 0 ? { promptOverrides: promptLookup } : {}),
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,

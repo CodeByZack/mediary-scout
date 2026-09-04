@@ -3,6 +3,7 @@ import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
 import type { AgentPhase, AgentToolEvent } from "../../acquisition-v2/activity.js";
 import { getStorageBrand } from "../../storage-brands.js";
 import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
+import type { PromptOverrideLookup } from "../../ruleset.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import type { TvAnimeTarget } from "../../acquisition-v2/task-agents.js";
 
@@ -103,6 +104,8 @@ export interface FastPathOptions {
   onProgress?: (event: AgentToolEvent) => void;
   /** issue #44: 可配置集数解析规则(UI 编辑后经 pipeline 注入)。缺省 = 内置正则。 */
   episodeRules?: EpisodeParseRules;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }
 
 export interface FastPathResult {

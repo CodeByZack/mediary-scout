@@ -3,7 +3,7 @@ import { maskProviderUid } from "../../lib/mask-provider-uid";
 import { connection } from "next/server";
 import { headers } from "next/headers";
 import { Suspense } from "react";
-import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, Radio, Regex, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
+import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, MessageSquareText, Radio, Regex, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
 import { AppSidebar } from "../../components/app-sidebar";
 import { AddDriveBrandTabs } from "../../components/add-drive-brand-tabs";
 import { TestConnectionButton } from "../../components/test-connection-button";
@@ -12,6 +12,7 @@ import { PushNotificationForm } from "../../components/push-notification-form";
 import { PreferredLanguageForm } from "../../components/preferred-language-form";
 import { QualityPreferenceForm } from "../../components/quality-preference-form";
 import { RulePatternsForm } from "../../components/rule-patterns-form";
+import { PromptOverridesForm } from "../../components/prompt-overrides-form";
 import { LlmConfigForm } from "../../components/llm-config-form";
 import { TmdbApiKeyForm } from "../../components/tmdb-api-key-form";
 import { AssrtTokenForm } from "../../components/assrt-token-form";
@@ -127,6 +128,11 @@ export default function SettingsPage({
               recognition={
                 <Suspense fallback={<div className="skeleton skeleton-heading" />}>
                   <RecognitionRulesSection />
+                </Suspense>
+              }
+              prompts={
+                <Suspense fallback={<div className="skeleton skeleton-heading" />}>
+                  <PromptOverridesSection />
                 </Suspense>
               }
               patrol={
@@ -277,16 +283,37 @@ async function RecognitionRulesSection() {
   const repository = getWorkflowRepository();
   const { loadRulePatterns, BUILTIN_RULE_PATTERNS } = await import("@media-track/workflow");
   // 生效规则(空表 = 内置;损坏行自动回退内置)——与采集时 loadEpisodeRules 同一语义。
+  // R1(Phase 1 复核):生效集 ∪ 缺失内置 —— 被停用(留空保存)的内置槽位刷新后仍可见,
+  // 便于单独恢复而不用整体「恢复默认」;缺失内置以空表达式占位(表单「留空=停用」语义)。
   const effective = await loadRulePatterns(repository);
-  const defaults = new Map(BUILTIN_RULE_PATTERNS.map((p) => [p.ruleId, p.sortOrder]));
-  const initial = effective.map((p) => ({
-    ruleId: p.ruleId,
-    role: p.role,
-    expression: p.expression,
-    label: p.label,
-    sortOrder: p.sortOrder,
-    isDefault: defaults.has(p.ruleId),
-  }));
+  const effectiveByRuleId = new Map(
+    BUILTIN_RULE_PATTERNS.map((p) => p.ruleId).map((id) => [
+      id,
+      effective.find((p) => p.ruleId === id),
+    ]),
+  );
+  const initial = BUILTIN_RULE_PATTERNS.map((p) => {
+    const present = effectiveByRuleId.get(p.ruleId);
+    return {
+      ruleId: p.ruleId,
+      role: p.role,
+      expression: present?.expression ?? "", // 缺失 = 停用(留空)
+      label: present?.label ?? "",
+      sortOrder: p.sortOrder,
+      isDefault: true,
+    };
+  }).concat(
+    effective
+      .filter((p) => !effectiveByRuleId.has(p.ruleId))
+      .map((p) => ({
+        ruleId: p.ruleId,
+        role: p.role,
+        expression: p.expression,
+        label: p.label,
+        sortOrder: p.sortOrder,
+        isDefault: false,
+      })),
+  );
 
   return (
     <section className="panel" style={{ maxWidth: 960, marginTop: 24 }}>
@@ -304,6 +331,33 @@ async function RecognitionRulesSection() {
   );
 }
 
+async function PromptOverridesSection() {
+  await connection();
+  const repository = getWorkflowRepository();
+  const { loadPromptOverrides, ARBITRATION_KINDS } = await import("@media-track/workflow");
+  // 生效覆盖(kind → body);缺失 kind = 内置模板 —— 与采集时 resolvePromptText 同源语义。
+  const overrides = await loadPromptOverrides(repository);
+  const byKind = new Map(overrides.map((o) => [o.arbitrationKind, o.promptText]));
+  const initial = ARBITRATION_KINDS.map((kind) => ({
+    arbitrationKind: kind,
+    promptText: byKind.get(kind) ?? "",
+  }));
+
+  return (
+    <section className="panel" style={{ maxWidth: 960, marginTop: 24 }}>
+      <div className="panel-header">
+        <div>
+          <h2 className="panel-title">
+            <MessageSquareText size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
+            AI 仲裁提示词
+          </h2>
+          <p className="panel-note">四段升级仲裁的系统提示词（改「规则指令」中段；角色定位与 JSON 输出契约固定不可改；留空 = 内置模板）</p>
+        </div>
+      </div>
+      <PromptOverridesForm initial={initial} />
+    </section>
+  );
+}
 async function LlmConfigSection() {
   await connection();
   const repository = getAccountScopedSettings(await getCurrentAccountId());

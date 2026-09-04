@@ -9,6 +9,7 @@ import {
 } from "./workflow-v2-bridge.js";
 import type { DeadLinkStore } from "./dead-links.js";
 import type { EpisodeParseRules } from "../episode-code.js";
+import type { PromptOverrideLookup } from "../ruleset.js";
 import { runAcquisitionV2Workflow } from "./workflow-v2.js";
 import { getQualityGuidance, getSearchRecipe, searchProfile } from "./search-profile.js";
 import type { AgentToolEvent } from "./activity.js";
@@ -44,6 +45,8 @@ export interface RunTvAcquisitionV2Request {
   episodeNames?: Record<string, string>;
   /** issue #44: 可配置集数解析规则(UI 编辑后经 pipeline 注入)。缺省 = 内置正则。 */
   episodeRules?: EpisodeParseRules;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
   searchBudget?: number;
   maxSteps?: number;
   preferredLanguage?: string;
@@ -93,6 +96,7 @@ export async function runTvAcquisitionV2(request: RunTvAcquisitionV2Request): Pr
     ...(request.episodeAirDates === undefined ? {} : { episodeAirDates: request.episodeAirDates }),
           ...(request.episodeNames === undefined ? {} : { episodeNames: request.episodeNames }),
     ...(request.episodeRules === undefined ? {} : { episodeRules: request.episodeRules }),
+    ...(request.promptOverrides === undefined ? {} : { promptOverrides: request.promptOverrides }),
     ...(request.searchBudget === undefined ? {} : { searchBudget: request.searchBudget }),
     ...(request.maxSteps === undefined ? {} : { maxSteps: request.maxSteps }),
     ...(request.preferredLanguage === undefined ? {} : { preferredLanguage: request.preferredLanguage }),

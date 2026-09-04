@@ -1,4 +1,5 @@
 import type { LanguageModel } from "ai";
+import type { PromptOverrideLookup } from "../../ruleset.js";
 import {
   arbitrateMovieDiagnosis,
   arbitrateMovieSelection,
@@ -65,6 +66,8 @@ export interface MovieFastPathOptions {
     provider: AssrtProviderPort;
     preferredLanguage: string;
   };
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }
 
 export interface MovieFastPathResult {
@@ -245,6 +248,8 @@ interface MoviePoolContext {
   attempted: Set<string>;
   deadRetries: number;
   escalated: boolean;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }
 
 interface MoviePhaseOutcome {
@@ -283,6 +288,7 @@ async function runMovieCandidatePhase(
       summary: summarizeGrading(grading),
       title: target.title,
       year: target.year,
+      ...(ctx.promptOverrides !== undefined ? { promptOverrides: ctx.promptOverrides } : {}),
     });
     current = arbitration.candidateId;
     if (current === null) {
@@ -548,6 +554,7 @@ async function runMovieCandidatePhase(
       summary: digest.summary,
       title: target.title,
       year: target.year,
+      ...(ctx.promptOverrides !== undefined ? { promptOverrides: ctx.promptOverrides } : {}),
     });
     if (diagnosis.action === "accept") {
       // issue #33 映射日志:AI 支把输入名单(喂给 AI 的 digest.summary 含全量文件)一起
@@ -601,7 +608,7 @@ async function runMovieCandidatePhase(
 export async function runMovieFastPathAcquisition(
   options: MovieFastPathOptions,
 ): Promise<MovieFastPathResult> {
-  const { sandbox, model, target, subtitle, onProgress } = options;
+  const { sandbox, model, target, subtitle, onProgress, promptOverrides } = options;
   logStorageProvider(sandbox, target.title, options.storageProvider);
 
   // 0. Landing-point check FIRST (movie has no episode codes): if the movie dir
@@ -727,6 +734,7 @@ export async function runMovieFastPathAcquisition(
         deadRetries,
         escalated,
         urlById: mtUrlById,
+        ...(promptOverrides !== undefined ? { promptOverrides } : {}),
       },
       raw,
       grading,
@@ -808,6 +816,7 @@ export async function runMovieFastPathAcquisition(
         deadRetries,
         escalated,
         urlById: mbUrlById,
+        ...(promptOverrides !== undefined ? { promptOverrides } : {}),
       },
       fallbackView,
       grading,

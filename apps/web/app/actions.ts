@@ -591,6 +591,61 @@ export async function resetRulePatternsAction(): Promise<{ success: boolean; mes
   }
 }
 
+/**
+ * issue #44 Phase 2:保存 AI 仲裁 prompt 覆盖(kind → body)。逐 kind 服务端校验,
+ * 任一失败整批不落库;空体 = 恢复内置(删除该覆盖行)——body 全空 = 全覆盖恢复内置。
+ */
+export async function savePromptOverridesAction(
+  drafts: Array<{ arbitrationKind: string; promptText: string }>,
+): Promise<{
+  success: boolean;
+  message?: string;
+  errors?: Record<string, string>;
+}> {
+  assertNotDemo();
+  try {
+    const { isArbitrationKind, validatePromptBody } = await import("@media-track/workflow");
+    const { getWorkflowRepository } = await import("../lib/workflow-runtime");
+    const errors: Record<string, string> = {};
+    const valid: Array<{ arbitrationKind: string; promptText: string; isActive: boolean }> = [];
+    for (const draft of drafts) {
+      if (!isArbitrationKind(draft.arbitrationKind)) {
+        errors[draft.arbitrationKind] = "未知 kind";
+        continue;
+      }
+      const body = draft.promptText.trim();
+      if (body.length === 0) {
+        // 空体 = 恢复内置:不留覆盖行,也不写 is_active=0 行(表里没有行 = 内置模板)。
+        continue;
+      }
+      const error = validatePromptBody(body);
+      if (error !== null) {
+        errors[draft.arbitrationKind] = error;
+        continue;
+      }
+      valid.push({ arbitrationKind: draft.arbitrationKind, promptText: body, isActive: true });
+    }
+    if (Object.keys(errors).length > 0) return { success: false, errors };
+    const repository = getWorkflowRepository();
+    await repository.replacePromptOverrides(valid);
+    return { success: true };
+  } catch (error) {
+    return { success: false, message: "保存失败：" + String(error) };
+  }
+}
+
+/** issue #44 Phase 2:恢复默认 = 清空 prompt_overrides(全部回到内置模板)。 */
+export async function resetPromptOverridesAction(): Promise<{ success: boolean; message?: string }> {
+  assertNotDemo();
+  try {
+    const { getWorkflowRepository } = await import("../lib/workflow-runtime");
+    await getWorkflowRepository().replacePromptOverrides([]);
+    return { success: true };
+  } catch (error) {
+    return { success: false, message: "恢复默认失败：" + String(error) };
+  }
+}
+
 export async function saveLlmConfigAction(input: {
   baseURL: string;
   modelId: string;

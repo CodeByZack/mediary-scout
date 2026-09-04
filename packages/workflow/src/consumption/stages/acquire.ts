@@ -1,5 +1,6 @@
 import type { LanguageModel } from "ai";
 import type { EpisodeParseRules } from "../../episode-code.js";
+import type { PromptOverrideLookup } from "../../ruleset.js";
 import type { AuditEvent } from "../../domain.js";
 import type { ResourceProvider, StorageExecutor } from "../../ports.js";
 import type { AcquisitionDirectories } from "../../acquisition-v2/directory-lifecycle.js";
@@ -52,6 +53,8 @@ export interface RunAcquisitionV2WorkflowRequest {
   episodeNames?: Record<string, string>;
   /** issue #44: 可配置集数解析规则(UI 编辑后注入)。缺省 = 内置正则。 */
   episodeRules?: EpisodeParseRules;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
   searchBudget?: number;
   maxSteps?: number;
   preferredLanguage?: string;
@@ -133,6 +136,7 @@ export async function runAcquisitionCoreStage(
     ...(request.deadLinkStore ? { deadLinkStore: request.deadLinkStore } : {}),
     ...(request.onProgress ? { onProgress: request.onProgress } : {}),
     ...(request.episodeRules === undefined ? {} : { episodeRules: request.episodeRules }),
+    ...(request.promptOverrides === undefined ? {} : { promptOverrides: request.promptOverrides }),
   });
 
   // Reconcile from the AGENT'S coverage (its markObtained), NOT a 115 re-scan:

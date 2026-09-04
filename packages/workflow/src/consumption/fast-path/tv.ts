@@ -1,5 +1,6 @@
 import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
 import { arbitrateSelection } from "../../acquisition-v2/arbitrator.js";
+import type { PromptOverrideLookup } from "../../ruleset.js";
 import { gradeCandidates, summarizeGrading } from "../../acquisition-v2/candidate-grader.js";
 import {
   MAX_DEAD_LINK_RETRIES,
@@ -75,6 +76,8 @@ interface TvPoolContext {
   episodeNames?: Record<string, string>;
   /** issue #44: 可配置集数解析规则(UI 编辑后注入)。缺省 = 内置正则。 */
   episodeRules?: EpisodeParseRules;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }
 
 /** 阶段运行结果。done 非空 = 该池已收尾(入库或诚实终止)，直接返回；否则 caller 决定是否
@@ -119,6 +122,7 @@ async function runTvCandidatePhase(
       summary: summarizeGrading(grading),
       title: target.title,
       seasons,
+      ...(ctx.promptOverrides !== undefined ? { promptOverrides: ctx.promptOverrides } : {}),
     });
     current = arbitration.candidateId;
     if (current === null) {
@@ -228,6 +232,7 @@ async function runTvCandidatePhase(
       ...(ctx.episodeAirDates !== undefined ? { episodeAirDates: ctx.episodeAirDates } : {}),
       ...(ctx.episodeNames !== undefined ? { episodeNames: ctx.episodeNames } : {}),
       ...(ctx.episodeRules !== undefined ? { episodeRules: ctx.episodeRules } : {}),
+      ...(ctx.promptOverrides !== undefined ? { promptOverrides: ctx.promptOverrides } : {}),
     });
     if (closed.done) {
       return { done: closed.done, escalated: closed.escalated, deadRetries: closed.deadRetries };
@@ -240,7 +245,7 @@ async function runTvCandidatePhase(
 }
 
 export async function runFastPathAcquisition(options: FastPathOptions): Promise<FastPathResult> {
-  const { sandbox, model, target, isChineseNative, onProgress, episodeRules } = options;
+  const { sandbox, model, target, isChineseNative, onProgress, episodeRules, promptOverrides } = options;
   const seasons = target.seasons;
   logStorageProvider(sandbox, target.title, options.storageProvider);
 
@@ -414,6 +419,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
     ...(target.episodeNames !== undefined ? { episodeNames: target.episodeNames } : {}),
     ...(episodeRules !== undefined ? { episodeRules } : {}),
+    ...(promptOverrides !== undefined ? { promptOverrides } : {}),
   };
 
   // ★ 阶段1 —— primary 池:只要 primary 有 A 候选(或根本没有别名可兜底)就先转存 primary,

@@ -1187,9 +1187,10 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
   }
 
   async replacePromptOverrides(overrides: PromptOverride[]): Promise<void> {
+    // 全量替换:先清空再插入;INSERT OR REPLACE 保证输入内重复 kind 后者覆盖(last-wins,§34 复核 S3)。*/
     const clear = this.db.prepare("DELETE FROM prompt_overrides");
     const insert = this.db.prepare(
-      "INSERT INTO prompt_overrides (arbitration_kind, prompt_text, is_active) VALUES (?, ?, ?)",
+      "INSERT OR REPLACE INTO prompt_overrides (arbitration_kind, prompt_text, is_active) VALUES (?, ?, ?)",
     );
     this.db.transaction(() => {
       clear.run();
