@@ -253,7 +253,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     expect(result.coverage.missing).toEqual(["S01E01"]);
   });
 
-  it("issue #29 八轮:代码全识别 + 脏包(sample) → 零 AI 直接收尾(escalated=false,不再诊断仲裁)", async () => {
+  it("issue #39:代码全识别 + 附件(sample) → 零 AI 直接收尾(escalated=false,附件不否决整包)", async () => {
     const { sandbox, s1, storage } = await createSetup({
       // issue #29 回归:候选带 url → 转存步骤需透出 linkUrl(用户拍板链接展示)。
       candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字", url: "https://115.com/s/abc123" }],
@@ -274,12 +274,73 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
       isChineseNative: false,
     });
 
-    // 八轮:代码已全覆盖(S01E01),脏包(sample)信号不再升级——AI 零参与,escalated=false。
+    // issue #39:代码已全覆盖(S01E01),附件(sample)只待丢弃不否决——AI 零参与,escalated=false。
     expect(result.escalated).toBe(false);
     expect(result.coverage.coverageMet).toBe(true);
     // Only the real episode was renamed + moved; the sample stays out of the season.
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
+    ]);
+  });
+
+  it("issue #39 附:包内只有附件(带集号的预告) → 不假收尾,换候选(season 目录空)", async () => {
+    // pre-#39:need=[E01]、包内只有 Show.S01E01.预告.mkv → covered=[E01]、missing=[] →
+    // landing 收尾分支不看脏包标记 → verdict=accept + 文案「已完成:S01E01 已入库」,
+    // 实际 0 入库且不再试别的候选(假收尾真实 bug)。post-#39:附件不计数 → missing=[E01] → 换候选。
+    const { sandbox, s1, storage } = await createSetup({
+      candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],
+      packs: {
+        c1: { files: [{ path: "Show.S01E01.预告.mkv", sizeBytes: 50_000_000 }] },
+      },
+      need: ["S01E01"],
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: throwModel(), // 纯附件包零 AI——模型被调就爆炸
+      target, // missingEpisodes: ["S01E01"]
+      isChineseNative: false,
+    });
+
+    // 附件不计数 → E01 仍缺 → 换候选;season 目录空,不假收尾。
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.coverage.missing).toEqual(["S01E01"]);
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([]);
+  });
+
+  it("issue #39: 部分覆盖 + 花絮附件 → 零 AI 入库(正片保留、附件丢弃,不再整体判脏换候选)", async () => {
+    // need=[E01,E02,E03],包=E01+E02+幕后花絮(部分覆盖 + 轻微附件)。
+    // 此前:hasJunk → 判脏 → 换候选(2 集正片全丢);现在:花絮不计集号、不判脏 → passes=true
+    // → clean finalize 保留 E01+E02、丢弃花絮,全程零 AI(throwModel)。
+    const { sandbox, s1, storage } = await createSetup({
+      candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],
+      packs: {
+        c1: {
+          files: [
+            { path: "狂飙.S01E01.1080p.mkv", sizeBytes: 1_000_000_000 },
+            { path: "狂飙.S01E02.1080p.mkv", sizeBytes: 1_000_000_000 },
+            { path: "幕后花絮.mkv", sizeBytes: 50_000_000 },
+          ],
+        },
+      },
+      need: ["S01E01", "S01E02", "S01E03"],
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: throwModel(), // 附件场景零 AI——模型被调就爆炸
+      target: { ...target, missingEpisodes: ["S01E01", "S01E02", "S01E03"] },
+      isChineseNative: false,
+    });
+
+    expect(result.escalated).toBe(false); // 零 AI:附件场景不升级
+    // 部分覆盖(E01+E02 of E01-E03)→ 已入库 2 集,结账诚实报 E03 仍缺(不伪造全覆盖)。
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.coverage.missing).toEqual(["S01E03"]);
+    // 两集正片改名归位,花絮被丢弃(进 junkSignals → finalize 跳过 + wipe 清除)。
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+      "狂飙.S01E02.mkv",
     ]);
   });
 
