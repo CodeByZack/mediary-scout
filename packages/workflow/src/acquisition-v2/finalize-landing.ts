@@ -1,4 +1,4 @@
-import { canonicalEpisodeFileName, episodeCodeFromFileName, episodeDateConflict } from "../episode-code.js";
+import { canonicalEpisodeFileName, episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../episode-code.js";
 import { TaskSandbox } from "./sandbox.js";
 import type { SimTreeFile } from "./storage-115-simulator.js";
 import type { MovieStagingDigest, StagingDigest } from "./staging-digest.js";
@@ -38,6 +38,8 @@ export interface FinalizeLandingOptions {
   /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD")。与 digest 同一份年守卫数据:
    *  文件自带日期与该集播出日矛盾的,finalize 也不落地(不依赖 digest 先行过滤)。 */
   episodeAirDates?: Record<string, string>;
+  /** issue #44: 可配置集数解析规则。缺省 = 内置正则。 */
+  rules?: EpisodeParseRules;
 }
 
 /** buildSeasonMoves 的收窄选项(与 finalizeLanding 同名参数同义)。 */
@@ -95,6 +97,8 @@ export function buildSeasonMoves(
   overrides?: Record<string, string>,
   skipCodes?: string[],
   restrictions?: SeasonMoveRestrictions,
+  /** issue #44: 可配置集数解析规则。缺省 = 内置正则。 */
+  rules?: EpisodeParseRules,
 ): Array<{ season: number; fileIds: string[] }> {
   const seasonSet = new Set(seasons);
   const junkNames = new Set(digest.junkSignals);
@@ -113,7 +117,7 @@ export function buildSeasonMoves(
   for (const video of digest.videos) {
     if (junkNames.has(basenameOf(video.path))) continue;
     const base = basenameOf(video.path);
-    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons);
+    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons, undefined, rules);
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
@@ -127,7 +131,7 @@ export function buildSeasonMoves(
   for (const subtitle of digest.subtitles) {
     if (junkNames.has(basenameOf(subtitle.path))) continue;
     const base = basenameOf(subtitle.path);
-    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons);
+    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons, undefined, rules);
     if (code) {
       const season = seasonFromEpisodeCode(code);
       if (
@@ -149,7 +153,7 @@ export function buildSeasonMoves(
 export async function finalizeLanding(
   options: FinalizeLandingOptions,
 ): Promise<FinalizeLandingResult> {
-  const { sandbox, digest, canonicalTitle, seasons, overrides, skipCodes, onlyCodes, episodeAirDates } = options;
+  const { sandbox, digest, canonicalTitle, seasons, overrides, skipCodes, onlyCodes, episodeAirDates, rules } = options;
   const seasonSet = new Set(seasons);
   const overridesTable = overrides ?? {};
   const skipSet = new Set(skipCodes ?? []);
@@ -170,7 +174,7 @@ export async function finalizeLanding(
   for (const video of digest.videos) {
     const base = basenameOf(video.path);
     if (junkNames.has(base)) continue;
-    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons);
+    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons, undefined, rules);
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
@@ -226,7 +230,7 @@ export async function finalizeLanding(
   const moves = buildSeasonMoves(digest, seasons, overridesTable, skipCodes, {
     ...(onlyCodes !== undefined ? { onlyCodes } : {}),
     ...(episodeAirDates !== undefined ? { episodeAirDates } : {}),
-  });
+  }, rules);
   // moveToSeason 的返回是「移动后整目录 reread」不是移动清单 —— 真实移动数从这里算。
   const movedCount = moves.reduce((sum, move) => sum + move.fileIds.length, 0);
   const movedSeasons: Record<number, number> = {};
@@ -251,7 +255,9 @@ export async function finalizeLanding(
   const renamedToCodes = renamed
     .map((name) => {
       const base = basenameOf(name);
-      const code = episodeCodeFromFileName(base, seasons);
+      // 解析的是我们自己生成的规范名(Title.SxxExx.ext),固定用内置正则可保证
+      // mark 不因用户规则误改而静默失败(issue #44:规则只影响"识别输入文件名")。
+      const code = episodeCodeFromFileName(base, seasons, undefined, null);
       return code ?? null;
     })
     .filter((code): code is string => code !== null);

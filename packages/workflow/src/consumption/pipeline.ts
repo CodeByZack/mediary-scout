@@ -1,5 +1,6 @@
 import type { MovieWorkflowResult, WorkflowStatus } from "../domain.js";
 import type { BridgedV2Result } from "../acquisition-v2/workflow-v2-bridge.js";
+import { loadEpisodeRules } from "../ruleset.js";
 import { runTvAcquisitionV2 } from "../acquisition-v2/run-tv-v2.js";
 import { runMovieAcquisitionV2 } from "../movie-workflow-v2.js";
 import type { ClaimedRun, ConsumptionContext, PatrolRun } from "./context.js";
@@ -80,6 +81,10 @@ function resolveMoviesParent(ctx: ConsumptionContext): string {
 
 /** ★ 唯一消费入口：认领成功后跑完 ①–⑦（design §2）。 */
 export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<ConsumeOutcome> {
+  // issue #44:每轮任务认领时加载一次生效规则(空表/损坏自动回退内置)。movie 分支
+  // 不解析集数(身份判据是标题+年份),跳过加载。
+  const episodeRules =
+    ctx.kind === "movie_init" ? undefined : await loadEpisodeRules(ctx.repository);
   switch (ctx.kind) {
     case "type2_init": {
       const claimed = requireClaimed(ctx);
@@ -122,6 +127,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
               : [[episode.episodeCode, episode.title] as const],
           ),
         ),
+        ...(episodeRules !== undefined ? { episodeRules } : {}),
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,
@@ -170,6 +176,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
         deadLinkStore: ctx.repository,
         model: ctx.model,
         workflowRunId: claimed.runId,
+        ...(episodeRules !== undefined ? { episodeRules } : {}),
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,
@@ -280,6 +287,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
               : [[episode.episodeCode, episode.title] as const],
           ),
         ),
+        ...(episodeRules !== undefined ? { episodeRules } : {}),
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,

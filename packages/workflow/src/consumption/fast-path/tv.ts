@@ -1,4 +1,4 @@
-import { episodeCodeFromFileName, episodeDateConflict } from "../../episode-code.js";
+import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
 import { arbitrateSelection } from "../../acquisition-v2/arbitrator.js";
 import { gradeCandidates, summarizeGrading } from "../../acquisition-v2/candidate-grader.js";
 import {
@@ -73,6 +73,8 @@ interface TvPoolContext {
   urlById?: Record<string, string>;
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")—— 综艺「第N期」Part 锚定。 */
   episodeNames?: Record<string, string>;
+  /** issue #44: 可配置集数解析规则(UI 编辑后注入)。缺省 = 内置正则。 */
+  episodeRules?: EpisodeParseRules;
 }
 
 /** 阶段运行结果。done 非空 = 该池已收尾(入库或诚实终止)，直接返回；否则 caller 决定是否
@@ -225,6 +227,7 @@ async function runTvCandidatePhase(
       transfer,
       ...(ctx.episodeAirDates !== undefined ? { episodeAirDates: ctx.episodeAirDates } : {}),
       ...(ctx.episodeNames !== undefined ? { episodeNames: ctx.episodeNames } : {}),
+      ...(ctx.episodeRules !== undefined ? { episodeRules: ctx.episodeRules } : {}),
     });
     if (closed.done) {
       return { done: closed.done, escalated: closed.escalated, deadRetries: closed.deadRetries };
@@ -237,7 +240,7 @@ async function runTvCandidatePhase(
 }
 
 export async function runFastPathAcquisition(options: FastPathOptions): Promise<FastPathResult> {
-  const { sandbox, model, target, isChineseNative, onProgress } = options;
+  const { sandbox, model, target, isChineseNative, onProgress, episodeRules } = options;
   const seasons = target.seasons;
   logStorageProvider(sandbox, target.title, options.storageProvider);
 
@@ -255,7 +258,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   const onDisk = await sandbox.inspectTargetDir();
   for (const file of onDisk) {
     const base = fileBaseName(file.path);
-    const code = episodeCodeFromFileName(base, seasons);
+    const code = episodeCodeFromFileName(base, seasons, undefined, episodeRules);
     if (!code) continue;
     // 年守卫同样作用于在库文件:名字像 E11 但自带日期与播出日矛盾的,不据此
     // 反标 obtained(防历史错标件把缺集"自我认证"掉)。
@@ -410,6 +413,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     escalated,
     ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
     ...(target.episodeNames !== undefined ? { episodeNames: target.episodeNames } : {}),
+    ...(episodeRules !== undefined ? { episodeRules } : {}),
   };
 
   // ★ 阶段1 —— primary 池:只要 primary 有 A 候选(或根本没有别名可兜底)就先转存 primary,

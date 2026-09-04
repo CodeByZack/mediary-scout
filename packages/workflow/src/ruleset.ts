@@ -11,6 +11,8 @@
  * 可编译且捕获组数量符合该规则的语义（见 validateRuleExpression）。
  */
 
+import type { EpisodeParseRules } from "./episode-code.js";
+
 /** 规则语义角色：决定解析代码怎么读捕获组。
  *  - season-episode：group1 = 季号，group2 = 集号（规则 0/1/3）
  *  - episode-only：group1 = 集号（规则 2/4/5）
@@ -176,6 +178,7 @@ export function validateRuleExpression(role: RuleRole, expression: string): stri
   }
   const trimmed = expression.trim();
   if (trimmed.length === 0) return "正则不能为空";
+  if (trimmed.length > 300) return "正则过长（最多 300 字符）";
   if (compileRulePattern(trimmed) === null) return "不是合法的正则表达式";
   const groups = countCaptureGroups(trimmed);
   const required = REQUIRED_CAPTURE_GROUPS[role];
@@ -222,4 +225,48 @@ export async function loadRulePatterns(store: RulePatternStore): Promise<RulePat
 /** Prompt 覆盖直接透传（与内置 prompt 模板的合并发生在 arbitrator.ts，Phase 2）。 */
 export async function loadPromptOverrides(store: PromptOverrideStore): Promise<PromptOverride[]> {
   return store.listPromptOverrides();
+}
+
+/**
+ * 把生效规则集编译成 episode-code.ts 可直接消费的 EpisodeParseRules：
+ * 6 个内置 ruleId 落到对应槽位（ep-only → epOnly 键），非内置 ruleId 进 custom
+ * （按 patterns 顺序 = sortOrder 升序）。loadRulePatterns 已保证每条可编译，
+ * 这里 compileRulePattern 只是双保险（null 则跳过）。
+ */
+export function compileEpisodeRules(patterns: readonly RulePattern[]): EpisodeParseRules {
+  const rules: EpisodeParseRules = {};
+  const custom: EpisodeParseRules["custom"] = [];
+  for (const pattern of patterns) {
+    const regex = compileRulePattern(pattern.expression);
+    if (regex === null) continue;
+    switch (pattern.ruleId) {
+      case "sxxexx":
+        rules.sxxexx = regex;
+        break;
+      case "variant":
+        rules.variant = regex;
+        break;
+      case "ep-only":
+        rules.epOnly = regex;
+        break;
+      case "cross":
+        rules.cross = regex;
+        break;
+      case "chinese":
+        rules.chinese = regex;
+        break;
+      case "digits":
+        rules.digits = regex;
+        break;
+      default:
+        custom.push({ role: pattern.role, regex });
+    }
+  }
+  if (custom.length > 0) rules.custom = custom;
+  return rules;
+}
+
+/** 一站式：读表（空表/损坏自动回退内置）→ 编译成 EpisodeParseRules。 */
+export async function loadEpisodeRules(store: RulePatternStore): Promise<EpisodeParseRules> {
+  return compileEpisodeRules(await loadRulePatterns(store));
 }

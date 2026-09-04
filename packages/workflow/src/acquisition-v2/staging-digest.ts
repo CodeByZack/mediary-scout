@@ -1,4 +1,4 @@
-import { episodeCodeFromFileName, episodeDateConflict } from "../episode-code.js";
+import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../episode-code.js";
 import type { SimTreeFile } from "./storage-115-simulator.js";
 
 /**
@@ -71,6 +71,8 @@ export interface StagingDigestInput {
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")。综艺「第N期上/下 ↔
    *  Episode N (Part 1/2)」锚定用(2026-08-31 地球超新鲜案);缺省 = 无锚定。 */
   episodeNames?: Record<string, string>;
+  /** issue #44: 可配置集数解析规则(UI 编辑后注入)。缺省 = 内置正则。 */
+  rules?: EpisodeParseRules;
 }
 
 export function fileBaseName(file: SimTreeFile): string {
@@ -107,7 +109,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
       continue;
     }
     const parsedCode =
-      overrides[base] ?? episodeCodeFromFileName(base, input.seasons, input.episodeNames);
+      overrides[base] ?? episodeCodeFromFileName(base, input.seasons, input.episodeNames, input.rules);
     if (parsedCode) {
       // 年守卫(issue #21 同族):文件自带日期与该集播出日明显矛盾 → 不采信,
       // 按解析失败处理(宁可少认不乱认;映射表给出的 code 同样过守卫)。

@@ -148,6 +148,39 @@ describe("loadPromptOverrides", () => {
   });
 });
 
+describe("compileEpisodeRules / loadEpisodeRules", () => {
+  const example = async () => await loadRulePatterns({ listRulePatterns: async () => [] });
+
+  it("maps builtin ruleIds to slots and non-builtin ids to custom", async () => {
+    const { compileEpisodeRules } = await import("../src/ruleset.js");
+    const rules = compileEpisodeRules([
+      { ruleId: "sxxexx", role: "season-episode", expression: "[Ss](\\d{1,2})[Ee](\\d{1,4})", label: "", sortOrder: 0, isDefault: true },
+      { ruleId: "ep-only", role: "episode-only", expression: "[Ee]P?(\\d{1,4})", label: "", sortOrder: 2, isDefault: true },
+      { ruleId: "custom-underscore", role: "season-episode", expression: "[Ss](\\d{1,2})_(\\d{1,4})", label: "", sortOrder: 6, isDefault: false },
+    ]);
+    expect(rules.sxxexx?.source).toBe("[Ss](\\d{1,2})[Ee](\\d{1,4})");
+    expect(rules.sxxexx?.test("Show.S01E03.1080p")).toBe(true);
+    expect(rules.epOnly).toBeInstanceOf(RegExp);
+    expect(rules.custom).toHaveLength(1);
+    expect(rules.custom![0]!.role).toBe("season-episode");
+  });
+
+  it("loadEpisodeRules 端到端:空表 → 内置编译结果;编辑 digits → 覆盖生效", async () => {
+    const { loadEpisodeRules } = await import("../src/ruleset.js");
+    const { createSqliteWorkflowRepository } = await import("../src/sqlite.js");
+    const repo = createSqliteWorkflowRepository({ path: ":memory:" });
+    const empty = await loadEpisodeRules(repo);
+    expect(empty.digits?.test("07")).toBe(true);
+    expect(empty.digits?.test("0700")).toBe(false);
+    await repo.replaceRulePatterns([
+      { ruleId: "digits", role: "episode-only", expression: "^(\\d{1,4})$", label: "纯数字4位", sortOrder: 5, isDefault: false },
+    ]);
+    const edited = await loadEpisodeRules(repo);
+    expect(edited.digits?.test("0700")).toBe(true);
+    expect(edited.custom ?? []).toHaveLength(0);
+  });
+});
+
 describe("repo + loader 端到端 (S7)", () => {
   it("replace([]) 清空后 loadRulePatterns 回退内置", async () => {
     const { createSqliteWorkflowRepository } = await import("../src/sqlite.js");

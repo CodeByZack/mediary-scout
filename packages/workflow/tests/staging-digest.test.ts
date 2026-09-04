@@ -35,6 +35,30 @@ describe("digestStaging — TV", () => {
     expect(d.coveredCodes).toEqual(["S01E01"]);
   });
 
+  it("issue #44:注入可配置规则后按自定义正则解析集数", () => {
+    const d = digestStaging({
+      files: [video("狂飙.S1_07.1080p.mkv")],
+      seasons: [1],
+      needCodes: ["S01E07"],
+      rules: {
+        custom: [{ role: "season-episode", regex: /[Ss](\d{1,2})_(\d{1,4})/ }],
+      },
+    });
+    expect(d.episodeCodes).toEqual(["S01E07"]);
+    expect(d.coveredCodes).toEqual(["S01E07"]);
+  });
+
+  it("issue #44:规则覆盖 digits 槽位后 4 位纯数字可解析", () => {
+    const d = digestStaging({
+      files: [video("0107.mkv")],
+      seasons: [1],
+      needCodes: ["S01E107"],
+      rules: { digits: /^(\d{1,4})$/ },
+    });
+    // 4 位纯数字(内置只认 3 位)在规则覆盖后可解析;S1 数字规范化 → 107(无前导零)。
+    expect(d.episodeCodes).toEqual(["S01E107"]);
+  });
+
   it("flags a dirty pack when a TV video has no episode code AND no junk marker (unknown file)", () => {
     // issue #39:无集号但命中 junk 标记(花絮/预告)→ 附件,不判脏(finalize 丢弃);
     // 只有"无集号且无 junk 标记"的未知文件(可能是正片藏集号)才判脏交 AI 映射。

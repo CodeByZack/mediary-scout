@@ -523,6 +523,74 @@ export async function saveQualityPreferenceAction(
   }
 }
 
+/** 类型定义与内置槽位判定在 rule-patterns-utils(与客户端表单共用,避免循环导入)。 */
+import { BUILTIN_ID_SET, type RulePatternDraft } from "../lib/rule-patterns-utils";
+export type { RulePatternDraft };
+
+export async function saveRulePatternsAction(
+  patterns: RulePatternDraft[],
+): Promise<{
+  success: boolean;
+  message?: string;
+  /** ruleId → 校验错误文案(与页面逐行标红对应)。 */
+  errors?: Record<string, string>;
+}> {
+  assertNotDemo();
+  try {
+    const { validateRuleExpression } = await import("@media-track/workflow");
+    type RR = "season-episode" | "episode-only";
+    const errors: Record<string, string> = {};
+    const valid: Array<{
+      ruleId: string;
+      role: RR;
+      expression: string;
+      label: string;
+      sortOrder: number;
+      isDefault: boolean;
+    }> = [];
+    // M1 防御:留空的内置槽位 = 停用(非 UI 直调也剔除,与客户端 filterDisabledBuiltins 一致)。
+    const effective = patterns.filter((p) => !(BUILTIN_ID_SET.has(p.ruleId) && p.expression.trim().length === 0));
+    for (const draft of effective) {
+      const role = draft.role as RR;
+      const error = validateRuleExpression(role, draft.expression);
+      if (error !== null) {
+        errors[draft.ruleId] = error;
+        continue;
+      }
+      valid.push({
+        ruleId: draft.ruleId,
+        role,
+        expression: draft.expression.trim(),
+        label: draft.label ?? "",
+        sortOrder: draft.sortOrder,
+        isDefault: draft.isDefault !== false,
+      });
+    }
+    if (Object.keys(errors).length > 0) {
+      return { success: false, message: "部分规则校验失败,未保存", errors };
+    }
+    const { getWorkflowRepository } = await import("../lib/workflow-runtime");
+    const repository = getWorkflowRepository();
+    await repository.replaceRulePatterns(valid);
+    return { success: true };
+  } catch (error) {
+    return { success: false, message: `保存失败：${String(error)}` };
+  }
+}
+
+export async function resetRulePatternsAction(): Promise<{ success: boolean; message?: string }> {
+  assertNotDemo();
+  try {
+    const { getWorkflowRepository } = await import("../lib/workflow-runtime");
+    const repository = getWorkflowRepository();
+    // 空表 = 回退内置(ruleset.loadRulePatterns 语义),与「恢复默认」等价。
+    await repository.replaceRulePatterns([]);
+    return { success: true };
+  } catch (error) {
+    return { success: false, message: `恢复默认失败：${String(error)}` };
+  }
+}
+
 export async function saveLlmConfigAction(input: {
   baseURL: string;
   modelId: string;

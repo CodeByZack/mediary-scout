@@ -3,7 +3,7 @@ import { maskProviderUid } from "../../lib/mask-provider-uid";
 import { connection } from "next/server";
 import { headers } from "next/headers";
 import { Suspense } from "react";
-import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, Radio, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
+import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, Radio, Regex, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
 import { AppSidebar } from "../../components/app-sidebar";
 import { AddDriveBrandTabs } from "../../components/add-drive-brand-tabs";
 import { TestConnectionButton } from "../../components/test-connection-button";
@@ -11,6 +11,7 @@ import { UnbindStorageButton } from "../../components/unbind-storage-button";
 import { PushNotificationForm } from "../../components/push-notification-form";
 import { PreferredLanguageForm } from "../../components/preferred-language-form";
 import { QualityPreferenceForm } from "../../components/quality-preference-form";
+import { RulePatternsForm } from "../../components/rule-patterns-form";
 import { LlmConfigForm } from "../../components/llm-config-form";
 import { TmdbApiKeyForm } from "../../components/tmdb-api-key-form";
 import { AssrtTokenForm } from "../../components/assrt-token-form";
@@ -122,6 +123,11 @@ export default function SettingsPage({
                     <QualityPreferenceSection />
                   </Suspense>
                 </>
+              }
+              recognition={
+                <Suspense fallback={<div className="skeleton skeleton-heading" />}>
+                  <RecognitionRulesSection />
+                </Suspense>
               }
               patrol={
                 <>
@@ -262,6 +268,38 @@ async function QualityPreferenceSection() {
         </div>
       </div>
       <QualityPreferenceForm initial={initial} />
+    </section>
+  );
+}
+
+async function RecognitionRulesSection() {
+  await connection();
+  const repository = getWorkflowRepository();
+  const { loadRulePatterns, BUILTIN_RULE_PATTERNS } = await import("@media-track/workflow");
+  // 生效规则(空表 = 内置;损坏行自动回退内置)——与采集时 loadEpisodeRules 同一语义。
+  const effective = await loadRulePatterns(repository);
+  const defaults = new Map(BUILTIN_RULE_PATTERNS.map((p) => [p.ruleId, p.sortOrder]));
+  const initial = effective.map((p) => ({
+    ruleId: p.ruleId,
+    role: p.role,
+    expression: p.expression,
+    label: p.label,
+    sortOrder: p.sortOrder,
+    isDefault: defaults.has(p.ruleId),
+  }));
+
+  return (
+    <section className="panel" style={{ maxWidth: 960, marginTop: 24 }}>
+      <div className="panel-header">
+        <div>
+          <h2 className="panel-title">
+            <Regex size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
+            集数识别规则
+          </h2>
+          <p className="panel-note">文件名 → 集数 解析正则（自定义规则回退内置；改动对后续采集任务生效）</p>
+        </div>
+      </div>
+      <RulePatternsForm initial={initial} />
     </section>
   );
 }

@@ -127,6 +127,22 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 
 **测试**:新增 ruleset.test.ts(19 用例:组计数/校验/编译/加载语义/深拷贝/trim/端到端回退)+ repository-contract 加 3 组 round-trip(含重复 ruleId last-wins)(InMemory 56 + SQLite 59 全绿);workflow 包 tsc 零错误;episode-code(24)无回归。
 
+### 35. 识别规则可配置系统 Phase 1——解析正则编辑与全链注入(issue #44)
+
+**目标**:Phase 0 的 rule_patterns 表接入实际采集链路——UI 可编辑 6 条内置正则 + 自定义规则,恢复默认,改动对后续采集任务生效。
+
+**改动**:
+- episode-code.ts:episodeCodeFromFileName 新增可选第 4 参 rules?: EpisodeParseRules(6 个内置槽位 RegExp 覆盖 + custom 自定义规则数组)。内置分支逐行改为 rules?.槽位 ?? 内置正则 优先;自定义规则在所有内置分支之后按 sortOrder apply:season-episode 任意上下文、episode-only 仅单季,集号一律过 isPlausibleEpisodeNumber,空匹配/组缺失自然跳过(§34 S5 的「顺序/空匹配运行时拒」落地)。缺省不传 = 行为与旧版逐字节一致,15 处旧调用点零改动;
+- ruleset.ts:新增 compileEpisodeRules(patterns)(内置 ruleId → 槽位、非内置 → custom,按序)与 loadEpisodeRules(store)(读表 → 编译,空表/损坏自动回退内置);
+- 全链注入(每层可选参数、缺省旧语义):pipeline.ts consumeClaimedRun 每轮认领时 loadEpisodeRules(ctx.repository)(movie 分支跳过→无集数解析)→ runTvAcquisitionV2 → acquire.ts(runAcquisitionCoreStage)→ orchestrator.runAcquisitionV2 → runFastPathAcquisition(FastPathOptions.episodeRules)→ TvPoolContext → closeOutTvLanding;落点检查 onDiskCodes(tv.ts)、digestStaging(两处)、landingParseRows(steps.ts 第 4 参)、finalizeLanding(rename 源名解析 + buildSeasonMoves 两处)全部拿到 rules;renamedToCodes 解析「我们自己生成的规范名」刻意固定用内置正则(传 null)——mark 不因用户规则误改而静默失败(规则只影响识别输入文件名);
+- Web:设置页新增「识别规则」tab(七 tab):settings-tabs-model/SETTINGS_TABS + settings-tabs 壳 + page.tsx RecognitionRulesSection(server 组件,loadRulePatterns 读生效集,空表 = 内置回填入表)→ RulePatternsForm(client:内置 6 行固定 role/可改正则/可停用(留空=停用,行仍在)、自定义行 role select+正则+标签+删除、排序可调、逐行实时校验(validateRuleExpression 同款)、保存/恢复默认(清空表=回退内置+router.refresh)、服务端二次校验逐行返回错误);
+- actions.ts:saveRulePatternsAction(逐行 validateRuleExpression,任一失败整批不落库,errors 逐行返回)/resetRulePatternsAction(空表=恢复默认)。
+
+**安全边界**:规则只影响「识别输入文件名」;内置正则损坏 → 单条回退内置值(Phase 0 语义);自定义规则损坏保存被拒;多季禁用无季规则/合理集数守卫/衍生黑名单/年份排除等语义不暴露给配置(两层模型)。UI 是非 demo 实例才可写(assertNotDemo)。
+
+**测试**:episode-code +7(槽位覆盖/自定义两角色/多季禁用/合理防护/空匹配跳过/内置优先/捕获组空白规范化);digestStaging +2(自定义规则解析、digits 槽位覆盖 4 位);ruleset +2(compileEpisodeRules 映射、loadEpisodeRules 端到端);settings-tabs-model 更新为七 tab;web 新增 rule-patterns-utils(4)+ actions.recognition(4,真实 :memory: 库);staging-digest(47)/finalize-landing/fast-path(36)/variety 全部无回归;web tsc + workflow 包 build(tsc emit)零错误。
+
+**子代理 review(REQUEST_CHANGES → 修订闭环,第 1 轮)**:必须修 M1(「留空=停用」断链:客户端 rowError 把空表达式当错误 + hasErrors 禁用保存按钮,服务端也拒——停用内置完全不可达)已修:内置留空行校验放行(ruleRowError 内置留空 → null)、保存时客户端/服务端都剔除留空内置行(filterDisabledBuiltins,复用 Phase 0「缺失内置=停用」),新增 action 级测试(留空剔除/整批失败不落库/恢复默认)与 utils 纯函数测试;建议 S1(捕获组数字规范化,防「S03E 02」畸形码)已随修:episode-code 新增 numPart——所有分支(含槽位覆盖与自定义)输出前 Number 规范化、NaN/空白/超 4 位跳过,内置正则行为逐字节一致(4 位前导零输入 0700 → S01E700 属规范修正,测试同步更新);S2 已加:validateRuleExpression 长度上限 300 字符(UI+action 共用);S3 已修:表单错误行改为 Fragment 兄弟行(不再嵌套 tr);S4 已补:rule-patterns-utils(纯逻辑,类型定义迁入,actions 再导出)+ utils 测试 4 + actions.recognition 测试 4(真实 :memory: 库);S5 记档(barrel 导入、dist 不提交,CI 需 build:workflow 先于 web)。待复核子代理确认闭环。
 ### 1. 规范视频改名（canonical video rename）
 
 **提交**: `3e64c28` — feat(workflow): canonical video rename on staging normalization

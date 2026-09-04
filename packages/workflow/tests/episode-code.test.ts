@@ -171,4 +171,58 @@ describe("episodeCodeFromFileName — 2026-08-19 补齐的命名规则 (§3)", (
       S02E20: "Episode 20",
     };
     expect(episodeCodeFromFileName("2026.08.29_第10期上_4K_60fps.mp4", [2], placeholderNames)).toBe("S02E10");
+});
+
+describe("episodeCodeFromFileName + 可配置规则 (issue #44 Phase 1)", () => {
+  it("覆盖内置槽位:digits 改 4 位后 4 位纯数字可解析", () => {
+    const rules = { digits: /^(\d{1,4})$/ };
+    // S1:捕获组经 Number 规范化——"0700" → 700(去前导零,规范集号)。
+    expect(episodeCodeFromFileName("0700.mkv", [1], undefined, rules)).toBe("S01E700");
+    expect(episodeCodeFromFileName("0700.mkv", [1])).toBeNull(); // 不传规则 = 旧内置(3 位)
+  });
+
+  it("S1:自定义季节规则捕获组带空白 → 数字规范化后仍产出规范集码", () => {
+    const rules = {
+      custom: [{ role: "season-episode" as const, regex: /^(\d{1,2})盘([ \t]*\d{1,4})\.mkv$/ }],
+    };
+    expect(episodeCodeFromFileName("3盘 02.mkv", undefined, undefined, rules)).toBe("S03E02");
+    expect(episodeCodeFromFileName("3盘\t02.mkv", undefined, undefined, rules)).toBe("S03E02");
+    expect(episodeCodeFromFileName("x盘 02.mkv", undefined, undefined, rules)).toBeNull(); // 非数字组跳过
+  });
+
+  it("自定义 season-episode 规则:全名自带季,任意上下文可用", () => {
+    const rules = {
+      custom: [{ role: "season-episode" as const, regex: /[Ss](\d{1,2})_(\d{1,4})/ }],
+    };
+    expect(episodeCodeFromFileName("Show.S2_07.1080p.mkv", [5], undefined, rules)).toBe("S02E07");
+    expect(episodeCodeFromFileName("Show.S2_07.1080p.mkv", [1, 5], undefined, rules)).toBe("S02E07"); // 多季也认
+  });
+
+  it("自定义 episode-only 规则:仅单季上下文启用", () => {
+    const rules = {
+      custom: [{ role: "episode-only" as const, regex: /CN_(\d{1,4})\.mkv/ }],
+    };
+    expect(episodeCodeFromFileName("Show.CN_03.mkv", [9], undefined, rules)).toBe("S09E03");
+    expect(episodeCodeFromFileName("Show.CN_03.mkv", [1, 9], undefined, rules)).toBeNull(); // 多季禁用
+  });
+
+  it("自定义规则集号过合理防护:排除年份/超大数字", () => {
+    const rules = {
+      custom: [{ role: "episode-only" as const, regex: /CN_(\d{1,4})/ }],
+    };
+    expect(episodeCodeFromFileName("Show.CN_2024.mkv", [1], undefined, rules)).toBeNull();
+    expect(episodeCodeFromFileName("Show.CN_9999.mkv", [1], undefined, rules)).toBeNull();
+  });
+
+  it("空匹配正则(如 () )不会通过:group 缺失即跳过", () => {
+    const rules = { custom: [{ role: "episode-only" as const, regex: /()/ }] };
+    expect(episodeCodeFromFileName("anything.mkv", [1], undefined, rules)).toBeNull();
+  });
+
+  it("内置分支先于自定义规则(内置 sxxexx 命中即返回)", () => {
+    const rules = {
+      custom: [{ role: "season-episode" as const, regex: /S(\d)(\d)/ }],
+    };
+    expect(episodeCodeFromFileName("Show.S01E02.mkv", undefined, undefined, rules)).toBe("S01E02");
+  });
   });

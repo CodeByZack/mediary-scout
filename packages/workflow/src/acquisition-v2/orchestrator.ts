@@ -12,6 +12,7 @@ import { AssrtSubtitleProvider, type AssrtProviderPort } from "../subtitle-provi
 import type { SearchProfile } from "./search-profile.js";
 import { needForMovie, needForTvTarget, type MovieTarget, type TvAnimeTarget } from "./target-types.js";
 import { runFastPathAcquisition } from "../consumption/fast-path/tv.js";
+import type { EpisodeParseRules } from "../episode-code.js";
 import { runMovieFastPathAcquisition } from "../consumption/fast-path/movie.js";
 
 /**
@@ -67,6 +68,8 @@ export interface RunAcquisitionV2Request {
   assrtProvider?: AssrtProviderPort;
   /** Per-tool-call live progress for the activity page (best-effort). */
   onProgress?: (event: AgentToolEvent) => void;
+  /** issue #44: 可配置集数解析规则(UI 编辑后经 pipeline 注入)。缺省 = 内置正则。 */
+  episodeRules?: EpisodeParseRules;
 }
 
 /** The persistable trace of a V2 run, in the same shape the old serial path
@@ -213,6 +216,7 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
           // agent path uses — the runner wires it to the progress + agent-trace
           // sinks, so the activity page shows fast-path steps in agent_steps.
           ...(request.onProgress ? { onProgress: request.onProgress } : {}),
+          ...(request.episodeRules === undefined ? {} : { episodeRules: request.episodeRules }),
         })
       : await runMovieFastPathAcquisition({
           sandbox,
