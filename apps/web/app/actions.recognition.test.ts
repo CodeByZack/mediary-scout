@@ -32,7 +32,7 @@ describe("识别规则 actions (issue #44)", () => {
     await expect(actions.resetPromptOverridesAction()).rejects.toBeInstanceOf(DemoReadOnlyError);
   });
 
-  it("M1:留空的内置行保存时剔除(停用),不报错", async () => {
+  it("M1:留空的内置行保存时剔除(= 恢复内置默认),不报错", async () => {
     const res = await actions.saveRulePatternsAction([
       { ruleId: "sxxexx", role: "season-episode", expression: "", label: "", sortOrder: 0, isDefault: true },
       { ruleId: "digits", role: "episode-only", expression: "^([0-9]{1,4})$", label: "纯数字", sortOrder: 5, isDefault: false },
@@ -151,6 +151,23 @@ describe("解析测试台 testEpisodeRuleAction (issue #44 Phase 3)", () => {
     const r = await actions.testEpisodeRuleAction({ fileName: "0700.mkv", multiSeason: false });
     expect(r.code).toBe("S01E700");
     expect(r.matched).toBe("digits");
+  });
+
+  it("M1 回归:表中仅存部分行时,缺失内置槽位按内置回退命中(未停用)", async () => {
+    // 只保存 digits 一行 → 其余内置槽位在真实路径经 ?? 回退内置正则仍生效,
+    // 探针必须镜像该语义(compiled ?? 内置同源),不得误报无命中。
+    await actions.saveRulePatternsAction([
+      { ruleId: "digits", role: "episode-only", expression: "^([0-9]{1,4})$", label: "纯数字", sortOrder: 5, isDefault: false },
+    ]);
+    const sxx = await actions.testEpisodeRuleAction({ fileName: "狂飙.S01E01.1080p.mkv", multiSeason: false });
+    expect(sxx.code).toBe("S01E01");
+    expect(sxx.matched).toBe("sxxexx");
+    const variant = await actions.testEpisodeRuleAction({ fileName: "S01 E01.mkv", multiSeason: false });
+    expect(variant.code).toBe("S01E01");
+    expect(variant.matched).toBe("variant");
+    const chinese = await actions.testEpisodeRuleAction({ fileName: "第3集.mkv", multiSeason: false });
+    expect(chinese.code).toBe("S01E03");
+    expect(chinese.matched).toBe("chinese");
   });
 
   it("空文件名 → 提示", async () => {

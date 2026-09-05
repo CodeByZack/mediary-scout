@@ -660,6 +660,7 @@ export async function testEpisodeRuleAction(input: {
   if (fileName.length === 0) return { code: null, matched: null, message: "文件名不能为空" };
   try {
     const {
+      BUILTIN_RULE_PATTERNS,
       compileEpisodeRules,
       episodeCodeFromFileName,
       loadEpisodeRules,
@@ -672,17 +673,22 @@ export async function testEpisodeRuleAction(input: {
     const code = episodeCodeFromFileName(fileName, seasons, undefined, rules);
     const patterns = await loadRulePatterns(repository);
     const compiled = compileEpisodeRules(patterns);
-    // 逐槽位探针(镜像 episode-code.ts 分支顺序)。episodeCodeFromFileName 对未提供的
-    // 槽位按 ?? 回退内置(无法禁用它),故隔离一个槽位时其余槽位显式填「永不匹配」正则,
-    // 自定义槽位用空数组禁用 —— 保证命中来自且仅来自被探槽位。
-    const NEVER = /[^\s\S]/; // 永不匹配
+    // 逐槽位探针(镜像 episode-code.ts 分支顺序)。episodeCodeFromFileName 对缺失槽位
+    // 按 ?? 回退**内置正则**(表里没有该内置行 ≠ 该分支停用——M1,Phase 3 复核),故被探
+    // 槽位必须用「compiled ?? 内置同源正则」(内置来自 BUILTIN_RULE_PATTERNS 编译,与
+    // episode-code 内置字面量逐字一致),其余槽位显式填「永不匹配」隔离、自定义槽位
+    // 空数组 —— 命中来自且仅来自被探槽位,顺序即真实复合路径的分支优先序。
+    const builtinRules = compileEpisodeRules(BUILTIN_RULE_PATTERNS);
+    const NEVER = /[^\s\S]/; // 永不匹配(type 兜底;内置 6 槽位经 builtinRules 全有值)
+    const slot = (n: "sxxexx" | "variant" | "epOnly" | "cross" | "chinese" | "digits") =>
+      compiled[n] ?? builtinRules[n] ?? NEVER;
     const probe: Array<[string, Parameters<typeof episodeCodeFromFileName>[3]]> = [
-      ["sxxexx", { sxxexx: compiled.sxxexx ?? NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
-      ["variant", { sxxexx: NEVER, variant: compiled.variant ?? NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
-      ["ep-only", { sxxexx: NEVER, variant: NEVER, epOnly: compiled.epOnly ?? NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
-      ["cross", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: compiled.cross ?? NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
-      ["chinese", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: compiled.chinese ?? NEVER, digits: NEVER, custom: [] }],
-      ["digits", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: compiled.digits ?? NEVER, custom: [] }],
+      ["sxxexx", { sxxexx: slot("sxxexx"), variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
+      ["variant", { sxxexx: NEVER, variant: slot("variant"), epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
+      ["ep-only", { sxxexx: NEVER, variant: NEVER, epOnly: slot("epOnly"), cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
+      ["cross", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: slot("cross"), chinese: NEVER, digits: NEVER, custom: [] }],
+      ["chinese", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: slot("chinese"), digits: NEVER, custom: [] }],
+      ["digits", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: slot("digits"), custom: [] }],
       ...(compiled.custom ?? []).map((c, i) => [`自定义 ${i + 1}`, { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [c] }] as [string, Parameters<typeof episodeCodeFromFileName>[3]]),
     ];
     let matched: string | null = null;

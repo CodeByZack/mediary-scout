@@ -97,7 +97,7 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
       return;
     }
     startTransition(async () => {
-      // M1:留空的内置槽位 = 停用——从 payload 剔除,表缺失该内置即不生效(Phase 0 loader 语义)。
+      // M1(Phase 1 修订)语义:留空的内置槽位从 payload 剔除 = 恢复内置默认——缺失行在采集时
       const payload = filterDisabledBuiltins(rows);
       const r = await runAction(() => saveRulePatternsAction(payload), (msg) => {
         setResult(`❌ ${msg}`);
@@ -201,7 +201,7 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
                     />
                     {builtin && !row.expression.trim() ? (
                       <div className="panel-note" style={{ fontSize: 12 }}>
-                        留空 = 该内置规则停用（行仍显示，便于恢复）
+                        留空 = 恢复内置默认（内置分支仍生效；当前版本不支持真正禁用）
                       </div>
                     ) : null}
                   </td>

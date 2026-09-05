@@ -284,8 +284,9 @@ async function RecognitionRulesSection() {
   const repository = getWorkflowRepository();
   const { loadRulePatterns, BUILTIN_RULE_PATTERNS } = await import("@media-track/workflow");
   // 生效规则(空表 = 内置;损坏行自动回退内置)——与采集时 loadEpisodeRules 同一语义。
-  // R1(Phase 1 复核):生效集 ∪ 缺失内置 —— 被停用(留空保存)的内置槽位刷新后仍可见,
-  // 便于单独恢复而不用整体「恢复默认」;缺失内置以空表达式占位(表单「留空=停用」语义)。
+  // R1(Phase 1 复核):生效集 ∪ 缺失内置 —— 留空保存的内置槽位(恢复内置默认)刷新后
+  // 仍可见,便于单独改回而不用整体「恢复默认」;缺失内置以空表达式占位(表单「留空=恢复内置」)。
+  // 注:缺失槽位在采集时经 ?? 回退内置正则仍生效 —— 当前版本不支持真正禁用内置分支(Phase 3 复核 S1)。
   const effective = await loadRulePatterns(repository);
   const effectiveByRuleId = new Map(
     BUILTIN_RULE_PATTERNS.map((p) => p.ruleId).map((id) => [
@@ -298,7 +299,7 @@ async function RecognitionRulesSection() {
     return {
       ruleId: p.ruleId,
       role: p.role,
-      expression: present?.expression ?? "", // 缺失 = 停用(留空)
+      expression: present?.expression ?? "", // 缺失 = 留空(恢复内置,行仍显示)
       label: present?.label ?? "",
       sortOrder: p.sortOrder,
       isDefault: true,

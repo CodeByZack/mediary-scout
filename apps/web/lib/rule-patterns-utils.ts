@@ -16,7 +16,7 @@ export type RulePatternDraft = {
 export const BUILTIN_ID_SET = new Set<string>(BUILTIN_RULE_PATTERNS.map((p) => p.ruleId));
 
 /**
- * 单行校验。内置规则留空 = 停用（允许）；其余空表达式 / 捕获组不足 / 非法正则 → 错误文案。
+ * 单行校验。内置规则留空 = 恢复内置默认（允许，内置分支仍生效）；其余空表达式 / 捕获组不足 / 非法正则 → 错误文案。
  * 与服务端 saveRulePatternsAction 共用同一 validateRuleExpression。
  */
 export function ruleRowError(row: RulePatternDraft): string | null {
@@ -26,7 +26,8 @@ export function ruleRowError(row: RulePatternDraft): string | null {
   return validateRuleExpression(row.role as RuleRole, expression);
 }
 
-/** 保存时剔除「留空 = 停用」的内置行：表缺失该内置 = Phase 0 loader 的「缺失内置=停用」语义。 */
+/** 保存时剔除留空的内置行（= 恢复内置默认）。注：缺失行在采集时经 ?? 回退内置正则仍生效，
+ *  当前版本不支持真正禁用内置分支（Phase 3 复核 S1）。 */
 export function filterDisabledBuiltins(rows: RulePatternDraft[]): RulePatternDraft[] {
   return rows.filter((row) => !(BUILTIN_ID_SET.has(row.ruleId) && row.expression.trim().length === 0));
 }
