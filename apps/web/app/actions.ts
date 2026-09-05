@@ -525,7 +525,6 @@ export async function saveQualityPreferenceAction(
 
 /** 类型定义与内置槽位判定在 rule-patterns-utils(与客户端表单共用,避免循环导入)。 */
 import { BUILTIN_ID_SET, type RulePatternDraft } from "../lib/rule-patterns-utils";
-export type { RulePatternDraft };
 
 export async function saveRulePatternsAction(
   patterns: RulePatternDraft[],

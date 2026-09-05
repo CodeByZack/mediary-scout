@@ -3,17 +3,14 @@
 import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, LoaderCircle, Plus, RefreshCcw } from "lucide-react";
-import {
-  resetRulePatternsAction,
-  saveRulePatternsAction,
-  type RulePatternDraft,
-} from "../app/actions";
+import { resetRulePatternsAction, saveRulePatternsAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
 import {
   BUILTIN_ID_SET,
   filterDisabledBuiltins,
   formatRuleBlock,
   parseRuleBlock,
+  type RulePatternDraft,
 } from "../lib/rule-patterns-utils";
 
 /** issue #44 UI 重构:解析规则 = 单个多行输入框。懂正则的人直接编辑文本块;
