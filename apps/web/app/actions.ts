@@ -523,6 +523,186 @@ export async function saveQualityPreferenceAction(
   }
 }
 
+/** 类型定义与内置槽位判定在 rule-patterns-utils(与客户端表单共用,避免循环导入)。 */
+import { BUILTIN_ID_SET, type RulePatternDraft } from "../lib/rule-patterns-utils";
+
+export async function saveRulePatternsAction(
+  patterns: RulePatternDraft[],
+): Promise<{
+  success: boolean;
+  message?: string;
+  /** ruleId → 校验错误文案(与页面逐行标红对应)。 */
+  errors?: Record<string, string>;
+}> {
+  assertNotDemo();
+  try {
+    const { validateRuleExpression } = await import("@media-track/workflow");
+    type RR = "season-episode" | "episode-only";
+    const errors: Record<string, string> = {};
+    const valid: Array<{
+      ruleId: string;
+      role: RR;
+      expression: string;
+      label: string;
+      sortOrder: number;
+      isDefault: boolean;
+    }> = [];
+    // M1 防御:留空的内置槽位 = 停用(非 UI 直调也剔除,与客户端 filterDisabledBuiltins 一致)。
+    const effective = patterns.filter((p) => !(BUILTIN_ID_SET.has(p.ruleId) && p.expression.trim().length === 0));
+    for (const draft of effective) {
+      const role = draft.role as RR;
+      const error = validateRuleExpression(role, draft.expression);
+      if (error !== null) {
+        errors[draft.ruleId] = error;
+        continue;
+      }
+      valid.push({
+        ruleId: draft.ruleId,
+        role,
+        expression: draft.expression.trim(),
+        label: draft.label ?? "",
+        sortOrder: draft.sortOrder,
+        isDefault: draft.isDefault !== false,
+      });
+    }
+    if (Object.keys(errors).length > 0) {
+      return { success: false, message: "部分规则校验失败,未保存", errors };
+    }
+    const { getWorkflowRepository } = await import("../lib/workflow-runtime");
+    const repository = getWorkflowRepository();
+    await repository.replaceRulePatterns(valid);
+    return { success: true };
+  } catch (error) {
+    return { success: false, message: `保存失败：${String(error)}` };
+  }
+}
+
+export async function resetRulePatternsAction(): Promise<{ success: boolean; message?: string }> {
+  assertNotDemo();
+  try {
+    const { getWorkflowRepository } = await import("../lib/workflow-runtime");
+    const repository = getWorkflowRepository();
+    // 空表 = 回退内置(ruleset.loadRulePatterns 语义),与「恢复默认」等价。
+    await repository.replaceRulePatterns([]);
+    return { success: true };
+  } catch (error) {
+    return { success: false, message: `恢复默认失败：${String(error)}` };
+  }
+}
+
+/**
+ * issue #44 Phase 2:保存 AI 仲裁 prompt 覆盖(kind → body)。逐 kind 服务端校验,
+ * 任一失败整批不落库;空体 = 恢复内置(删除该覆盖行)——body 全空 = 全覆盖恢复内置。
+ */
+export async function savePromptOverridesAction(
+  drafts: Array<{ arbitrationKind: string; promptText: string }>,
+): Promise<{
+  success: boolean;
+  message?: string;
+  errors?: Record<string, string>;
+}> {
+  assertNotDemo();
+  try {
+    const { isArbitrationKind, validatePromptBody } = await import("@media-track/workflow");
+    const { getWorkflowRepository } = await import("../lib/workflow-runtime");
+    const errors: Record<string, string> = {};
+    const valid: Array<{ arbitrationKind: string; promptText: string; isActive: boolean }> = [];
+    for (const draft of drafts) {
+      if (!isArbitrationKind(draft.arbitrationKind)) {
+        errors[draft.arbitrationKind] = "未知 kind";
+        continue;
+      }
+      const body = draft.promptText.trim();
+      if (body.length === 0) {
+        // 空体 = 恢复内置:不留覆盖行,也不写 is_active=0 行(表里没有行 = 内置模板)。
+        continue;
+      }
+      const error = validatePromptBody(body);
+      if (error !== null) {
+        errors[draft.arbitrationKind] = error;
+        continue;
+      }
+      valid.push({ arbitrationKind: draft.arbitrationKind, promptText: body, isActive: true });
+    }
+    if (Object.keys(errors).length > 0) return { success: false, errors };
+    const repository = getWorkflowRepository();
+    await repository.replacePromptOverrides(valid);
+    return { success: true };
+  } catch (error) {
+    return { success: false, message: "保存失败：" + String(error) };
+  }
+}
+
+/** issue #44 Phase 2:恢复默认 = 清空 prompt_overrides(全部回到内置模板)。 */
+export async function resetPromptOverridesAction(): Promise<{ success: boolean; message?: string }> {
+  assertNotDemo();
+  try {
+    const { getWorkflowRepository } = await import("../lib/workflow-runtime");
+    await getWorkflowRepository().replacePromptOverrides([]);
+    return { success: true };
+  } catch (error) {
+    return { success: false, message: "恢复默认失败：" + String(error) };
+  }
+}
+
+/**
+ * issue #44 Phase 3:解析规则测试台。试跑基于**已保存**的生效规则(worker 同源语义):
+ * 先算复合结果,再逐槽位探针找「哪条规则命中」,顺序与 episode-code.ts 内置分支一致。
+ * 只读(不改库),demo 实例也可试跑。
+ */
+export async function testEpisodeRuleAction(input: {
+  fileName: string;
+  multiSeason: boolean;
+}): Promise<{ code: string | null; matched: string | null; message?: string }> {
+  const fileName = input.fileName.trim();
+  const seasons = input.multiSeason ? [1, 2] : [1];
+  if (fileName.length === 0) return { code: null, matched: null, message: "文件名不能为空" };
+  try {
+    const {
+      BUILTIN_RULE_PATTERNS,
+      compileEpisodeRules,
+      episodeCodeFromFileName,
+      loadEpisodeRules,
+      loadRulePatterns,
+    } = await import("@media-track/workflow");
+    const { getWorkflowRepository } = await import("../lib/workflow-runtime");
+    const repository = getWorkflowRepository();
+    // 与采集 worker 完全同源:loadEpisodeRules(空表/损坏自动回退内置)。
+    const rules = await loadEpisodeRules(repository);
+    const code = episodeCodeFromFileName(fileName, seasons, undefined, rules);
+    const patterns = await loadRulePatterns(repository);
+    const compiled = compileEpisodeRules(patterns);
+    // 逐槽位探针(镜像 episode-code.ts 分支顺序)。episodeCodeFromFileName 对缺失槽位
+    // 按 ?? 回退**内置正则**(表里没有该内置行 ≠ 该分支停用——M1,Phase 3 复核),故被探
+    // 槽位必须用「compiled ?? 内置同源正则」(内置来自 BUILTIN_RULE_PATTERNS 编译,与
+    // episode-code 内置字面量逐字一致),其余槽位显式填「永不匹配」隔离、自定义槽位
+    // 空数组 —— 命中来自且仅来自被探槽位,顺序即真实复合路径的分支优先序。
+    const builtinRules = compileEpisodeRules(BUILTIN_RULE_PATTERNS);
+    const NEVER = /[^\s\S]/; // 永不匹配(type 兜底;内置 6 槽位经 builtinRules 全有值)
+    const slot = (n: "sxxexx" | "variant" | "epOnly" | "cross" | "chinese" | "digits") =>
+      compiled[n] ?? builtinRules[n] ?? NEVER;
+    const probe: Array<[string, Parameters<typeof episodeCodeFromFileName>[3]]> = [
+      ["sxxexx", { sxxexx: slot("sxxexx"), variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
+      ["variant", { sxxexx: NEVER, variant: slot("variant"), epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
+      ["ep-only", { sxxexx: NEVER, variant: NEVER, epOnly: slot("epOnly"), cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
+      ["cross", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: slot("cross"), chinese: NEVER, digits: NEVER, custom: [] }],
+      ["chinese", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: slot("chinese"), digits: NEVER, custom: [] }],
+      ["digits", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: slot("digits"), custom: [] }],
+      ...(compiled.custom ?? []).map((c, i) => [`自定义 ${i + 1}`, { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [c] }] as [string, Parameters<typeof episodeCodeFromFileName>[3]]),
+    ];
+    let matched: string | null = null;
+    for (const [label, slotRules] of probe) {
+      const slotCode = episodeCodeFromFileName(fileName, seasons, undefined, slotRules);
+      if (slotCode !== null) {
+        matched = label;
+        break;
+      }
+    }
+    return { code, matched };
+  } catch (error) {
+    return { code: null, matched: null, message: "试跑失败：" + String(error) };
+  }
+}
 export async function saveLlmConfigAction(input: {
   baseURL: string;
   modelId: string;

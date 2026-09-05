@@ -16,6 +16,7 @@ import type {
 } from "./domain.js";
 import type { DeadLink } from "./acquisition-v2/dead-links.js";
 import { MAGNET_DEAD_LINK_TTL_MS } from "./acquisition-v2/dead-links.js";
+import type { PromptOverride, RulePattern, RuleRole } from "./ruleset.js";
 import type {
   Account,
   ConnectedStorage,
@@ -167,6 +168,20 @@ export const SQLITE_SCHEMA = `
     frozen_at text,
     created_at text NOT NULL,
     UNIQUE (provider, provider_uid)
+  );
+  CREATE TABLE IF NOT EXISTS rule_patterns (
+    rule_id text PRIMARY KEY,
+    role text NOT NULL,
+    expression text NOT NULL,
+    label text,
+    sort_order integer NOT NULL DEFAULT 0,
+    is_default integer NOT NULL DEFAULT 1,
+    created_at text NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS prompt_overrides (
+    arbitration_kind text PRIMARY KEY,
+    prompt_text text NOT NULL,
+    is_active integer NOT NULL DEFAULT 0
   );
   INSERT INTO accounts (id, username, password_hash, is_owner, created_at)
     VALUES ('acct_default', 'default', '', 1, '1970-01-01T00:00:00.000Z')
@@ -1120,6 +1135,69 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
 
   async deleteSetting(key: string): Promise<void> {
     this.db.prepare("DELETE FROM app_settings WHERE key = ?").run(key);
+  }
+
+  async listRulePatterns(): Promise<RulePattern[]> {
+    const rows = this.db
+      .prepare(
+        "SELECT rule_id, role, expression, label, sort_order, is_default FROM rule_patterns ORDER BY sort_order",
+      )
+      .all() as Array<{
+      rule_id: string;
+      role: string;
+      expression: string;
+      label: string | null;
+      sort_order: number;
+      is_default: number;
+    }>;
+    return rows.map((r) => ({
+      ruleId: r.rule_id,
+      role: r.role as RuleRole,
+      expression: r.expression,
+      label: r.label ?? "",
+      sortOrder: r.sort_order,
+      isDefault: r.is_default === 1,
+    }));
+  }
+
+  async replaceRulePatterns(patterns: RulePattern[]): Promise<void> {
+    const clear = this.db.prepare("DELETE FROM rule_patterns");
+    // OR REPLACE:重复 ruleId 与 InMemory 实现一致 last-wins(而不是 UNIQUE 抛错
+    // 整单回滚)——replace 是整体替换语义,去重责任归调用方(S3)。
+    const insert = this.db.prepare(
+      "INSERT OR REPLACE INTO rule_patterns (rule_id, role, expression, label, sort_order, is_default) VALUES (?, ?, ?, ?, ?, ?)",
+    );
+    this.db.transaction(() => {
+      clear.run();
+      for (const p of patterns) {
+        insert.run(p.ruleId, p.role, p.expression, p.label, p.sortOrder, p.isDefault ? 1 : 0);
+      }
+    })();
+  }
+
+  async listPromptOverrides(): Promise<PromptOverride[]> {
+    const rows = this.db
+      .prepare("SELECT arbitration_kind, prompt_text, is_active FROM prompt_overrides")
+      .all() as Array<{ arbitration_kind: string; prompt_text: string; is_active: number }>;
+    return rows.map((r) => ({
+      arbitrationKind: r.arbitration_kind,
+      promptText: r.prompt_text,
+      isActive: r.is_active === 1,
+    }));
+  }
+
+  async replacePromptOverrides(overrides: PromptOverride[]): Promise<void> {
+    // 全量替换:先清空再插入;INSERT OR REPLACE 保证输入内重复 kind 后者覆盖(last-wins,§34 复核 S3)。*/
+    const clear = this.db.prepare("DELETE FROM prompt_overrides");
+    const insert = this.db.prepare(
+      "INSERT OR REPLACE INTO prompt_overrides (arbitration_kind, prompt_text, is_active) VALUES (?, ?, ?)",
+    );
+    this.db.transaction(() => {
+      clear.run();
+      for (const o of overrides) {
+        insert.run(o.arbitrationKind, o.promptText, o.isActive ? 1 : 0);
+      }
+    })();
   }
 
   async getAccountSetting(accountId: string, key: string): Promise<string | null> {

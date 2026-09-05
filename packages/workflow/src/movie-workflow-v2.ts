@@ -1,4 +1,5 @@
 import type { LanguageModel } from "ai";
+import type { PromptOverrideLookup } from "./ruleset.js";
 import {
   createEpisodeStates,
   movieAnchorSeason,
@@ -52,6 +53,8 @@ export interface RunMovieAcquisitionV2Request {
   /** assrt token (Settings → 字幕来源). Undefined = 字幕流程不触发。 */
   assrtToken?: string;
   deadLinkStore?: DeadLinkStore;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
   onProgress?: (event: AgentToolEvent) => void;
   now?: () => string;
 }
@@ -102,6 +105,7 @@ export async function runMovieAcquisitionV2(
     ...(request.assrtToken === undefined ? {} : { assrtToken: request.assrtToken }),
     ...(request.deadLinkStore ? { deadLinkStore: request.deadLinkStore } : {}),
     ...(request.onProgress ? { onProgress: request.onProgress } : {}),
+    ...(request.promptOverrides === undefined ? {} : { promptOverrides: request.promptOverrides }),
   });
 
   // Truth = the AGENT'S coverage (its markObtained), NOT a mechanical file scan

@@ -3,7 +3,7 @@ import { maskProviderUid } from "../../lib/mask-provider-uid";
 import { connection } from "next/server";
 import { headers } from "next/headers";
 import { Suspense } from "react";
-import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, Radio, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
+import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, Radio, Regex, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
 import { AppSidebar } from "../../components/app-sidebar";
 import { AddDriveBrandTabs } from "../../components/add-drive-brand-tabs";
 import { TestConnectionButton } from "../../components/test-connection-button";
@@ -11,6 +11,9 @@ import { UnbindStorageButton } from "../../components/unbind-storage-button";
 import { PushNotificationForm } from "../../components/push-notification-form";
 import { PreferredLanguageForm } from "../../components/preferred-language-form";
 import { QualityPreferenceForm } from "../../components/quality-preference-form";
+import { RulePatternsForm } from "../../components/rule-patterns-form";
+import { PromptOverridesForm } from "../../components/prompt-overrides-form";
+import { RuleTestBench } from "../../components/rule-test-bench";
 import { LlmConfigForm } from "../../components/llm-config-form";
 import { TmdbApiKeyForm } from "../../components/tmdb-api-key-form";
 import { AssrtTokenForm } from "../../components/assrt-token-form";
@@ -122,6 +125,11 @@ export default function SettingsPage({
                     <QualityPreferenceSection />
                   </Suspense>
                 </>
+              }
+              recognition={
+                <Suspense fallback={<div className="skeleton skeleton-heading" />}>
+                  <RecognitionRulesSection />
+                </Suspense>
               }
               patrol={
                 <>
@@ -266,6 +274,69 @@ async function QualityPreferenceSection() {
   );
 }
 
+async function RecognitionRulesSection() {
+  await connection();
+  const repository = getWorkflowRepository();
+  const { loadRulePatterns, loadPromptOverrides, ARBITRATION_KINDS, BUILTIN_RULE_PATTERNS } = await import("@media-track/workflow");
+  // 生效规则(空表 = 内置;损坏行自动回退内置)——与采集时 loadEpisodeRules 同一语义。
+  // R1(Phase 1 复核):生效集 ∪ 缺失内置 —— 留空保存的内置槽位(恢复内置默认)刷新后
+  // 仍可见,便于单独改回而不用整体「恢复默认」;缺失内置以空表达式占位(表单「留空=恢复内置」)。
+  // 注:缺失槽位在采集时经 ?? 回退内置正则仍生效 —— 当前版本不支持真正禁用内置分支(Phase 3 复核 S1)。
+  const effective = await loadRulePatterns(repository);
+  const effectiveByRuleId = new Map(
+    BUILTIN_RULE_PATTERNS.map((p) => p.ruleId).map((id) => [
+      id,
+      effective.find((p) => p.ruleId === id),
+    ]),
+  );
+  const initial = BUILTIN_RULE_PATTERNS.map((p) => {
+    const present = effectiveByRuleId.get(p.ruleId);
+    return {
+      ruleId: p.ruleId,
+      role: p.role,
+      expression: present?.expression ?? "", // 缺失 = 留空(恢复内置,行仍显示)
+      label: present?.label ?? "",
+      sortOrder: p.sortOrder,
+      isDefault: true,
+    };
+  }).concat(
+    effective
+      .filter((p) => !effectiveByRuleId.has(p.ruleId))
+      .map((p) => ({
+        ruleId: p.ruleId,
+        role: p.role,
+        expression: p.expression,
+        label: p.label,
+        sortOrder: p.sortOrder,
+        isDefault: false,
+      })),
+  );
+
+  // AI 仲裁提示词覆盖(kind → body;缺失 kind = 内置模板)一并并入本区。
+  const overrides = await loadPromptOverrides(repository);
+  const byKind = new Map(overrides.map((o) => [o.arbitrationKind, o.promptText]));
+  const promptInitial = ARBITRATION_KINDS.map((kind) => ({
+    arbitrationKind: kind,
+    promptText: byKind.get(kind) ?? "",
+  }));
+
+  return (
+    <section className="panel" style={{ maxWidth: 960, marginTop: 24 }}>
+      <div className="panel-header">
+        <div>
+          <h2 className="panel-title">
+            <Regex size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
+            识别规则
+          </h2>
+          <p className="panel-note">文件名 → 集数 解析正则 + 升级仲裁提示词（改动对后续采集任务生效）</p>
+        </div>
+      </div>
+      <RulePatternsForm initial={initial} />
+      <RuleTestBench />
+      <PromptOverridesForm initial={promptInitial} />
+    </section>
+  );
+}
 async function LlmConfigSection() {
   await connection();
   const repository = getAccountScopedSettings(await getCurrentAccountId());

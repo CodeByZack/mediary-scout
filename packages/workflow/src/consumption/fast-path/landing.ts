@@ -1,4 +1,6 @@
 import type { LanguageModel } from "ai";
+import type { EpisodeParseRules } from "../../episode-code.js";
+import type { PromptOverrideLookup } from "../../ruleset.js";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
 import { arbitrateEpisodeMapping } from "../../acquisition-v2/arbitrator.js";
 import { finalizeLanding } from "../../acquisition-v2/finalize-landing.js";
@@ -65,6 +67,8 @@ export async function tryEpisodeMapping(options: {
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")—— ram 重建 digest 时透传给
    *  episodeCodeFromFileName 做「第N期」Part 锚定(与年守卫同源)。 */
   episodeNames?: Record<string, string>;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }): Promise<"passed" | "no" | "failed"> {
   const { digest } = options;
   // 仅 TV 单季值得让 AI 映射;movie / 多季 → no。
@@ -114,6 +118,7 @@ export async function tryEpisodeMapping(options: {
     title: options.targetTitle,
     seasons: options.seasons,
     knownEpisodeRange: knownRange,
+    ...(options.promptOverrides !== undefined ? { promptOverrides: options.promptOverrides } : {}),
   });
 
   // 校验映射(代码,不信任 AI)。
@@ -386,6 +391,10 @@ export async function closeOutTvLanding(options: {
   episodeAirDates?: Record<string, string>;
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")——「第N期」Part 锚定数据。 */
   episodeNames?: Record<string, string>;
+  /** issue #44: 可配置集数解析规则(UI 编辑后注入)。缺省 = 内置正则。 */
+  episodeRules?: EpisodeParseRules;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
   grading: ReturnType<typeof gradeCandidates>;
   tried: Set<string>;
   attempted: Set<string>;
@@ -406,6 +415,8 @@ export async function closeOutTvLanding(options: {
     tried,
     attempted,
     transfer,
+    episodeRules,
+    promptOverrides,
   } = options;
   const current = options.current;
   let escalated = options.escalated;
@@ -461,6 +472,7 @@ export async function closeOutTvLanding(options: {
       needCodes,
       ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
       ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
+      ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
     });
     // issue #29 用户反馈:activity 人话化——直接复用 summarizeDigest 的人话结论
     // (pass=「转存内容已识别…」/ fail=「识别出…还缺…」),与 args 的 missingCodes 一致,
@@ -477,7 +489,7 @@ export async function closeOutTvLanding(options: {
     );
     // issue #29:digest 步骤结构化证据(卡片化判定)。videoCount=落盘视频文件数;
     // passes/coveredCodes/missingCodes 给前端红绿判定与「还缺什么」。
-    const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates);
+    const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates, episodeRules);
     // issue #29 用户拍板(九轮):逐文件明细并入 stagingDigest 一张卡——不再单独
     // emit「digestFiles 逐文件识别 N 条」步骤(标题+明细一张卡,无需两个步骤)。
     const argsFiles = pushWithinBudget<string>([], parseRows, 1300);
@@ -524,6 +536,7 @@ export async function closeOutTvLanding(options: {
           skipCodes: [...onDiskCodes],
           onlyCodes: needCodes,
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
         });
         const skipNote =
           // 九轮复核:与归位去集号一致——已在库/非缺集跳过的明细都在 args.files。
@@ -602,6 +615,7 @@ export async function closeOutTvLanding(options: {
       needCodes,
       ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
       ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
+      ...(options.promptOverrides !== undefined ? { promptOverrides: options.promptOverrides } : {}),
       ram: (overrides) =>
         digestStaging({
           files: transfer.staging,
@@ -610,6 +624,7 @@ export async function closeOutTvLanding(options: {
           overrides,
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
           ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
+          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
         }),
       onDigest: (d) => {
         landingDigest = d;
@@ -627,6 +642,7 @@ export async function closeOutTvLanding(options: {
           digest: landingDigest,
           canonicalTitle: target.title,
           seasons,
+          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
           skipCodes: [...onDiskCodes],
           onlyCodes: needCodes,
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),

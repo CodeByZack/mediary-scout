@@ -1,4 +1,7 @@
 import { generateText, type LanguageModel } from "ai";
+import type { ArbitrationKind, PromptOverrideLookup } from "../ruleset.js";
+import { PROMPT_TEMPLATES } from "../prompt-templates.js";
+export { PROMPT_TEMPLATES } from "../prompt-templates.js";
 
 /** Always-on stdout trace marking every LLM round-trip the arbitrator makes —
  *  the user asked for every AI call site to be clearly flagged in the run log
@@ -66,22 +69,6 @@ export interface EpisodeMappingArbitration {
   reasoning: string;
 }
 
-const EPISODE_MAPPING_SYSTEM = [
-  "你是剧集文件集数识别员。代码转存了一个资源包,但文件名无法用规则解析出集数(纯数字/无S/E标识),请把这些文件逐个对应到正确的集数。",
-  "任务给出目标剧名、目标季、已知集数范围。文件名与集数的对应规则:",
-  "- 纯数字 `07.mp4` → 第7集(若任务为第1季则 S01E07);数字范围必须在已知集数内。",
-  "- `E12` / `EP12` / `Ep.12` → S01E12(单季任务)。",
-  "- fansub `[Sub] Title - 03 [1080p].mkv` → 集数在文件名数字里,通常是 03。",
-  "- `12话` / `12集` → 对应集数 12。",
-  "- 无尽集数争议:范围外的数字(超集数上限)、年份、分辨率、Part 序号、CRC 别当集数。",
-  "输出规则:",
-  "- 只映射**确定**的;不确定的放进 unmapped,禁止瞎编。",
-  "- episodeCode 必须形如 S01E01(两位季号+两位或多位集号);第1季就是 S01。",
-  "- 每个文件最多一个映射;严禁两个文件映射到同一个集数。",
-  "只输出 JSON,不要任何其他文字:",
-  '{"mapping": {"文件名": "SxxExx"}, "unmapped": ["无法确定的文件名"], "reasoning": "一句话理由"}',
-].join("\n");
-
 /** Arbitrate how to map unparsed landed files to episode codes (escalation #2a). */
 export async function arbitrateEpisodeMapping(options: {
   model: LanguageModel;
@@ -91,7 +78,9 @@ export async function arbitrateEpisodeMapping(options: {
   seasons: number[];
   /** 已知集数范围(如 1..39),供模型排除越界数字。 */
   knownEpisodeRange: { min: number; max: number } | null;
-}): Promise<EpisodeMappingArbitration> {
+
+  /** issue #44: prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;}): Promise<EpisodeMappingArbitration> {
   const prompt = [
     `目标剧集:${options.title}(${options.seasons.length > 0 ? `季:${options.seasons.join("/")}` : "未知季"})`,
     `已知集数范围:${options.knownEpisodeRange ? `${options.knownEpisodeRange.min} ~ ${options.knownEpisodeRange.max}` : "未知"}`,
@@ -103,7 +92,7 @@ export async function arbitrateEpisodeMapping(options: {
   logAiCall(options.model, "集数映射仲裁", options.title, options.unparsedFiles.join(",").length);
   const result = await generateText({
     model: options.model,
-    system: EPISODE_MAPPING_SYSTEM,
+    system: resolvePromptText("episode-mapping", options.promptOverrides),
     prompt,
   });
 
@@ -135,18 +124,6 @@ export async function arbitrateEpisodeMapping(options: {
     return { mapping: {}, unmapped: [], reasoning: "仲裁返回无法解析，安全放弃映射" };
   }
 }
-
-const SELECTION_SYSTEM = [
-  "你是剧集资源选片仲裁员。代码已把搜索候选按规则分级（A>B>C>D），但没有唯一高分，需要你从候选中选出最可能是目标剧集的那个资源。",
-  "规则：",
-  "- 优先选 A 级；A 级相当时，选标题最干净、最像正确季全集的那个。",
-  "- 中文字幕优先（中文 release 名默认带中字；纯英文 scene release 大概率生肉）。",
-  "- 排除同名异作（电影版/剧场版/真人版/OVA/SP）。",
-  "- 若没有可用的候选，返回 candidateId 为 null。",
-  "- 候选行里方括号 [id] 是候选的唯一真实 id：candidateId 必须从某个候选行的 [id] 里原样复制，禁止填标题、禁止自己编造。",
-  "只输出 JSON，不要任何其他文字：",
-  '{"candidateId": "候选的id" | null, "reasoning": "一句话理由"}',
-].join("\n");
 
 const DIAGNOSIS_SYSTEM = [
   "你是剧集落盘诊断员。代码转存了一个候选并解析了落盘内容，但判定为「不符合」或「脏包」，需要你决定怎么处理。",
@@ -186,7 +163,9 @@ export async function arbitrateSelection(options: {
   summary: string;
   title: string;
   seasons: number[];
-}): Promise<SelectionArbitration> {
+
+  /** issue #44: prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;}): Promise<SelectionArbitration> {
   const prompt = [
     `目标剧集：${options.title}${options.seasons.length > 0 ? `（季：${options.seasons.join("/")}）` : ""}`,
     "",
@@ -197,7 +176,7 @@ export async function arbitrateSelection(options: {
   logAiCall(options.model, "选片仲裁(剧集)", options.title, options.summary.length);
   const result = await generateText({
     model: options.model,
-    system: SELECTION_SYSTEM,
+    system: resolvePromptText("selection", options.promptOverrides),
     prompt,
   });
 
@@ -278,28 +257,16 @@ export async function arbitrateDiagnosis(options: {
  * safe-fallback decisions as their TV twins.
  */
 
-const MOVIE_SELECTION_SYSTEM = [
-  "你是电影资源选片仲裁员。代码已把搜索候选按规则分级（A>B>C>D），但没有唯一高分，需要你从候选中选出最可能是目标电影的那个资源。",
-  "规则：",
-  "- 优先选 A 级（片名 + 发行年份都一致）。",
-  "- A 级相当时，选标题最干净、最像正确影片（发行名带目标年份）的那个。",
-  "- 排除同名异作 / remake（发行年份对不上）与其他作品（OVA/特别篇/番外）。",
-  "- 发行名没带年份的候选可用但不可靠，优先带年份的。",
-  "- 若没有可用的候选，返回 candidateId 为 null。",
-  "- 候选行里方括号 [id] 是候选的唯一真实 id：candidateId 必须从某个候选行的 [id] 里原样复制，禁止填标题、禁止自己编造。",
-  "只输出 JSON，不要任何其他文字：",
-  '{"candidateId": "候选的id" | null, "reasoning": "一句话理由"}',
-].join("\n");
+/** 按模板组装最终 system prompt:head + (覆盖 body ?? 内置 body) + tail。 */
+export function resolvePromptText(
+  kind: ArbitrationKind,
+  overrides: PromptOverrideLookup | undefined,
+): string {
+  const template = PROMPT_TEMPLATES[kind];
+  const body = overrides?.[kind] ?? template.body;
+  return template.head + "\n" + body + "\n" + template.tail;
+}
 
-const MOVIE_DIAGNOSIS_SYSTEM = [
-  "你是电影落盘诊断员。代码转存了一个候选并解析了落盘内容，但判定为「不是单部正片」或「脏包」，需要你决定怎么处理。",
-  "决定（action）三选一：",
-  '- "accept"：虽有瑕疵但目标正片在、可用（如正片旁夹了个 trailer/花絮/sample，正片完整）——接受并归位标记（系统会保留最大视频、丢弃其余）。',
-  '- "retry_other"：这个包不对（同名异作/remake/合集/大量杂项），换下一个候选。',
-  '- "abandon"：没有可用的了，放弃并上报 no coverage。',
-  "只输出 JSON，不要任何其他文字：",
-  '{"action": "accept" | "retry_other" | "abandon", "reasoning": "一句话理由"}',
-].join("\n");
 
 /** Arbitrate which movie candidate to transfer when the grader has no unique
  *  A-grade. Reuses SelectionArbitration (candidateId + reasoning). */
@@ -308,7 +275,9 @@ export async function arbitrateMovieSelection(options: {
   summary: string;
   title: string;
   year: number;
-}): Promise<SelectionArbitration> {
+
+  /** issue #44: prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;}): Promise<SelectionArbitration> {
   const prompt = [
     `目标电影：${options.title}${options.year > 0 ? `（发行年：${options.year}）` : ""}`,
     "",
@@ -319,7 +288,7 @@ export async function arbitrateMovieSelection(options: {
   logAiCall(options.model, "选片仲裁(电影)", options.title, options.summary.length);
   const result = await generateText({
     model: options.model,
-    system: MOVIE_SELECTION_SYSTEM,
+    system: resolvePromptText("movie-selection", options.promptOverrides),
     prompt,
   });
 
@@ -344,7 +313,9 @@ export async function arbitrateMovieDiagnosis(options: {
   summary: string;
   title: string;
   year: number;
-}): Promise<DiagnosisArbitration> {
+
+  /** issue #44: prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;}): Promise<DiagnosisArbitration> {
   const prompt = [
     `目标电影：${options.title}${options.year > 0 ? `（发行年：${options.year}）` : ""}`,
     "",
@@ -355,7 +326,7 @@ export async function arbitrateMovieDiagnosis(options: {
   logAiCall(options.model, "落盘诊断仲裁(电影)", options.title, options.summary.length);
   const result = await generateText({
     model: options.model,
-    system: MOVIE_DIAGNOSIS_SYSTEM,
+    system: resolvePromptText("movie-diagnosis", options.promptOverrides),
     prompt,
   });
 

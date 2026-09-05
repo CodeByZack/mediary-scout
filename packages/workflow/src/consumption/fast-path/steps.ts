@@ -2,7 +2,8 @@ import type { LanguageModel } from "ai";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
 import type { AgentPhase, AgentToolEvent } from "../../acquisition-v2/activity.js";
 import { getStorageBrand } from "../../storage-brands.js";
-import { episodeCodeFromFileName, episodeDateConflict } from "../../episode-code.js";
+import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
+import type { PromptOverrideLookup } from "../../ruleset.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import type { TvAnimeTarget } from "../../acquisition-v2/task-agents.js";
 
@@ -101,6 +102,10 @@ export interface FastPathOptions {
    *  progress + agent-trace sinks here; the fast path emits one AgentToolEvent
    *  per step, fire-and-forget. Undefined (tests / bare sandbox) = no trace. */
   onProgress?: (event: AgentToolEvent) => void;
+  /** issue #44: 可配置集数解析规则(UI 编辑后经 pipeline 注入)。缺省 = 内置正则。 */
+  episodeRules?: EpisodeParseRules;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }
 
 export interface FastPathResult {
@@ -235,12 +240,14 @@ export function landingParseRows(
   files: Array<{ path: string }>,
   seasons: number[],
   episodeAirDates?: Record<string, string>,
+  /** issue #44: 可配置集数解析规则。缺省 = 内置正则。 */
+  rules?: EpisodeParseRules,
 ): string[] {
   const rows = files
     .filter((file) => VIDEO_EXT.test(file.path))
     .map((file) => {
       const base = fileBaseName(file.path);
-      const code = episodeCodeFromFileName(base, seasons);
+      const code = episodeCodeFromFileName(base, seasons, undefined, rules);
       const bare = /^\d{1,3}$/.test(base.replace(/\.[^.]+$/i, ""));
       const shown = base.length > 48 ? base.slice(0, 45) + "…" : base;
       if (!code) return shown + " → 解析失败";

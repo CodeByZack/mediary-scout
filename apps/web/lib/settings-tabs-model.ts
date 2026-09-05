@@ -4,6 +4,7 @@ export const SETTINGS_TABS = [
   { id: "drives", label: "网盘" },
   { id: "services", label: "资源与服务" },
   { id: "preferences", label: "获取偏好" },
+  { id: "recognition", label: "识别规则" },
   { id: "patrol", label: "巡检与通知" },
   { id: "account", label: "账号" },
   { id: "remote", label: "远程访问" },

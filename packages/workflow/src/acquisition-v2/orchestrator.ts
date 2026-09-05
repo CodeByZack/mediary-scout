@@ -12,6 +12,8 @@ import { AssrtSubtitleProvider, type AssrtProviderPort } from "../subtitle-provi
 import type { SearchProfile } from "./search-profile.js";
 import { needForMovie, needForTvTarget, type MovieTarget, type TvAnimeTarget } from "./target-types.js";
 import { runFastPathAcquisition } from "../consumption/fast-path/tv.js";
+import type { EpisodeParseRules } from "../episode-code.js";
+import type { PromptOverrideLookup } from "../ruleset.js";
 import { runMovieFastPathAcquisition } from "../consumption/fast-path/movie.js";
 
 /**
@@ -67,6 +69,10 @@ export interface RunAcquisitionV2Request {
   assrtProvider?: AssrtProviderPort;
   /** Per-tool-call live progress for the activity page (best-effort). */
   onProgress?: (event: AgentToolEvent) => void;
+  /** issue #44: 可配置集数解析规则(UI 编辑后经 pipeline 注入)。缺省 = 内置正则。 */
+  episodeRules?: EpisodeParseRules;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }
 
 /** The persistable trace of a V2 run, in the same shape the old serial path
@@ -213,6 +219,8 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
           // agent path uses — the runner wires it to the progress + agent-trace
           // sinks, so the activity page shows fast-path steps in agent_steps.
           ...(request.onProgress ? { onProgress: request.onProgress } : {}),
+          ...(request.episodeRules === undefined ? {} : { episodeRules: request.episodeRules }),
+          ...(request.promptOverrides === undefined ? {} : { promptOverrides: request.promptOverrides }),
         })
       : await runMovieFastPathAcquisition({
           sandbox,
@@ -220,6 +228,7 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
           target: stripKind(request.target),
           ...(request.storageProvider === undefined ? {} : { storageProvider: request.storageProvider }),
           ...(request.onProgress ? { onProgress: request.onProgress } : {}),
+          ...(request.promptOverrides === undefined ? {} : { promptOverrides: request.promptOverrides }),
           // Subtitle stage gates: NON-CN title (isChineseNative false) AND the
           // subtitle flow is actually active (assrt token + executor capability).
           // Pass the assrt provider + language preference down so the fast path's
