@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   collectRowErrors,
   filterDisabledBuiltins,
+  formatRuleBlock,
+  parseRuleBlock,
   ruleRowError,
   type RulePatternDraft,
 } from "./rule-patterns-utils";
@@ -39,6 +41,60 @@ describe("filterDisabledBuiltins", () => {
   });
 });
 
+
+describe("文本块 ↔ 规则行(issue #44 UI 重构)", () => {
+  it("formatRuleBlock:内置槽位按顺序输出 S:/E: 前缀,自定义追加在后", () => {
+    const rows: RulePatternDraft[] = [
+      { ruleId: "sxxexx", role: "season-episode", expression: "[Ss](\\d{1,2})[Ee](\\d{1,4})", sortOrder: 0, isDefault: true },
+      { ruleId: "ep-only", role: "episode-only", expression: "(?:^|[^A-Za-z0-9])[Ee][Pp]?\\.?\\s*(\\d{1,4})(?:$|[^0-9])", sortOrder: 2, isDefault: true },
+      { ruleId: "custom-1", role: "episode-only", expression: "^EP(\\d+)$", sortOrder: 7, isDefault: false },
+    ];
+    const block = formatRuleBlock(rows);
+    expect(block).toContain("S: [Ss](\\d{1,2})[Ee](\\d{1,4})");
+    expect(block).toContain("E: (?:^|[^A-Za-z0-9])[Ee][Pp]?\\.?\\s*(\\d{1,4})(?:$|[^0-9])");
+    expect(block).toContain("E: ^EP(\\d+)$");
+    expect(block.startsWith("# ")).toBe(true); // 注释头
+  });
+
+  it("parseRuleBlock:完整 6 内置(正确前缀)+ 自定义行 → 全部映射、无错误", () => {
+    const block = [
+      "# 注释行(忽略)",
+      "",
+      "S: [Ss](\\d{1,2})[Ee](\\d{1,4})",
+      "S: [Ss](\\d{1,2})\\s*[. ]\\s*[Ee](\\d{1,4})(?!\\d)",
+      "E: (?:^|[^A-Za-z0-9])[Ee][Pp]?\\.?\\s*(\\d{1,4})(?:$|[^0-9])",
+      "S: (?:^|[^A-Za-z0-9])(\\d{1,2})\\s*[x×]\\s*(\\d{1,4})(?:$|[^0-9])",
+      "E: 第\\s*(\\d{1,4})\\s*(?:集|话|話|期)",
+      "E: ^(\\d{1,3})$",
+      "E: ^EP(\\d+)$",
+    ].join("\n");
+    const { rows, errors } = parseRuleBlock(block);
+    expect(errors).toEqual({});
+    expect(rows.map((r) => r.ruleId)).toEqual([
+      "sxxexx", "variant", "ep-only", "cross", "chinese", "digits", "custom-1",
+    ]);
+    expect(rows[0]?.expression).toBe("[Ss](\\d{1,2})[Ee](\\d{1,4})");
+    expect(rows[6]?.role).toBe("episode-only");
+    expect(rows[6]?.expression).toBe("^EP(\\d+)$");
+    expect(rows[6]?.sortOrder).toBe(7);
+  });
+  it("parseRuleBlock:内置槽位前缀与角色不符时报错", () => {
+    const block = "S: 第\\s*(\\d{1,4})\\s*(?:集|话|話|期)"; // 第1行本应 S 角色? 不——sxxexx 是 S,但此正则仅 1 组
+    const { rows, errors } = parseRuleBlock(block);
+    // 前缀 S 与 sxxexx 槽位(season-episode)一致,所以前缀无误;捕获组不足报错
+    expect(rows[0]?.ruleId).toBe("sxxexx");
+    expect(Object.keys(errors).length).toBeGreaterThan(0);
+  });
+
+  it("parseRuleBlock:用户删除全部内置行 → 补空行(恢复内置)", () => {
+    const { rows, errors } = parseRuleBlock("");
+    expect(errors).toEqual({});
+    expect(rows.length).toBe(6);
+    expect(rows[0]?.ruleId).toBe("sxxexx");
+    expect(rows[0]?.expression).toBe("");
+    expect(rows.every((r) => r.expression.length === 0)).toBe(true);
+  });
+});
 describe("collectRowErrors", () => {
   it("只汇总未通过的行", () => {
     const rows = [

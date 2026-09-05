@@ -3,7 +3,7 @@ import { maskProviderUid } from "../../lib/mask-provider-uid";
 import { connection } from "next/server";
 import { headers } from "next/headers";
 import { Suspense } from "react";
-import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, MessageSquareText, Radio, Regex, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
+import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, Radio, Regex, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
 import { AppSidebar } from "../../components/app-sidebar";
 import { AddDriveBrandTabs } from "../../components/add-drive-brand-tabs";
 import { TestConnectionButton } from "../../components/test-connection-button";
@@ -129,11 +129,6 @@ export default function SettingsPage({
               recognition={
                 <Suspense fallback={<div className="skeleton skeleton-heading" />}>
                   <RecognitionRulesSection />
-                </Suspense>
-              }
-              prompts={
-                <Suspense fallback={<div className="skeleton skeleton-heading" />}>
-                  <PromptOverridesSection />
                 </Suspense>
               }
               patrol={
@@ -282,7 +277,7 @@ async function QualityPreferenceSection() {
 async function RecognitionRulesSection() {
   await connection();
   const repository = getWorkflowRepository();
-  const { loadRulePatterns, BUILTIN_RULE_PATTERNS } = await import("@media-track/workflow");
+  const { loadRulePatterns, loadPromptOverrides, ARBITRATION_KINDS, BUILTIN_RULE_PATTERNS } = await import("@media-track/workflow");
   // 生效规则(空表 = 内置;损坏行自动回退内置)——与采集时 loadEpisodeRules 同一语义。
   // R1(Phase 1 复核):生效集 ∪ 缺失内置 —— 留空保存的内置槽位(恢复内置默认)刷新后
   // 仍可见,便于单独改回而不用整体「恢复默认」;缺失内置以空表达式占位(表单「留空=恢复内置」)。
@@ -317,31 +312,10 @@ async function RecognitionRulesSection() {
       })),
   );
 
-  return (
-    <section className="panel" style={{ maxWidth: 960, marginTop: 24 }}>
-      <div className="panel-header">
-        <div>
-          <h2 className="panel-title">
-            <Regex size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
-            集数识别规则
-          </h2>
-          <p className="panel-note">文件名 → 集数 解析正则（自定义规则回退内置；改动对后续采集任务生效）</p>
-        </div>
-      </div>
-      <RulePatternsForm initial={initial} />
-      <RuleTestBench />
-    </section>
-  );
-}
-
-async function PromptOverridesSection() {
-  await connection();
-  const repository = getWorkflowRepository();
-  const { loadPromptOverrides, ARBITRATION_KINDS } = await import("@media-track/workflow");
-  // 生效覆盖(kind → body);缺失 kind = 内置模板 —— 与采集时 resolvePromptText 同源语义。
+  // AI 仲裁提示词覆盖(kind → body;缺失 kind = 内置模板)一并并入本区。
   const overrides = await loadPromptOverrides(repository);
   const byKind = new Map(overrides.map((o) => [o.arbitrationKind, o.promptText]));
-  const initial = ARBITRATION_KINDS.map((kind) => ({
+  const promptInitial = ARBITRATION_KINDS.map((kind) => ({
     arbitrationKind: kind,
     promptText: byKind.get(kind) ?? "",
   }));
@@ -351,13 +325,15 @@ async function PromptOverridesSection() {
       <div className="panel-header">
         <div>
           <h2 className="panel-title">
-            <MessageSquareText size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
-            AI 仲裁提示词
+            <Regex size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
+            识别规则
           </h2>
-          <p className="panel-note">四段升级仲裁的系统提示词（改「规则指令」中段；角色定位与 JSON 输出契约固定不可改；留空 = 内置模板）</p>
+          <p className="panel-note">文件名 → 集数 解析正则 + 升级仲裁提示词（改动对后续采集任务生效）</p>
         </div>
       </div>
-      <PromptOverridesForm initial={initial} />
+      <RulePatternsForm initial={initial} />
+      <RuleTestBench />
+      <PromptOverridesForm initial={promptInitial} />
     </section>
   );
 }

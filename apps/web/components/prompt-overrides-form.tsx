@@ -2,14 +2,14 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { LoaderCircle, RotateCcw, Save } from "lucide-react";
+import { ChevronDown, ChevronRight, LoaderCircle, RotateCcw, Save } from "lucide-react";
 import { resetPromptOverridesAction, savePromptOverridesAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
 // 子路径导入:ruleset/prompt-templates 零 node 依赖,可安全进客户端 chunk(barrel 含 sqlite→node:module,Turbopack 会炸)。
 import { PROMPT_TEMPLATES } from "@media-track/workflow/prompt-templates";
 import { validatePromptBody } from "@media-track/workflow/ruleset";
 
-/** 四种仲裁 kind 的展示名称（head/tail 取 PROMPT_TEMPLATES 真实文本,只读展示 —— S1）。 */
+/** 四种仲裁 kind 的展示名称(head/tail 取 PROMPT_TEMPLATES 真实文本,只读展示)。 */
 const KIND_META: Array<{ kind: string; name: string }> = [
   { kind: "selection", name: "选片仲裁（剧集）" },
   { kind: "episode-mapping", name: "集数映射仲裁（剧集）" },
@@ -22,12 +22,12 @@ interface PromptDraft {
   promptText: string;
 }
 
-/** issue #44 Phase 2:AI 仲裁 prompt 编辑器。head/tail 固定只读,只编辑「规则指令」中段;
- *  留空 = 使用内置模板(不写覆盖行)。 */
+/** issue #44 UI 重构:四段 prompt 折叠卡片(默认折叠,展开编辑「规则指令」中段)。 */
 export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
   const router = useRouter();
   const [drafts, setDrafts] = useState<PromptDraft[]>(initial);
   const [messages, setMessages] = useState<Record<string, string>>({});
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [isPending, startTransition] = useTransition();
   const [isResetting, startReset] = useTransition();
 
@@ -43,6 +43,15 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
   }, [drafts]);
   const hasErrors = Object.keys(errors).length > 0;
 
+  function toggle(kind: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  }
+
   function setBody(kind: string, text: string) {
     setDrafts((prev) => prev.map((d) => (d.arbitrationKind === kind ? { ...d, promptText: text } : d)));
     setMessages((prev) => {
@@ -55,7 +64,6 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
   function handleSave() {
     if (hasErrors || isPending) return;
     startTransition(async () => {
-      // 留空 kind 的草稿不提交(action 端同样处理,双保险)。
       const payload = drafts.filter((d) => d.promptText.trim().length > 0);
       const r = await runAction(() => savePromptOverridesAction(payload), (msg) => {
         setMessages((prev) => ({ ...prev, _global: msg }));
@@ -80,15 +88,19 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
         setMessages((prev) => ({ ...prev, _global: msg }));
       });
       if (!r.ok) return;
-      // 恢复默认：所有 kind 回到内置模板(空 body)。
       setDrafts(initial.map((d) => ({ ...d, promptText: "" })));
       setMessages({});
       router.refresh();
     });
   }
 
+  const openKinds = Array.from(expanded);
+
   return (
-    <div style={{ display: "grid", gap: 16, marginTop: 16 }}>
+    <div style={{ display: "grid", gap: 10, marginTop: 18 }}>
+      <div style={{ fontSize: 13, color: "var(--text-secondary, #888)" }}>
+        四段升级仲裁的系统提示词 —— 展开卡片编辑「规则指令」中段；角色定位(head)与 JSON 输出契约(tail)固定不可改；留空 = 内置模板。
+      </div>
       {KIND_META.map((meta) => {
         const draft = drafts.find((d) => d.arbitrationKind === meta.kind) ?? {
           arbitrationKind: meta.kind,
@@ -96,76 +108,105 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
         };
         const template = PROMPT_TEMPLATES[meta.kind as keyof typeof PROMPT_TEMPLATES];
         const error = errors[meta.kind];
+        const isOpen = expanded.has(meta.kind);
         return (
           <div
             key={meta.kind}
             style={{
               border: "1px solid rgba(127,127,127,.22)",
               borderRadius: 8,
-              padding: "10px 12px",
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <strong>{meta.name}</strong>
-              <span style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>留空 = 内置模板</span>
-            </div>
-            <div style={{ fontSize: 12, color: "var(--text-secondary, #888)", margin: "4px 0 8px" }}>
-              角色定位（固定，从模板取真实文本）：
-            </div>
-            <pre
+            <button
+              type="button"
+              onClick={() => toggle(meta.kind)}
+              aria-expanded={isOpen}
               style={{
-                margin: "0 0 8px",
-                padding: "6px 8px",
-                background: "rgba(127,127,127,.08)",
-                borderRadius: 6,
-                fontSize: 12,
-                lineHeight: 1.5,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-              }}
-            >
-              {template.head}
-            </pre>
-            {error ? (
-              <div style={{ color: "#dc2626", fontSize: 12, marginBottom: 6 }}>⚠ {error}</div>
-            ) : null}
-            <textarea
-              value={draft.promptText}
-              onChange={(e) => setBody(meta.kind, e.target.value)}
-              rows={8}
-              spellCheck={false}
-              placeholder={"输入「规则指令」中段（head 与 JSON 契约自动环绕，不可改）"}
-              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
                 width: "100%",
-                minHeight: 120,
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                fontSize: 12.5,
-                lineHeight: 1.6,
-                padding: 8,
-                boxSizing: "border-box",
-                border: "1px solid rgba(127,127,127,.3)",
-                borderRadius: 6,
-                background: "transparent",
+                padding: "10px 12px",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
                 color: "inherit",
-              }}
-            />
-            <pre
-              style={{
-                margin: "6px 0 0",
-                padding: "6px 8px",
-                background: "rgba(127,127,127,.08)",
-                borderRadius: 6,
-                fontSize: 12,
-                lineHeight: 1.5,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-                color: "var(--text-secondary, #888)",
+                textAlign: "left",
+                fontSize: 14,
               }}
             >
-              JSON 契约（固定，环绕在 body 之后）：{"{"}
-              {template.tail}
-              {"}"}
-            </pre>
+              {isOpen ? <ChevronDown size={15} aria-hidden /> : <ChevronRight size={15} aria-hidden />}
+              <strong>{meta.name}</strong>
+              {draft.promptText.trim().length > 0 ? (
+                <span style={{ fontSize: 12, color: "#2563eb", marginLeft: 4 }}>已覆盖</span>
+              ) : null}
+              {error ? <span style={{ fontSize: 12, color: "#dc2626", marginLeft: 4 }}>⚠ 校验未过</span> : null}
+              <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-secondary, #888)" }}>
+                留空 = 内置模板
+              </span>
+            </button>
+            {isOpen ? (
+              <div style={{ padding: "0 12px 12px", borderTop: "1px solid rgba(127,127,127,.15)" }}>
+                <div style={{ fontSize: 12, color: "var(--text-secondary, #888)", margin: "10px 0 6px" }}>
+                  角色定位（固定，从模板取真实文本）：
+                </div>
+                <pre
+                  style={{
+                    margin: 0,
+                    padding: "6px 8px",
+                    background: "rgba(127,127,127,.08)",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                  }}
+                >
+                  {template.head}
+                </pre>
+                {error ? (
+                  <div style={{ color: "#dc2626", fontSize: 12, margin: "8px 0 4px" }}>⚠ {error}</div>
+                ) : null}
+                <textarea
+                  value={draft.promptText}
+                  onChange={(e) => setBody(meta.kind, e.target.value)}
+                  rows={7}
+                  spellCheck={false}
+                  placeholder={"输入「规则指令」中段（head 与 JSON 契约自动环绕，不可改）"}
+                  style={{
+                    width: "100%",
+                    marginTop: 8,
+                    minHeight: 110,
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                    fontSize: 12.5,
+                    lineHeight: 1.6,
+                    padding: 8,
+                    boxSizing: "border-box",
+                    border: "1px solid rgba(127,127,127,.3)",
+                    borderRadius: 6,
+                    background: "transparent",
+                    color: "inherit",
+                  }}
+                />
+                <pre
+                  style={{
+                    margin: "8px 0 0",
+                    padding: "6px 8px",
+                    background: "rgba(127,127,127,.08)",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                    color: "var(--text-secondary, #888)",
+                  }}
+                >
+                  JSON 契约（固定，环绕在 body 之后）：{"{"}
+                  {template.tail}
+                  {"}"}
+                </pre>
+              </div>
+            ) : null}
           </div>
         );
       })}

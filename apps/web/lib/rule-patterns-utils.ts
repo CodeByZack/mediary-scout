@@ -42,3 +42,130 @@ export function collectRowErrors(rows: RulePatternDraft[]): Record<string, strin
   }
   return errors;
 }
+
+/**
+ * issue #44 UI 重构:解析规则「一个输入框多行」的文本块 ↔ 规则行转换。
+ * 行格式:S:/E: 前缀 + 正则(S=季+集两捕获组,E=仅集号一捕获组);# 开头为注释、空行忽略。
+ * 布局约定:内置槽位恒为前 N 行(BUILTIN_RULE_PATTERNS 顺序,留空 = 恢复内置默认),
+ * 其后为自定义规则(按行序 = 匹配优先级)。
+ */
+
+const BLOCK_HEADER = [
+  "# 集数解析正则 —— 每行一条,顺序 = 优先级(从上到下依次尝试)。",
+  "# S: = 季+集(两个捕获组,如 SxxExx / 1×01);E: = 仅集号(一个捕获组,如 E01 / 第N集,仅单季任务启用)。",
+  "# 前 " + BUILTIN_RULE_PATTERNS.length + " 行为内置槽位(留空 = 恢复内置默认,内置分支仍生效);其后为自定义规则。",
+  "# 正则只决定匹配文本;剥扩展名/合理集数守卫/年份排除/衍生黑名单等语义由解析代码固定保留。",
+].join("\n");
+
+/** 行 → 前缀角色。非法前缀返回 null。 */
+export function ruleBlockPrefix(line: string): { role: RuleRole; expression: string } | null {
+  const m = /^(\s*)([SE]):\s*(.*)$/.exec(line);
+  if (!m) return null;
+  const role = m[2] === "S" ? "season-episode" : "episode-only";
+  return { role, expression: (m[3] ?? "").trim() };
+}
+
+/** 规则行 → 文本行(S:/E: 前缀)。 */
+export function rowToBlockLine(row: RulePatternDraft): string {
+  const prefix = row.role === "season-episode" ? "S" : "E";
+  return prefix + ": " + row.expression.trim();
+}
+
+/** 文本块 → 规则行。前 N 个非注释行 = 内置槽位(BUILTIN_RULE_PATTERNS 顺序,留空 = 恢复内置),
+ *  其后 = 自定义行(前缀定角色,行序 = 优先级)。返回行级错误(行号 → 文案)。 */
+export function parseRuleBlock(text: string): {
+  rows: RulePatternDraft[];
+  errors: Record<string, string>;
+} {
+  const lines = text.split(/\r?\n/);
+  const errors: Record<string, string> = {};
+  const rows: RulePatternDraft[] = [];
+  const N = BUILTIN_RULE_PATTERNS.length;
+  let customIndex = 0;
+  lines.forEach((rawLine, i) => {
+    const lineNo = i + 1;
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith("#")) return;
+    const parsed = ruleBlockPrefix(line);
+    if (!parsed) {
+      errors[String(lineNo)] = "行格式应为 S: 正则 或 E: 正则(或以 # 开头的注释)";
+      return;
+    }
+    const { role, expression } = parsed;
+    const builtinIndex = rows.length;
+    if (builtinIndex < N) {
+      const slot = BUILTIN_RULE_PATTERNS[builtinIndex]!;
+      if (slot.role !== role) {
+        errors[String(lineNo)] = "内置槽位 " + slot.ruleId + " 的前缀固定为 " + (slot.role === "season-episode" ? "S" : "E") + "(角色不可改)";
+        return;
+      }
+      rows.push({
+        ruleId: slot.ruleId,
+        role: slot.role,
+        expression,
+        label: slot.label ?? "",
+        sortOrder: slot.sortOrder,
+        isDefault: true,
+      });
+    } else {
+      customIndex += 1;
+      rows.push({
+        ruleId: "custom-" + customIndex,
+        role,
+        expression,
+        label: "自定义规则",
+        sortOrder: N + customIndex,
+        isDefault: false,
+      });
+    }
+  });
+  // 缺失内置补空行(用户删了内置行 → 留空 = 恢复内置)。
+  while (rows.length < N) {
+    const slot = BUILTIN_RULE_PATTERNS[rows.length]!;
+    rows.push({
+      ruleId: slot.ruleId,
+      role: slot.role,
+      expression: "",
+      label: slot.label ?? "",
+      sortOrder: slot.sortOrder,
+      isDefault: true,
+    });
+  }
+  // 行级校验(正则合法性 / 捕获组契约),与保存 action 同源。
+  rows.forEach((row) => {
+    const error = ruleRowError(row);
+    if (error !== null) {
+      // 内置行错误挂到其所在行(前 N 个非注释行之一);自定义行按行序。
+      const idx = BUILTIN_ID_SET.has(row.ruleId) ? rows.indexOf(row) : rows.indexOf(row);
+      let lineOfRow = -1;
+      let seen = 0;
+      for (let i = 0; i < lines.length; i++) {
+        const t = (lines[i] ?? "").trim();
+        if (t.length === 0 || t.startsWith("#")) continue;
+        if (seen === idx) { lineOfRow = i + 1; break; }
+        seen += 1;
+      }
+      errors[String(lineOfRow > 0 ? lineOfRow : idx + 1)] = error;
+    }
+  });
+  return { rows, errors };
+}
+/** 规则行 → 文本块(带帮助注释头)。 */
+export function formatRuleBlock(rows: RulePatternDraft[]): string {
+  const builtinRows = BUILTIN_RULE_PATTERNS.map((p) =>
+    rows.find((r) => r.ruleId === p.ruleId) ?? {
+      ruleId: p.ruleId,
+      role: p.role,
+      expression: "",
+      label: p.label ?? "",
+      sortOrder: p.sortOrder,
+      isDefault: true,
+    },
+  );
+  const customRows = rows.filter((r) => !BUILTIN_ID_SET.has(r.ruleId));
+  const lines = [
+    ...builtinRows.map(rowToBlockLine),
+    ...customRows.map(rowToBlockLine),
+  ];
+  return BLOCK_HEADER + "\n" + lines.join("\n");
+}

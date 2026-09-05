@@ -30,7 +30,6 @@ export function SettingsTabs(props: {
   services: ReactNode;
   preferences: ReactNode;
   recognition: ReactNode;
-  prompts: ReactNode;
   patrol: ReactNode;
   account: ReactNode;
   remote: ReactNode;
@@ -92,7 +91,6 @@ export function SettingsTabs(props: {
     { id: "services", content: props.services },
     { id: "preferences", content: props.preferences },
     { id: "recognition", content: props.recognition },
-    { id: "prompts", content: props.prompts },
     { id: "patrol", content: props.patrol },
     { id: "account", content: props.account },
     { id: "remote", content: props.remote },

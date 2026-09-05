@@ -127,6 +127,21 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 
 **测试**:新增 ruleset.test.ts(19 用例:组计数/校验/编译/加载语义/深拷贝/trim/端到端回退)+ repository-contract 加 3 组 round-trip(含重复 ruleId last-wins)(InMemory 56 + SQLite 59 全绿);workflow 包 tsc 零错误;episode-code(24)无回归。
 
+### 38. issue #44 UI 重构——单输入框正则 + AI 提示词并入识别规则(用户拍板)
+
+**背景**:用户反馈现有 UI「每条规则一个输入框 + 独立 AI 提示词 tab」太乱不直观,要求:① 正则规则按顺序放进一个输入框(懂正则的人一眼看懂);② 去掉独立「AI 提示词」tab,并入「识别规则」;③ 整体统一视觉。
+
+**改动**:
+- 正则编辑器:RulePatternsForm 从「六内置槽位 + 自定义行的表格(每行一个 expression input + role select + sortOrder)」改为**单个多行 textarea**。行格式 `S: 正则`(季+集,两捕获组)/ `E: 正则`(仅集号,一捕获组),顺序 = 优先级;# 开头注释与空行忽略;顶部注释头解释语法。
+- 文本块 ↔ 规则行转换(rule-patterns-utils.ts 新增):`formatRuleBlock`(规则行 → 文本块,内置槽位恒在前、自定义追加在后)/ `parseRuleBlock`(文本块 → 规则行,前 N 个非注释行 = 内置槽位按 BUILTIN_RULE_PATTERNS 顺序映射、前缀与槽位角色不符报错、缺失内置补空行 = 恢复内置、其后为自定义行按行序 = sortOrder);行级校验复用 ruleRowError(与服务端同源)。
+- AI 提示词并入:PromptOverridesForm 改为**四段折叠卡片**(默认折叠,展开显示真实 head/tail 只读 + body textarea + 逐段校验);从独立 PromptOverridesSection 移入 RecognitionRulesSection(正则 → 测试台 → 提示词)。
+- tab 模型:SETTINGS_TABS 去掉 `prompts`(8 → 7);settings-tabs.tsx / page.tsx 去掉 prompts slot 与 PromptOverridesSection;识别规则 tab 承载全部。
+
+**数据/语义不变**:保存仍走 saveRulePatternsAction(RulePatternDraft[])+ filterDisabledBuiltins(留空内置剔除 = 恢复内置默认);解析语义与 episode-code 槽位绑定不变;prompt 覆盖仍走 prompt_overrides 表。仅 UI 呈现与转换层改变。
+
+**测试**:rule-patterns-utils 新增 4 用例(formatRuleBlock 输出/完整 6 内置 + 自定义映射/前缀-角色不符报错/删内置补空行);settings-tabs-model 回到 7 tab;actions.recognition 等 5 套件 60 全绿;web tsc 零错误。
+
+**复核备注**:待子代理复核。
 ### 37. 识别规则可配置系统 Phase 3——解析测试台 + Phase 2 复核 S1(issue #44)
 
 **Phase 3 目标**:让用户在设置页直接试跑「样例文件名 → 集数解析」,验证已保存规则的改动效果,不必跑真实采集。
