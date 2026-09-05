@@ -16,6 +16,14 @@
     "./search-view": {
       "types": "./dist/search-view.d.ts",
       "default": "./dist/search-view.js"
+    },
+    "./ruleset": {
+      "types": "./dist/ruleset.d.ts",
+      "default": "./dist/ruleset.js"
+    },
+    "./prompt-templates": {
+      "types": "./dist/prompt-templates.d.ts",
+      "default": "./dist/prompt-templates.js"
     }
   },
   "dependencies": {},

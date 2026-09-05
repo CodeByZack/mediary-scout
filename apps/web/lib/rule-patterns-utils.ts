@@ -1,6 +1,7 @@
 /** 识别规则表单与 action 的共享纯逻辑（node 环境可测；类型在此定义，actions.ts 再导出）。 */
 
-import { BUILTIN_RULE_PATTERNS, validateRuleExpression, type RuleRole } from "@media-track/workflow";
+// 子路径导入(客户端表单也用它):ruleset 零 node 依赖,避免 barrel→sqlite→node:module 进客户端 chunk。
+import { BUILTIN_RULE_PATTERNS, validateRuleExpression, type RuleRole } from "@media-track/workflow/ruleset";
 
 /** 识别规则编辑 wire 类型。ruleId 六大内置槽位固定；其余 ruleId = 自定义规则。 */
 export type RulePatternDraft = {

@@ -138,6 +138,8 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 
 **测试**:actions.recognition 新增 4 用例(SxxExx 命中 sxxexx 槽位单/多季 chinese 差异、digits 槽位覆盖 4 位——组合规则与探针同源、空文件名提示);web 3 套件 + workflow 3 文件全绿;双 tsc 零错误;dist 重建。
 
+**CI 修复(Turbopack client chunk)**:next build 报「chunking context does not support external modules (node:module)」——client 组件(prompt-overrides-form / rule-patterns-form→rule-patterns-utils)从 barrel @media-track/workflow 导入值,barrel 星导出含 sqlite.ts(import { createRequire } from "node:module"),整包被拉进客户端 chunk。修法:workflow package.json exports 增加零 node 依赖的 ./ruleset 与 ./prompt-templates 子路径,客户端改走子路径;server 侧 barrel 导入不受影响(app-sidebar/workspace-switcher 均为 server 组件)。
+
 **修订闭环(复核 REQUEST_CHANGES → 修订)**:复核实证 M1——探针隔离法把「缺失内置槽位」当停用,与 episode-code 的 ? ? 内置回退语义矛盾:只存部分内置行时(如仅 digits 一行),运行时内置分支回退仍生效,探针却报无命中/错配(狂飙.S01E01 应 sxxexx 却 matched=null 等 4 例实证)。修订:探针被探槽位改为 compiled[槽位] ?? 内置同源正则(内置从 BUILTIN_RULE_PATTERNS 编译,与 episode-code 内置字面量逐字一致),其余槽位仍「永不匹配」隔离——命中即真实复合路径的优先分支;新增 M1 回归用例(仅存 digits 一行下 sxxexx/variant/chinese 三类回退命中全部断言)。S1 措辞:「留空=停用」改为「留空 = 恢复内置默认(内置分支仍生效,当前版本不支持真正禁用内置分支)」,表单提示/页面注释/工具注释一并修正(真正禁用需显式停用机制,属后续设计决策)。S2 文案残留「】）」已清。
 
 **复核备注**:待子代理复核。

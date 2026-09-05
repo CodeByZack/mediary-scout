@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { LoaderCircle, RotateCcw, Save } from "lucide-react";
 import { resetPromptOverridesAction, savePromptOverridesAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
-import { PROMPT_TEMPLATES, validatePromptBody } from "@media-track/workflow";
+// 子路径导入:ruleset/prompt-templates 零 node 依赖,可安全进客户端 chunk(barrel 含 sqlite→node:module,Turbopack 会炸)。
+import { PROMPT_TEMPLATES } from "@media-track/workflow/prompt-templates";
+import { validatePromptBody } from "@media-track/workflow/ruleset";
 
 /** 四种仲裁 kind 的展示名称（head/tail 取 PROMPT_TEMPLATES 真实文本,只读展示 —— S1）。 */
 const KIND_META: Array<{ kind: string; name: string }> = [
