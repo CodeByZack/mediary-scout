@@ -5,34 +5,14 @@ import { useRouter } from "next/navigation";
 import { LoaderCircle, RotateCcw, Save } from "lucide-react";
 import { resetPromptOverridesAction, savePromptOverridesAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
-import { validatePromptBody } from "@media-track/workflow";
+import { PROMPT_TEMPLATES, validatePromptBody } from "@media-track/workflow";
 
-/** 四种仲裁 kind 的展示名称与角色定位(head,只读)。tail 是 JSON 输出契约(只读)。 */
-const KIND_META: Array<{
-  kind: string;
-  name: string;
-  head: string;
-}> = [
-  {
-    kind: "selection",
-    name: "选片仲裁（剧集）",
-    head: "你是剧集资源选片仲裁员：多候选无唯一高分时挑一个（或放弃）。",
-  },
-  {
-    kind: "episode-mapping",
-    name: "集数映射仲裁（剧集）",
-    head: "你是剧集文件集数识别员：代码解析不出的文件 → 逐个对应真实集数。",
-  },
-  {
-    kind: "movie-selection",
-    name: "选片仲裁（电影）",
-    head: "你是电影资源选片仲裁员：多候选无唯一高分时挑一个（或放弃）。",
-  },
-  {
-    kind: "movie-diagnosis",
-    name: "落盘诊断仲裁（电影）",
-    head: "你是电影落盘诊断员：落盘不是单部正片时决定 accept / retry_other / abandon。",
-  },
+/** 四种仲裁 kind 的展示名称（head/tail 取 PROMPT_TEMPLATES 真实文本,只读展示 —— S1）。 */
+const KIND_META: Array<{ kind: string; name: string }> = [
+  { kind: "selection", name: "选片仲裁（剧集）" },
+  { kind: "episode-mapping", name: "集数映射仲裁（剧集）" },
+  { kind: "movie-selection", name: "选片仲裁（电影）" },
+  { kind: "movie-diagnosis", name: "落盘诊断仲裁（电影）" },
 ];
 
 interface PromptDraft {
@@ -112,6 +92,7 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
           arbitrationKind: meta.kind,
           promptText: "",
         };
+        const template = PROMPT_TEMPLATES[meta.kind as keyof typeof PROMPT_TEMPLATES];
         const error = errors[meta.kind];
         return (
           <div
@@ -127,8 +108,22 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
               <span style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>留空 = 内置模板</span>
             </div>
             <div style={{ fontSize: 12, color: "var(--text-secondary, #888)", margin: "4px 0 8px" }}>
-              角色定位（固定）：{meta.head}
+              角色定位（固定，从模板取真实文本）：
             </div>
+            <pre
+              style={{
+                margin: "0 0 8px",
+                padding: "6px 8px",
+                background: "rgba(127,127,127,.08)",
+                borderRadius: 6,
+                fontSize: 12,
+                lineHeight: 1.5,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+              }}
+            >
+              {template.head}
+            </pre>
             {error ? (
               <div style={{ color: "#dc2626", fontSize: 12, marginBottom: 6 }}>⚠ {error}</div>
             ) : null}
@@ -152,9 +147,23 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
                 color: "inherit",
               }}
             />
-            <div style={{ fontSize: 12, color: "var(--text-secondary, #888)", marginTop: 6 }}>
-              JSON 契约（固定）：只输出 JSON，不要任何其他文字，形如 {"{"}...{"}"}
-            </div>
+            <pre
+              style={{
+                margin: "6px 0 0",
+                padding: "6px 8px",
+                background: "rgba(127,127,127,.08)",
+                borderRadius: 6,
+                fontSize: 12,
+                lineHeight: 1.5,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+                color: "var(--text-secondary, #888)",
+              }}
+            >
+              JSON 契约（固定，环绕在 body 之后）：{"{"}
+              {template.tail}
+              {"}"}
+            </pre>
           </div>
         );
       })}

@@ -114,3 +114,49 @@ describe("AI 仲裁提示词 actions (issue #44 Phase 2)", () => {
   });
 });
 
+describe("解析测试台 testEpisodeRuleAction (issue #44 Phase 3)", () => {
+  let actions: typeof import("./actions");
+  let getWorkflowRepository: typeof import("../lib/workflow-runtime").getWorkflowRepository;
+
+  beforeAll(async () => {
+    [actions, getWorkflowRepository] = await Promise.all([
+      import("./actions"),
+      import("../lib/workflow-runtime").then((m) => m.getWorkflowRepository),
+    ]);
+  }, 30_000);
+
+  beforeEach(async () => {
+    await getWorkflowRepository().replaceRulePatterns([]);
+  });
+
+  it("内置规则:标准 SxxExx 命中 sxxexx 槽位", async () => {
+    const r = await actions.testEpisodeRuleAction({ fileName: "狂飙.S01E01.1080p.mkv", multiSeason: false });
+    expect(r.code).toBe("S01E01");
+    expect(r.matched).toBe("sxxexx");
+  });
+
+  it("内置规则:第N集单季命中 chinese,多季禁用无季规则 → null", async () => {
+    const single = await actions.testEpisodeRuleAction({ fileName: "第3集.mkv", multiSeason: false });
+    expect(single.code).toBe("S01E03");
+    expect(single.matched).toBe("chinese");
+    const multi = await actions.testEpisodeRuleAction({ fileName: "第3集.mkv", multiSeason: true });
+    expect(multi.code).toBeNull();
+    expect(multi.matched).toBeNull();
+  });
+
+  it("已保存自定义规则参与试跑:digits 槽位覆盖 4 位", async () => {
+    await actions.saveRulePatternsAction([
+      { ruleId: "digits", role: "episode-only", expression: "^([0-9]{1,4})$", label: "纯数字", sortOrder: 5, isDefault: false },
+    ]);
+    const r = await actions.testEpisodeRuleAction({ fileName: "0700.mkv", multiSeason: false });
+    expect(r.code).toBe("S01E700");
+    expect(r.matched).toBe("digits");
+  });
+
+  it("空文件名 → 提示", async () => {
+    const r = await actions.testEpisodeRuleAction({ fileName: "   ", multiSeason: false });
+    expect(r.message).toContain("文件名不能为空");
+  });
+});
+
+

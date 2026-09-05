@@ -13,6 +13,7 @@ import { PreferredLanguageForm } from "../../components/preferred-language-form"
 import { QualityPreferenceForm } from "../../components/quality-preference-form";
 import { RulePatternsForm } from "../../components/rule-patterns-form";
 import { PromptOverridesForm } from "../../components/prompt-overrides-form";
+import { RuleTestBench } from "../../components/rule-test-bench";
 import { LlmConfigForm } from "../../components/llm-config-form";
 import { TmdbApiKeyForm } from "../../components/tmdb-api-key-form";
 import { AssrtTokenForm } from "../../components/assrt-token-form";
@@ -327,6 +328,7 @@ async function RecognitionRulesSection() {
         </div>
       </div>
       <RulePatternsForm initial={initial} />
+      <RuleTestBench />
     </section>
   );
 }

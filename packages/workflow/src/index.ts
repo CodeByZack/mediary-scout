@@ -10,6 +10,7 @@ export * from "./ports.js";
 export * from "./fakes.js";
 export * from "./episode-code.js";
 export * from "./ruleset.js";
+export * from "./prompt-templates.js";
 export * from "./account-credentials.js";
 export * from "./workflow-scope.js";
 export * from "./auth/password.js";

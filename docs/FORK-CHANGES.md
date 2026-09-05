@@ -127,6 +127,18 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 
 **测试**:新增 ruleset.test.ts(19 用例:组计数/校验/编译/加载语义/深拷贝/trim/端到端回退)+ repository-contract 加 3 组 round-trip(含重复 ruleId last-wins)(InMemory 56 + SQLite 59 全绿);workflow 包 tsc 零错误;episode-code(24)无回归。
 
+### 37. 识别规则可配置系统 Phase 3——解析测试台 + Phase 2 复核 S1(issue #44)
+
+**Phase 3 目标**:让用户在设置页直接试跑「样例文件名 → 集数解析」,验证已保存规则的改动效果,不必跑真实采集。
+
+**改动**:
+- actions.testEpisodeRuleAction(只读,不 assertNotDemo):与采集 worker 同源加载生效规则(loadEpisodeRules,空表/损坏自动回退内置)→ episodeCodeFromFileName 取复合结果;再**逐槽位隔离探针**找命中槽位——episodeCodeFromFileName 对未提供槽位按 ?? 回退内置(无法禁用),故隔离一个槽位时其余槽位显式填「永不匹配」正则 /[^\s\S]/(自定义槽位空数组),保证命中来自且仅来自被探槽位;探针顺序镜像 episode-code.ts 内置分支(sxxexx → variant → epOnly → cross → chinese → digits → customs);返回 { code, matched };
+- rule-test-bench.tsx(新增 client 组件):文件名输入 + 「多季任务」开关 + 试跑;显示解析结果与命中槽位(未解析出也明确告知);Enter 可触发;渲染进 RecognitionRulesSection(RulePatternsForm 下方);
+- S1(Phase 2 复核建议):PromptOverridesForm 不再展示手写摘要——head/tail 改为从 PROMPT_TEMPLATES 取**真实文本**只读展示(pre 块);为此把四个模板常量从 arbitrator.ts 原样搬迁到新建的零运行时依赖模块 `packages/workflow/src/prompt-templates.ts`(纯数据,type-only 导入 ruleset,不拉 ai),arbitrator.ts 改为导入 + 再导出 PROMPT_TEMPLATES(index.ts 补导出);字节零漂移(缺省输出不变),arbitrator-prompts 5 用例照旧全绿;
+
+**测试**:actions.recognition 新增 4 用例(SxxExx 命中 sxxexx 槽位单/多季 chinese 差异、digits 槽位覆盖 4 位——组合规则与探针同源、空文件名提示);web 3 套件 + workflow 3 文件全绿;双 tsc 零错误;dist 重建。
+
+**复核备注**:待子代理复核。
 ### 36. 识别规则可配置系统 Phase 2——AI 仲裁 Prompt 配置(issue #44)
 
 **目标**:四个生产仲裁 prompt 的「规则指令中段」可 UI 编辑;角色定位(head)与 JSON 输出契约(tail)固定不可改(防破坏结构化输出);改动对后续采集任务生效(每次认领加载一次)。

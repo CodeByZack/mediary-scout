@@ -646,6 +646,58 @@ export async function resetPromptOverridesAction(): Promise<{ success: boolean; 
   }
 }
 
+/**
+ * issue #44 Phase 3:解析规则测试台。试跑基于**已保存**的生效规则(worker 同源语义):
+ * 先算复合结果,再逐槽位探针找「哪条规则命中」,顺序与 episode-code.ts 内置分支一致。
+ * 只读(不改库),demo 实例也可试跑。
+ */
+export async function testEpisodeRuleAction(input: {
+  fileName: string;
+  multiSeason: boolean;
+}): Promise<{ code: string | null; matched: string | null; message?: string }> {
+  const fileName = input.fileName.trim();
+  const seasons = input.multiSeason ? [1, 2] : [1];
+  if (fileName.length === 0) return { code: null, matched: null, message: "文件名不能为空" };
+  try {
+    const {
+      compileEpisodeRules,
+      episodeCodeFromFileName,
+      loadEpisodeRules,
+      loadRulePatterns,
+    } = await import("@media-track/workflow");
+    const { getWorkflowRepository } = await import("../lib/workflow-runtime");
+    const repository = getWorkflowRepository();
+    // 与采集 worker 完全同源:loadEpisodeRules(空表/损坏自动回退内置)。
+    const rules = await loadEpisodeRules(repository);
+    const code = episodeCodeFromFileName(fileName, seasons, undefined, rules);
+    const patterns = await loadRulePatterns(repository);
+    const compiled = compileEpisodeRules(patterns);
+    // 逐槽位探针(镜像 episode-code.ts 分支顺序)。episodeCodeFromFileName 对未提供的
+    // 槽位按 ?? 回退内置(无法禁用它),故隔离一个槽位时其余槽位显式填「永不匹配」正则,
+    // 自定义槽位用空数组禁用 —— 保证命中来自且仅来自被探槽位。
+    const NEVER = /[^\s\S]/; // 永不匹配
+    const probe: Array<[string, Parameters<typeof episodeCodeFromFileName>[3]]> = [
+      ["sxxexx", { sxxexx: compiled.sxxexx ?? NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
+      ["variant", { sxxexx: NEVER, variant: compiled.variant ?? NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
+      ["ep-only", { sxxexx: NEVER, variant: NEVER, epOnly: compiled.epOnly ?? NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
+      ["cross", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: compiled.cross ?? NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
+      ["chinese", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: compiled.chinese ?? NEVER, digits: NEVER, custom: [] }],
+      ["digits", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: compiled.digits ?? NEVER, custom: [] }],
+      ...(compiled.custom ?? []).map((c, i) => [`自定义 ${i + 1}`, { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [c] }] as [string, Parameters<typeof episodeCodeFromFileName>[3]]),
+    ];
+    let matched: string | null = null;
+    for (const [label, slotRules] of probe) {
+      const slotCode = episodeCodeFromFileName(fileName, seasons, undefined, slotRules);
+      if (slotCode !== null) {
+        matched = label;
+        break;
+      }
+    }
+    return { code, matched };
+  } catch (error) {
+    return { code: null, matched: null, message: "试跑失败：" + String(error) };
+  }
+}
 export async function saveLlmConfigAction(input: {
   baseURL: string;
   modelId: string;
