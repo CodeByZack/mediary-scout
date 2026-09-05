@@ -99,6 +99,13 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
 
   return (
     <div>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary, #888)", lineHeight: 1.7, marginBottom: 10 }}>
+        <div>· 每行一条正则，<strong>顺序 = 优先级</strong>（从上到下依次尝试，第一条命中即生效）。</div>
+        <div>· <strong>S:</strong> = 季+集（两个捕获组，如 SxxExx / 1×01）；<strong>E:</strong> = 仅集号（一个捕获组，如 E01 / 第N集，仅单季任务启用）。前缀不是正则的一部分。</div>
+        <div>· 前 6 行为内置槽位：只能留空（= 恢复内置默认），<strong>不要删除整行</strong>，否则后续行会错位挂到前一槽位。</div>
+        <div>· 正则只决定匹配文本；剥扩展名 / 合理集数守卫 / 年份排除 / 衍生黑名单等语义由解析代码固定保留。</div>
+        <div>· 支持 <code>#</code> 开头的注释行（会忽略）。</div>
+      </div>
       <textarea
         ref={textareaRef}
         value={text}
@@ -133,19 +140,16 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
           ))}
         </ul>
       ) : null}
-      <p className="panel-note" style={{ marginTop: 8, fontSize: 12 }}>
-        ⚠ 前 6 行是内置槽位：只能留空（= 恢复内置默认），不要删除整行，否则后面的行会错位挂到前面的槽位。
-      </p>
       <div className="setting-row" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
         <button type="button" className="primary-button" onClick={handleSave} disabled={isPending || hasLineErrors}>
           {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Check size={14} aria-hidden />}
           保存规则
         </button>
-        <button type="button" className="text-button" onClick={addCustom} disabled={isPending}>
+        <button type="button" className="secondary-button" onClick={addCustom} disabled={isPending}>
           <Plus size={14} aria-hidden />
           添加自定义规则
         </button>
-        <button type="button" className="text-button" onClick={handleReset} disabled={isPending}>
+        <button type="button" className="secondary-button" onClick={handleReset} disabled={isPending}>
           <RefreshCcw size={14} aria-hidden />
           恢复默认
         </button>

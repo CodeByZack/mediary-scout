@@ -216,7 +216,7 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
       <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
         <button
           type="button"
-          className="btn btn-primary"
+          className="primary-button"
           onClick={handleSave}
           disabled={hasErrors || isPending}
         >
@@ -224,7 +224,7 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
         </button>
         <button
           type="button"
-          className="btn"
+          className="secondary-button"
           onClick={handleReset}
           disabled={isResetting || isPending}
         >

@@ -75,7 +75,7 @@ export function RuleTestBench() {
           />
           多季任务
         </label>
-        <button type="button" className="btn" onClick={run} disabled={isPending}>
+        <button type="button" className="secondary-button" onClick={run} disabled={isPending}>
           {isPending ? <LoaderCircle className="spin" size={14} /> : null} 试跑
         </button>
       </div>

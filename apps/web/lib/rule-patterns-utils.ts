@@ -50,12 +50,7 @@ export function collectRowErrors(rows: RulePatternDraft[]): Record<string, strin
  * 其后为自定义规则(按行序 = 匹配优先级)。
  */
 
-const BLOCK_HEADER = [
-  "# 集数解析正则 —— 每行一条,顺序 = 优先级(从上到下依次尝试)。",
-  "# S: = 季+集(两个捕获组,如 SxxExx / 1×01);E: = 仅集号(一个捕获组,如 E01 / 第N集,仅单季任务启用)。",
-  "# 前 " + BUILTIN_RULE_PATTERNS.length + " 行为内置槽位:只能留空( = 恢复内置默认),不可删除整行,否则后续行会错位挂到前一槽位。",
-  "# 正则只决定匹配文本;剥扩展名/合理集数守卫/年份排除/衍生黑名单等语义由解析代码固定保留。",
-].join("\n");
+
 
 /** 行 → 前缀角色。非法前缀返回 null。 */
 export function ruleBlockPrefix(line: string): { role: RuleRole; expression: string } | null {
@@ -150,7 +145,7 @@ export function parseRuleBlock(text: string): {
   });
   return { rows, errors };
 }
-/** 规则行 → 文本块(带帮助注释头)。 */
+/** 规则行 → 文本块(仅规则行;说明文字由 UI 层展示,不占输入框)。 */
 export function formatRuleBlock(rows: RulePatternDraft[]): string {
   const builtinRows = BUILTIN_RULE_PATTERNS.map((p) =>
     rows.find((r) => r.ruleId === p.ruleId) ?? {
@@ -167,5 +162,5 @@ export function formatRuleBlock(rows: RulePatternDraft[]): string {
     ...builtinRows.map(rowToBlockLine),
     ...customRows.map(rowToBlockLine),
   ];
-  return BLOCK_HEADER + "\n" + lines.join("\n");
+  return lines.join("\n");
 }

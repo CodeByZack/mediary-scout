@@ -53,7 +53,7 @@ describe("文本块 ↔ 规则行(issue #44 UI 重构)", () => {
     expect(block).toContain("S: [Ss](\\d{1,2})[Ee](\\d{1,4})");
     expect(block).toContain("E: (?:^|[^A-Za-z0-9])[Ee][Pp]?\\.?\\s*(\\d{1,4})(?:$|[^0-9])");
     expect(block).toContain("E: ^EP(\\d+)$");
-    expect(block.startsWith("# ")).toBe(true); // 注释头
+    expect(block.startsWith("S: ")).toBe(true); // 不再带注释头,直接以规则行开头
   });
 
   it("parseRuleBlock:完整 6 内置(正确前缀)+ 自定义行 → 全部映射、无错误", () => {
