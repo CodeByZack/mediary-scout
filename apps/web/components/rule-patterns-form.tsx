@@ -136,6 +136,9 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
           ))}
         </ul>
       ) : null}
+      <p className="panel-note" style={{ marginTop: 8, fontSize: 12 }}>
+        ⚠ 前 6 行是内置槽位：只能留空（= 恢复内置默认），不要删除整行，否则后面的行会错位挂到前面的槽位。
+      </p>
       <div className="setting-row" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
         <button type="button" className="primary-button" onClick={handleSave} disabled={isPending || hasLineErrors}>
           {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Check size={14} aria-hidden />}

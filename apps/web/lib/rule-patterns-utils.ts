@@ -53,7 +53,7 @@ export function collectRowErrors(rows: RulePatternDraft[]): Record<string, strin
 const BLOCK_HEADER = [
   "# 集数解析正则 —— 每行一条,顺序 = 优先级(从上到下依次尝试)。",
   "# S: = 季+集(两个捕获组,如 SxxExx / 1×01);E: = 仅集号(一个捕获组,如 E01 / 第N集,仅单季任务启用)。",
-  "# 前 " + BUILTIN_RULE_PATTERNS.length + " 行为内置槽位(留空 = 恢复内置默认,内置分支仍生效);其后为自定义规则。",
+  "# 前 " + BUILTIN_RULE_PATTERNS.length + " 行为内置槽位:只能留空( = 恢复内置默认),不可删除整行,否则后续行会错位挂到前一槽位。",
   "# 正则只决定匹配文本;剥扩展名/合理集数守卫/年份排除/衍生黑名单等语义由解析代码固定保留。",
 ].join("\n");
 

@@ -78,14 +78,37 @@ describe("文本块 ↔ 规则行(issue #44 UI 重构)", () => {
     expect(rows[6]?.expression).toBe("^EP(\\d+)$");
     expect(rows[6]?.sortOrder).toBe(7);
   });
-  it("parseRuleBlock:内置槽位前缀与角色不符时报错", () => {
-    const block = "S: 第\\s*(\\d{1,4})\\s*(?:集|话|話|期)"; // 第1行本应 S 角色? 不——sxxexx 是 S,但此正则仅 1 组
+  it("parseRuleBlock:E 前缀打在 S 槽位(sxxexx) → 报前缀-角色不符", () => {
+    const block = "E: [Ss](\\d{1,2})[Ee](\\d{1,4})";
     const { rows, errors } = parseRuleBlock(block);
-    // 前缀 S 与 sxxexx 槽位(season-episode)一致,所以前缀无误;捕获组不足报错
-    expect(rows[0]?.ruleId).toBe("sxxexx");
-    expect(Object.keys(errors).length).toBeGreaterThan(0);
+    expect(rows[0]?.ruleId).toBe("sxxexx"); // 补位占位
+    expect(rows[0]?.expression).toBe("");
+    expect(errors["1"]).toContain("内置槽位 sxxexx 的前缀固定为 S");
   });
 
+  it("parseRuleBlock:前缀与槽位角色一致但捕获组不足 → 报捕获组契约错误", () => {
+    const block = "S: 第\\s*(\\d{1,4})\\s*(?:集|话|話|期)"; // S 前缀对 sxxexx,但仅 1 组
+    const { rows, errors } = parseRuleBlock(block);
+    expect(rows[0]?.ruleId).toBe("sxxexx");
+    expect(rows[0]?.expression).toBe("第\\s*(\\d{1,4})\\s*(?:集|话|話|期)");
+    expect(Object.values(errors).some((m) => m.includes("捕获组"))).toBe(true);
+  });
+
+  it("parseRuleBlock:删中间内置行(留 5 行 + 自定义) → 后续行错位被前缀-角色校验拦住", () => {
+    // 模拟删了 cross 行:第 4 行(原 chinese,E 前缀)撞 cross(S 槽) → 报错,不再静默。
+    const block = [
+      "S: [Ss](\\d{1,2})[Ee](\\d{1,4})",
+      "S: [Ss](\\d{1,2})\\s*[. ]\\s*[Ee](\\d{1,4})(?!\\d)",
+      "E: (?:^|[^A-Za-z0-9])[Ee][Pp]?\\.?\\s*(\\d{1,4})(?:$|[^0-9])",
+      "E: 第\\s*(\\d{1,4})\\s*(?:集|话|話|期)",
+      "E: ^(\\d{1,3})$",
+      "E: ^EP(\\d+)$",
+    ].join("\n");
+    const { rows, errors } = parseRuleBlock(block);
+    // 第 4 个内容行(E 前缀)映射到 cross(S 槽) → 前缀-角色不符报错;digits 槽补位空。
+    expect(Object.values(errors).some((m) => m.includes("内置槽位 cross 的前缀固定为 S"))).toBe(true);
+    expect(rows.filter((r) => r.ruleId === "digits")[0]?.expression).toBe("");
+  });
   it("parseRuleBlock:用户删除全部内置行 → 补空行(恢复内置)", () => {
     const { rows, errors } = parseRuleBlock("");
     expect(errors).toEqual({});
