@@ -308,10 +308,11 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([]);
   });
 
-  it("issue #39: 部分覆盖 + 花絮附件 → 零 AI 入库(正片保留、附件丢弃,不再整体判脏换候选)", async () => {
+  it("issue #44 用户拍板: 部分覆盖(E01+E02) + 花絮附件 → 升 AI 集数映射,保留已识别、E03 仍缺", async () => {
     // need=[E01,E02,E03],包=E01+E02+幕后花絮(部分覆盖 + 轻微附件)。
-    // 此前:hasJunk → 判脏 → 换候选(2 集正片全丢);现在:花絮不计集号、不判脏 → passes=true
-    // → clean finalize 保留 E01+E02、丢弃花絮,全程零 AI(throwModel)。
+    // issue #39:花絮不计集号、不否决整包;issue #44:代码没 cover 全部缺集 → 不再零 AI 收尾,
+    // 而是把包里所有正片交给 AI 集数映射。模型映射 E01/E02(与代码一致),包内无 E03 → 映射后
+    // 仍未全覆盖 → 保留 E01+E02 入库、E03 仍缺,escalated=true。
     const { sandbox, s1, storage } = await createSetup({
       candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],
       packs: {
@@ -328,12 +329,12 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
 
     const result = await runFastPathAcquisition({
       sandbox,
-      model: throwModel(), // 附件场景零 AI——模型被调就爆炸
+      model: textModel('{"mapping":{"狂飙.S01E01.1080p.mkv":"S01E01","狂飙.S01E02.1080p.mkv":"S01E02"},"unmapped":[],"reasoning":"与代码一致"}'),
       target: { ...target, missingEpisodes: ["S01E01", "S01E02", "S01E03"] },
       isChineseNative: false,
     });
 
-    expect(result.escalated).toBe(false); // 零 AI:附件场景不升级
+    expect(result.escalated).toBe(true); // issue #44:部分覆盖升 AI 映射
     // 部分覆盖(E01+E02 of E01-E03)→ 已入库 2 集,结账诚实报 E03 仍缺(不伪造全覆盖)。
     expect(result.coverage.coverageMet).toBe(false);
     expect(result.coverage.missing).toEqual(["S01E03"]);

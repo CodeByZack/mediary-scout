@@ -127,6 +127,27 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 
 **测试**:新增 ruleset.test.ts(19 用例:组计数/校验/编译/加载语义/深拷贝/trim/端到端回退)+ repository-contract 加 3 组 round-trip(含重复 ruleId last-wins)(InMemory 56 + SQLite 59 全绿);workflow 包 tsc 零错误;episode-code(24)无回归。
 
+### 39. 快路径「部分覆盖 → 升 AI 集数映射」修复(issue #44 用户拍板,地球超新鲜测试暴露)
+
+**背景**:实测「地球超新鲜 第2季」时,代码只从包里识别出 S02E01–E04(「第N期上/下」),还需 E05–E20;
+但 `digest.passes` 被定义为「覆盖 ≥1 个缺集」(issue #39 拍板),于是走了 clean 收尾直接归位标记 4 集、run 结束
+——那 16 集与 37 个「看不出集数」的文件从未被送去 AI 集数映射。用户拍板:只要代码没**全量** cover 缺集,
+就应该把包里所有视频扔给 AI 映射;「覆盖≥1 即 pass」这个判断不对。
+
+**改动**:
+- `staging-digest.ts`:`passes`(TV)从「覆盖≥1 个缺集」改为「**全量覆盖**缺集(`missingCodes.length === 0`)」。
+  部分覆盖仍可能保留已识别集,但不再被当作「代码识别完成」提前收尾。movie 的 passes(单正片判定)不变。
+  issue #39 的「附件/junk 不否决整包」语义保留(附件仍只进 junkSignals、不参与集号覆盖)。
+- `landing.ts closeOutTvLanding`:非全量覆盖时不再走 clean 收尾,而是进 `tryEpisodeMapping`(AI 把包里
+  非衍生视频全部交 AI 重映射)。AI 补认后全覆盖 → 按 AI 结果收尾;AI 也补不全(包内确实缺集)时
+  **保留已识别集先 finalize(归位/标记),不 wipe**,剩余缺集如实报告、留待下次巡检;只有零覆盖才
+  清空暂存换候选(原行为)。`done` 结论语改为「已完成:… 已入库,仍有 N 集未拿全」,不再伪造全覆盖。
+- `tryEpisodeMapping` 的「passed/目标已齐」判定复用 `re.passes`,随语义修正自动变为「AI 补认后全量覆盖」。
+
+**测试**:staging-digest(36,内含新增「全量覆盖→pass」+「部分覆盖→非 pass」)、finalize-landing(12)、
+variety-episode-landing(19)、fast-path(36,部分覆盖用例由「零 AI 收尾」改为「升 AI 映射、保留已识别」)、
+consumption-evidence(11)、movie-fast-path、episode-code(31)、candidate-grader(23)合计 195 全绿;workflow 包 tsc 零错误。
+
 ### 38. issue #44 UI 重构——单输入框正则 + AI 提示词并入识别规则(用户拍板)
 
 **背景**:用户反馈现有 UI「每条规则一个输入框 + 独立 AI 提示词 tab」太乱不直观,要求:① 正则规则按顺序放进一个输入框(懂正则的人一眼看懂);② 去掉独立「AI 提示词」tab,并入「识别规则」;③ 整体统一视觉。

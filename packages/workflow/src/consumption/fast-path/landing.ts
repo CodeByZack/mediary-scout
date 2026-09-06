@@ -709,17 +709,77 @@ export async function closeOutTvLanding(options: {
     if (mappedByAI) {
       escalated = true;
     }
-    // AI 识别后仍未覆盖全部缺集 → 清掉暂存,机械换下一条候选(不再让 AI 指认下一个——覆盖对比已经说明这包不行,直接试下一条)。
+    // issue #44 用户拍板(2026-09-06):「代码识别没 cover 全部缺集 → 把包里所有视频扔给 AI 映射」。
+    // AI 映射后仍未**全覆盖**时,不再一律清空暂存换候选——若代码/AI 已识别出部分有效集
+    // (部分覆盖),先 finalize 保留这批成果(归位/标记),剩余缺集留待下次巡检;只有完全没
+    // 覆盖(零成果)才清空整包换候选。issue #39 的「unparsed/附件不否决整包」保留,但不再
+    // 把「≥1 覆盖」当 done 提前收尾。
+    if (landingDigest.coveredCodes.length > 0) {
+      try {
+        const finalized = await finalizeLanding({
+          sandbox,
+          digest: landingDigest,
+          canonicalTitle: target.title,
+          seasons,
+          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
+          skipCodes: [...onDiskCodes],
+          onlyCodes: needCodes,
+          ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+          ...(mappingTable ? { overrides: mappingTable } : {}),
+        });
+        const skipNote =
+          (finalized.skippedOnDisk.length > 0
+            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集`
+            : "") +
+          (finalized.skippedNotNeeded.length > 0
+            ? ` / 非缺集跳过 ${finalized.skippedNotNeeded.length} 件`
+            : "");
+        const organizeDetail = `归位到 Season 目录${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
+        stepLog(sandbox, target.title, "归位", organizeDetail);
+        const renameRows = finalized.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
+        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, {
+          ok: true,
+          files: pushWithinBudget<string>([], renameRows, 1300),
+        });
+        const doneDetail = `已完成:${landingDigest.coveredCodes.join(",") || "-"} 已入库,仍有 ${landingDigest.missingCodes.length} 集未拿全`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "finish", "finalize", doneDetail);
+      } catch (error) {
+        try {
+          await sandbox.discardStaging();
+        } catch {
+          // already empty.
+        }
+        const organizeFailDetail = error instanceof Error ? error.message : String(error);
+        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
+        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
+        const doneDetail = `失败(归位异常:${organizeFailDetail})`;
+        stepLog(sandbox, target.title, "结论", doneDetail);
+        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
+        return { verdict: "abandon", done: await concludeUncovered(sandbox, {
+          text: `fast path 归位失败:${organizeFailDetail}`,
+          steps: attempted.size,
+          escalated,
+          reason: organizeFailDetail,
+        }), next: null, escalated, deadRetries };
+      }
+      // 部分入库:保留已识别集,剩余缺集结论如实报告(不伪造全覆盖)。
+      return { verdict: "clean", done: {
+        text: `部分入库:${landingDigest.coveredCodes.join(",") || "-"}`,
+        steps: attempted.size,
+        coverage: await sandbox.finish(),
+        escalated,
+      }, next: null, escalated, deadRetries };
+    }
+    // 零覆盖:确实没拿到任何有效集 → 清空暂存换候选(原行为)。
     {
       const leftover = await sandbox.inspectStaging();
       if (leftover.length > 0) {
         await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
       }
       const next = nextCandidate(grading, tried);
-      // 八轮复核:AI 参与过才署「AI 识别」;否则(no 路径)用中性文案。
       const retryDetail = `${mappedByAI ? "AI 识别后仍没拿全缺集" : "这轮转存没拿到需要的集"}:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
       stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-      // 九轮复核(第二轮):aiUsed 显式透出——mappedByAI=false 的 no 支(零 AI)不得挂「AI」徽章。
       emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size, ...(mappedByAI ? { aiUsed: true } : { aiUsed: false }) });
       return { verdict: "retry_other", done: null, next, escalated, deadRetries };
     }

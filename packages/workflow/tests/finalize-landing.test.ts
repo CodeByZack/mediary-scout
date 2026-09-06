@@ -317,9 +317,9 @@ it("功能3+功能2: overrides 喂给 finalize 后 rename 能落地,mark 以真�
       needCodes: ["S01E01", "S01E02"],
       overrides: { "狂飙 - 01.mkv": "S01E01" },
     });
-    // digest 层面通过了(overrides 让代码以为覆盖了 S01E01)。
+    // 覆盖 S01E01(overrides 让代码以为它存在),但缺 S01E02 → 部分覆盖(非全量覆盖)。
     expect(digest.episodeCodes).toEqual(["S01E01"]);
-    expect(digest.passes).toBe(true);
+    expect(digest.passes).toBe(false);
 
     const result = await finalizeLanding({
       sandbox,
@@ -348,7 +348,8 @@ it("功能3+功能2: overrides 喂给 finalize 后 rename 能落地,mark 以真�
       needCodes: ["S01E01", "S01E02"],
       overrides: { "狂飙 - 01.mkv": "S01E01" },
     });
-    expect(digest.passes).toBe(true);
+    // 只覆盖 S01E01,缺 S01E02 → 部分覆盖,passes=false。
+    expect(digest.passes).toBe(false);
 
     const result = await finalizeLanding({ sandbox, digest, canonicalTitle: "狂飙", seasons: [1] });
     expect(result.renamed).toEqual([]);
