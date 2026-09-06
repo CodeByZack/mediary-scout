@@ -145,6 +145,8 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 **测试**:quark-cookie-client 新增 2 用例钉分页(120 项 → 3 页取全,页数组 ["1","2","3"]);
 quark-storage-executor transfer 断言改用 listAllShareDetail;29 用例全绿;workflow 包 tsc 零错误。
 
+**测试包**:CI test 模式构建 v0.0.6(GitHub Actions run 34028588805,arm+x86 mode=test+live,含 §39+§40 两个修复),产物在 /vol1/1000/download/fpk-test/v0.0.6/。
+
 ### 39. 快路径「部分覆盖 → 升 AI 集数映射」修复(issue #44 用户拍板,地球超新鲜测试暴露)
 
 **背景**:实测「地球超新鲜 第2季」时,代码只从包里识别出 S02E01–E04(「第N期上/下」),还需 E05–E20;
