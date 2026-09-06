@@ -107,7 +107,7 @@ export class QuarkCookieClient {
       ["_page", String(input.page ?? 1)],
       ["_size", String(input.size ?? DEFAULT_LIST_PAGE_SIZE)],
       ["_fetch_total", "1"],
-      ["_sort", "file_type:asc,updated_at:desc"],
+      ["_sort", "file_type:asc,updated_at:desc,file_name:asc"],
     ]);
     const data = unwrap(response, "QUARK_LIST_ITEMS_FAILED");
     return listFrom(data);
@@ -120,17 +120,33 @@ export class QuarkCookieClient {
    *  fully transferred / inspected). Loops _page until a short or empty page. */
   async listAllItems(input: { directoryId: string; size?: number }): Promise<QuarkItem[]> {
     const size = input.size ?? DEFAULT_LIST_PAGE_SIZE;
-    const out: QuarkItem[] = [];
+    // Dedup by fid + keep fetching until a page adds nothing new or ends short.
+    // quark /file/sort pages over `file_type:asc,updated_at:desc`: a batch
+    // transfer gives hundreds of files the SAME updated_at, so the tie order is
+    // unstable and page boundaries can overlap/skip a file BETWEEN two separate
+    // calls (this made the same staging dir list differently twice, so the
+    // moveToSeason scope guard falsely flagged files as not-in-staging).
+    // Deduping + re-scanning pages recovers any boundary file.
+    const seen = new Map<string, QuarkItem>();
     let page = 1;
     for (;;) {
       const items = await this.listItems({ directoryId: input.directoryId, page, size });
-      out.push(...items);
-      if (items.length < size) {
+      let added = 0;
+      for (const item of items) {
+        const id = item.fid;
+        if (id === undefined) continue;
+        if (!seen.has(id)) {
+          seen.set(id, item);
+          added += 1;
+        }
+      }
+      if (added === 0 || items.length < size) {
         break;
       }
       page += 1;
+      if (page > 512) break; // bound a broken _page-ignoring API
     }
-    return out;
+    return [...seen.values()];
   }
   /** A single file/directory's identity incl. its immediate parent (pdir_fid).
    *  Quark has no one-shot breadcrumb, so the executor walks pdir_fid up to a
@@ -193,7 +209,7 @@ export class QuarkCookieClient {
       ["_fetch_banner", "0"],
       ["_fetch_share", "0"],
       ["_fetch_total", "1"],
-      ["_sort", "file_type:asc,updated_at:desc"],
+      ["_sort", "file_type:asc,updated_at:desc,file_name:asc"],
     ]);
     const data = unwrap(response, "QUARK_SHARE_DETAIL_FAILED");
     return listFrom(data) as QuarkShareItem[];
@@ -210,7 +226,10 @@ export class QuarkCookieClient {
     size?: number;
   }): Promise<QuarkShareItem[]> {
     const size = input.size ?? DEFAULT_LIST_PAGE_SIZE;
-    const out: QuarkShareItem[] = [];
+    // Same dedup contract as listAllItems (see above): dedup by fid + keep
+    // fetching until a page adds nothing new or ends short, so an unstable
+    // page boundary can't silently drop files out of a full share transfer.
+    const seen = new Map<string, QuarkShareItem>();
     let page = 1;
     for (;;) {
       const detailArgs: { pwd_id: string; stoken: string; pdirFid?: string; page: number; size: number } = {
@@ -223,13 +242,22 @@ export class QuarkCookieClient {
         detailArgs.pdirFid = input.pdirFid;
       }
       const items = await this.listShareDetail(detailArgs);
-      out.push(...items);
-      if (items.length < size) {
+      let added = 0;
+      for (const item of items) {
+        const id = item.fid;
+        if (id === undefined) continue;
+        if (!seen.has(id)) {
+          seen.set(id, item);
+          added += 1;
+        }
+      }
+      if (added === 0 || items.length < size) {
         break;
       }
       page += 1;
+      if (page > 512) break;
     }
-    return out;
+    return [...seen.values()];
   }
   /** Step 3: save selected share files into a destination directory; returns task_id. */
   async saveShare(input: {

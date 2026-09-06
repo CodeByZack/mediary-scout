@@ -35,6 +35,7 @@
 | 2026-09-03 | feat | **PR #37 movie 落盘诊断去 LLM 深化**(issue #33):多视频包最大正片明显占优(体积下限+附件上限+2x 判据)代码直收、判据与删除名单进日志、三支收尾抽 finishMovieAccept 共用、finalize 透传 keepVideoId(与日志删除名单一致) |
 | 2026-09-04 | fix | **PR #42 TV 脏包判定收紧**(issue #39):附件(花絮/预告/sample/广告)一律不判脏、只进 junkSignals 待 finalize 丢弃,集数覆盖 need 即收尾(用户拍板不区分严重/轻微);JUNK 正则 ost/mv/making 加分隔符守卫(修 Lost/Ghost 误报);映射输入减 junkSignals(消词表漂移) |
 | 2026-09-04 | fix | **issue #39 后续:passes 与 isDirtyPack 解耦**——passes 只看覆盖率(集号覆盖 need 即收尾),不再被 isDirtyPack 卡住;isDirtyPack 从 TV StagingDigest 接口移除(仅剩装饰性日志文案,两条分支下游行为完全一样);tryEpisodeMapping 返回简化为 passed / no / failed(删除 unmapped-but-clean);landing 主流程删除 dead missingCodes.length === 0 分支 |
+| 2026-09-06 | fix | **§41 暂存列表分页不稳**(issue #44,地球超新鲜 S02 f9a77b99 案):夸克 `file/sort` 按 `file_type,updated_at` 排序分页、批量转存同秒时间戳致分页边界重叠/漏文件 → 同一 `listTree(staging)` 两次调用结果不同,AI 认全 20 集却在归位守卫误报「不在暂存」整包清空;`_sort` 加唯一 tie-breaker `file_name:asc` 使分页稳定,`listAllItems`/`listAllShareDetail` 按 fid 去重取到「无新增页」为止;`moveToSeason` 严格守卫保持不变(用户拍板:id 对不上必是上游 bug,应大声报出) |
 
 ---
 
@@ -127,6 +128,32 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 
 **测试**:新增 ruleset.test.ts(19 用例:组计数/校验/编译/加载语义/深拷贝/trim/端到端回退)+ repository-contract 加 3 组 round-trip(含重复 ruleId last-wins)(InMemory 56 + SQLite 59 全绿);workflow 包 tsc 零错误;episode-code(24)无回归。
 
+### 41. 暂存列表分页不稳——同一 `listTree(staging)` 两次调用结果不同,AI 认全 20 集却一集没落库(issue #44,地球超新鲜 S02 run f9a77b99)
+
+**症状**:v0.0.6 实跑,AI 集数映射把 20 集全认对(第N期上→E(2N-1)、第N期下→E(2N)),
+改名 20 个文件全部成功(renameVideo 逐文件在 `listTree(staging)` 里校验过),但紧接着归位
+`moveToSeason` 的守卫用**同一次 `listTree(staging)`** 再查,2 个文件 id(815e6f0d…、
+22651e4…)不在结果里 → 抛 `SANDBOX_FILES_NOT_IN_STAGING` → 整包清空,`no_coverage` 收尾,
+一集都没落库。
+
+**根因(用户质疑成立:AI 的 id 就是 stage 查出来的,必然对齐 → 反证唯一成立项)**:
+digest 喂给 AI 的 `transfer.staging` 与 `moveToSeason` 守卫用的都是 `this.storage.listTree(staging)`
+同一个方法;改名后暂存目录内容没变,两次调用结果却不同(改名那次列表全,归位那次漏 2)→
+`listTree`/`listAllItems` **非幂等**。夸克 `/file/sort` 每页 50、`_sort=file_type:asc,
+updated_at:desc`:批量转存几百个文件落在几乎同一 `updated_at` 秒,排序大量并列,OFFSET 分页
+在并列边界处**重叠/漏项**;旧 `listAllItems` 既不去重、又用 `items.length < size` 提前截断,
+漏掉的文件在下一页不会回来。
+
+**修法(修前面的根,守卫保持严格)**:用户拍板——id 对不上一定是前面出问题,该大声报出来,
+不该让守卫装糊涂。故只修列表本身:`quark-cookie-client.ts` 的 `_sort` 加唯一 tie-breaker
+`file_name:asc`(目录内文件名唯一,排序全序化,OFFSET 分页稳定、不再漏项);`listAllItems`/
+`listAllShareDetail` 按 `fid` 去重、持续取页直到「本页无新增」或短页,对残余重叠免疫
+(512 页上限防 `_page` 失效死循环)。`moveToSeason` 的 `SANDBOX_FILES_NOT_IN_STAGING` 严格守卫
+保持不变——列表修好后它应当不再误报;若再触发,就是真实上游 bug,值得抛错彻查。
+
+**测试**:quark-cookie-client 加「分页重叠去重仍收全 120」回归 + `_sort` 含 `file_name:asc` 断言;
+v2-sandbox-move 严格守卫用例(not_in_staging 拒绝移动)保持不变;finalize-landing/fast-path/
+v2-acceptance/staging-digest/quark-storage-executor 全绿;workflow 包 tsc 零错误。
 ### 40. 夸克转存/列出只取第一页(50 项)——大分享包静默丢文件(地球超新鲜实测暴露)
 
 **背景**:「地球超新鲜 第2季」源分享包有 116+ 个文件(用户手动点开能看到第9期/第10期/福利篇),但转存进暂存区只有 50 个、代码只认到第1–4期。排查根因在夸克 executor/client:

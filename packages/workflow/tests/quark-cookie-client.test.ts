@@ -42,6 +42,7 @@ describe("QuarkCookieClient", () => {
     expect(requests[0]?.method).toBe("GET");
     expect(requests[0]?.url).toContain("/1/clouddrive/file/sort");
     expect(requests[0]?.url).toContain("pdir_fid=root_dir");
+    expect(requests[0]?.url).toContain("file_name%3Aasc"); // 唯一 tie-breaker,分页稳定(issue #44,URL 编码)
     expect(requests[0]?.headers["Referer"]).toBe("https://pan.quark.cn/");
     expect(requests[0]?.headers["Cookie"]).toBe("__uid=u");
   });
@@ -127,6 +128,31 @@ describe("QuarkCookieClient", () => {
     expect(requests.map((r) => new URLSearchParams(r.url.split("?")[1]!).get("_page"))).toEqual(["1", "2", "3"]);
   });
 
+  it("listAllItems dedups overlapping pages from an unstable sort (issue #44)", async () => {
+    const requests: RecordedRequest[] = [];
+    const pageOf = (url: string) => Number(new URLSearchParams(url.split("?")[1]!).get("_page"));
+    const makeItems = (page: number) => {
+      // Simulate quark pagination over a non-total-ordered sort: page 2 overlaps
+      // page 1's tail (f45-f49 repeat) and the listing must still collect every
+      // unique file exactly once (previously duplicates/no-dedup could inflate or
+      // the naive `items.length < size` break could drop files).
+      if (page === 1) {
+        return Array.from({ length: 50 }, (_, i) => ({ fid: `f${i}`, file_name: `f${i}.mkv`, dir: false, size: 100 }));
+      }
+      if (page === 2) {
+        return Array.from({ length: 50 }, (_, i) => ({ fid: `f${45 + i}`, file_name: `f${45 + i}.mkv`, dir: false, size: 100 }));
+      }
+      return Array.from({ length: 25 }, (_, i) => ({ fid: `f${95 + i}`, file_name: `f${95 + i}.mkv`, dir: false, size: 100 }));
+    };
+    const client = new QuarkCookieClient({
+      cookie: "__uid=u",
+      fetchJson: record(requests, async (url: string) => ({ code: 0, data: { list: makeItems(pageOf(url)) } })),
+    });
+    const items = await client.listAllItems({ directoryId: "d" });
+    expect(items).toHaveLength(120); // 50 + 45(new) + 25(new), deduped
+    expect(new Set(items.map((i) => i.fid)).size).toBe(120);
+    expect(requests).toHaveLength(3);
+  });
   it("listAllShareDetail paginates through every page of a large share", async () => {
     const requests: RecordedRequest[] = [];
     const pageOf = (url: string) => Number(new URLSearchParams(url.split("?")[1]!).get("_page"));
