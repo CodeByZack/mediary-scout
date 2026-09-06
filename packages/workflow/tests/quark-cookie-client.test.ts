@@ -107,6 +107,46 @@ describe("QuarkCookieClient", () => {
     expect(requests[0]?.url).toContain("pdir_fid=0");
   });
 
+  it("listAllItems paginates through every page (no silent 50-item truncation)", async () => {
+    const requests: RecordedRequest[] = [];
+    const pageOf = (url: string) => Number(new URLSearchParams(url.split("?")[1]!).get("_page"));
+    const makeItems = (page: number) => {
+      const start = (page - 1) * 50;
+      const count = Math.max(0, Math.min(50, 120 - start));
+      return Array.from({ length: count }, (_, i) => ({
+        fid: `f${start + i}`, file_name: `f${start + i}.mkv`, dir: false, size: 100,
+      }));
+    };
+    const client = new QuarkCookieClient({
+      cookie: "__uid=u",
+      fetchJson: record(requests, async (url: string) => ({ code: 0, data: { list: makeItems(pageOf(url)) } })),
+    });
+    const items = await client.listAllItems({ directoryId: "d" });
+    expect(items).toHaveLength(120); // 50 + 50 + 20(short last page)
+    expect(requests).toHaveLength(3);
+    expect(requests.map((r) => new URLSearchParams(r.url.split("?")[1]!).get("_page"))).toEqual(["1", "2", "3"]);
+  });
+
+  it("listAllShareDetail paginates through every page of a large share", async () => {
+    const requests: RecordedRequest[] = [];
+    const pageOf = (url: string) => Number(new URLSearchParams(url.split("?")[1]!).get("_page"));
+    const makeItems = (page: number) => {
+      const start = (page - 1) * 50;
+      const count = Math.max(0, Math.min(50, 120 - start));
+      return Array.from({ length: count }, (_, i) => ({
+        fid: `sf${start + i}`, share_fid_token: `tok${start + i}`, file_name: `f${start + i}.mkv`, dir: false, size: 100,
+      }));
+    };
+    const client = new QuarkCookieClient({
+      cookie: "__uid=u",
+      fetchJson: record(requests, async (url: string) => ({ code: 0, data: { list: makeItems(pageOf(url)) } })),
+    });
+    const items = await client.listAllShareDetail({ pwd_id: "p", stoken: "s", pdirFid: "0" });
+    expect(items).toHaveLength(120);
+    expect(items[0]).toEqual({ fid: "sf0", share_fid_token: "tok0", file_name: "f0.mkv", dir: false, size: 100 });
+    expect(requests).toHaveLength(3);
+  });
+
   it("saveShare posts the share/save body and returns data.task_id", async () => {
     const requests: RecordedRequest[] = [];
     const client = new QuarkCookieClient({

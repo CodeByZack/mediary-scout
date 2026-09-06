@@ -127,6 +127,24 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 
 **测试**:新增 ruleset.test.ts(19 用例:组计数/校验/编译/加载语义/深拷贝/trim/端到端回退)+ repository-contract 加 3 组 round-trip(含重复 ruleId last-wins)(InMemory 56 + SQLite 59 全绿);workflow 包 tsc 零错误;episode-code(24)无回归。
 
+### 40. 夸克转存/列出只取第一页(50 项)——大分享包静默丢文件(地球超新鲜实测暴露)
+
+**背景**:「地球超新鲜 第2季」源分享包有 116+ 个文件(用户手动点开能看到第9期/第10期/福利篇),但转存进暂存区只有 50 个、代码只认到第1–4期。排查根因在夸克 executor/client:
+`listItems` 与 `listShareDetail` 都只请求 `_page=1&_size=50`(DEFAULT_LIST_PAGE_SIZE=50),且**从不翻页**
+——任何目录/分享文件超过 50 项,超出部分被静默丢弃(源/暂存目录 >50 项时,staging 检查与树遍历同样被截断)。
+
+**改动**:
+- `quark-cookie-client.ts`:新增 `listAllItems` / `listAllShareDetail`,用 `_page` 循环取到短页/空页为止收集全部子项
+  (若一页恰好 50 项则多取下一页直到空页,稳健不死循环)。
+- `quark-storage-executor.ts`:
+  - `transfer()` 改用 `listAllShareDetail` 取全分享项,再**分批** `saveShare`(单次 fid_list 有上限,SAVE_SHARE_BATCH_SIZE=50),
+    避免 >50 项分享只转存前 50;
+  - `collectVideos` / `collectUnparsedVideos` / `listTree` / `listSubdirectories` / `listChildDirectories` /
+    `createDirectory` 全部改用 `listAllItems`,使 staging 检查/树遍历/归位能看见 >50 项目录的全部文件。
+
+**测试**:quark-cookie-client 新增 2 用例钉分页(120 项 → 3 页取全,页数组 ["1","2","3"]);
+quark-storage-executor transfer 断言改用 listAllShareDetail;29 用例全绿;workflow 包 tsc 零错误。
+
 ### 39. 快路径「部分覆盖 → 升 AI 集数映射」修复(issue #44 用户拍板,地球超新鲜测试暴露)
 
 **背景**:实测「地球超新鲜 第2季」时,代码只从包里识别出 S02E01–E04(「第N期上/下」),还需 E05–E20;

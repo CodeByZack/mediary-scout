@@ -18,6 +18,7 @@ import { isQuarkAuthError, type QuarkCookieClient, type QuarkItem } from "./quar
 const MAX_RECURSIVE_COLLECT_DEPTH = 6;
 const DEFAULT_MAX_WRITE_SCOPE_DEPTH = 8;
 const DEFAULT_MIN_VIDEO_SIZE_BYTES = 10 * 1024 * 1024;
+const SAVE_SHARE_BATCH_SIZE = 50; // 夸克 save 单次 fid_list/分享文件数有上限,分批保存
 
 const DEFAULT_VIDEO_EXTENSIONS = [
   ".mp4",
@@ -80,7 +81,7 @@ export class QuarkStorageExecutor implements StorageExecutor {
     const safeParentId = await this.assertWithinWriteScope(input.parentId, "create directory");
     // Find-or-create: seasons of one title initialize at different times and must
     // land under the SAME show directory (quark happily makes duplicate folders).
-    const items = await this.client.listItems({ directoryId: safeParentId });
+    const items = await this.client.listAllItems({ directoryId: safeParentId });
     for (const item of items) {
       if (isDirectory(item) && nameOf(item) === input.name) {
         const existingId = idOf(item);
@@ -131,20 +132,24 @@ export class QuarkStorageExecutor implements StorageExecutor {
       }
       const passcode = stringValue(input.candidate.providerPayload["password"]) || parsed.passcode;
       const stoken = await this.client.getShareToken({ pwd_id: parsed.pwdId, passcode });
-      const shareItems = await this.client.listShareDetail({ pwd_id: parsed.pwdId, stoken, pdirFid: "0" });
+      // 分页取全:listShareDetail 只返回一页(默认 50),分享文件更多时只会转存前 50。
+      // 循环取完所有页,再分批 saveShare(单次 fid_list 数有上限)。
+      const shareItems = await this.client.listAllShareDetail({ pwd_id: parsed.pwdId, stoken, pdirFid: "0" });
       const fidList = shareItems.map((i) => stringValue(i.fid)).filter(Boolean);
       const fidTokenList = shareItems.map((i) => stringValue(i.share_fid_token)).filter(Boolean);
       if (fidList.length === 0) {
         throw new Error("QUARK_TRANSFER_FAILED: share has no transferable files");
       }
-      const taskId = await this.client.saveShare({
-        fid_list: fidList,
-        fid_token_list: fidTokenList,
-        to_pdir_fid: safeDirectoryId,
-        pwd_id: parsed.pwdId,
-        stoken,
-      });
-      await this.client.pollTask(taskId);
+      for (let offset = 0; offset < fidList.length; offset += SAVE_SHARE_BATCH_SIZE) {
+        const taskId = await this.client.saveShare({
+          fid_list: fidList.slice(offset, offset + SAVE_SHARE_BATCH_SIZE),
+          fid_token_list: fidTokenList.slice(offset, offset + SAVE_SHARE_BATCH_SIZE),
+          to_pdir_fid: safeDirectoryId,
+          pwd_id: parsed.pwdId,
+          stoken,
+        });
+        await this.client.pollTask(taskId);
+      }
     } catch (error) {
       // Auth failures must surface so the worker freezes the drive — never absorbed.
       if (isQuarkAuthError(error)) {
@@ -188,7 +193,7 @@ export class QuarkStorageExecutor implements StorageExecutor {
       await this.client.moveFiles({ fids: moved, to: safeDirectoryId });
     }
 
-    const rootItems = await this.client.listItems({ directoryId: safeDirectoryId });
+    const rootItems = await this.client.listAllItems({ directoryId: safeDirectoryId });
     const removableDirectoryIds: string[] = [];
     for (const item of rootItems) {
       if (!isDirectory(item)) {
@@ -225,7 +230,7 @@ export class QuarkStorageExecutor implements StorageExecutor {
       if (depth > maxDepth) {
         return;
       }
-      const items = await this.client.listItems({ directoryId: dirId });
+      const items = await this.client.listAllItems({ directoryId: dirId });
       for (const item of items) {
         const name = nameOf(item);
         if (isDirectory(item)) {
@@ -257,7 +262,7 @@ export class QuarkStorageExecutor implements StorageExecutor {
       if (depth > maxDepth) {
         return;
       }
-      const items = await this.client.listItems({ directoryId: dirId });
+      const items = await this.client.listAllItems({ directoryId: dirId });
       for (const item of items) {
         if (!isDirectory(item)) {
           continue;
@@ -276,7 +281,7 @@ export class QuarkStorageExecutor implements StorageExecutor {
   }
 
   async listChildDirectories(directoryId: string): Promise<Array<{ id: string; name: string }>> {
-    const items = await this.client.listItems({ directoryId });
+    const items = await this.client.listAllItems({ directoryId });
     const dirs: Array<{ id: string; name: string }> = [];
     for (const item of items) {
       if (!isDirectory(item)) {
@@ -318,7 +323,7 @@ export class QuarkStorageExecutor implements StorageExecutor {
     if (depth > MAX_RECURSIVE_COLLECT_DEPTH) {
       return [];
     }
-    const items = await this.client.listItems({ directoryId: currentId });
+    const items = await this.client.listAllItems({ directoryId: currentId });
     const videos: VideoFact[] = [];
     for (const item of items) {
       if (isDirectory(item)) {
@@ -340,7 +345,7 @@ export class QuarkStorageExecutor implements StorageExecutor {
     if (depth > MAX_RECURSIVE_COLLECT_DEPTH) {
       return [];
     }
-    const items = await this.client.listItems({ directoryId });
+    const items = await this.client.listAllItems({ directoryId });
     const unparsed: UnparsedVideoFile[] = [];
     for (const item of items) {
       if (isDirectory(item)) {

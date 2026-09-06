@@ -113,6 +113,25 @@ export class QuarkCookieClient {
     return listFrom(data);
   }
 
+
+  /** All immediate children of a directory, paginating through every page.
+   *  listItems only returns ONE page (default size 50), so directories with more
+   *  than one page of children were silently truncated (source shares were never
+   *  fully transferred / inspected). Loops _page until a short or empty page. */
+  async listAllItems(input: { directoryId: string; size?: number }): Promise<QuarkItem[]> {
+    const size = input.size ?? DEFAULT_LIST_PAGE_SIZE;
+    const out: QuarkItem[] = [];
+    let page = 1;
+    for (;;) {
+      const items = await this.listItems({ directoryId: input.directoryId, page, size });
+      out.push(...items);
+      if (items.length < size) {
+        break;
+      }
+      page += 1;
+    }
+    return out;
+  }
   /** A single file/directory's identity incl. its immediate parent (pdir_fid).
    *  Quark has no one-shot breadcrumb, so the executor walks pdir_fid up to a
    *  write-scope root with these calls. */
@@ -180,6 +199,38 @@ export class QuarkCookieClient {
     return listFrom(data) as QuarkShareItem[];
   }
 
+
+  /** All files inside a share (recursively reached via pages), paginating through
+   *  every page. listShareDetail returns ONE page (default size 50); a share with
+   *  more items only ever transferred the first page unless we loop here. */
+  async listAllShareDetail(input: {
+    pwd_id: string;
+    stoken: string;
+    pdirFid?: string;
+    size?: number;
+  }): Promise<QuarkShareItem[]> {
+    const size = input.size ?? DEFAULT_LIST_PAGE_SIZE;
+    const out: QuarkShareItem[] = [];
+    let page = 1;
+    for (;;) {
+      const detailArgs: { pwd_id: string; stoken: string; pdirFid?: string; page: number; size: number } = {
+        pwd_id: input.pwd_id,
+        stoken: input.stoken,
+        page,
+        size,
+      };
+      if (input.pdirFid !== undefined) {
+        detailArgs.pdirFid = input.pdirFid;
+      }
+      const items = await this.listShareDetail(detailArgs);
+      out.push(...items);
+      if (items.length < size) {
+        break;
+      }
+      page += 1;
+    }
+    return out;
+  }
   /** Step 3: save selected share files into a destination directory; returns task_id. */
   async saveShare(input: {
     fid_list: string[];
