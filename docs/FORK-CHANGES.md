@@ -36,11 +36,48 @@
 | 2026-09-04 | fix | **PR #42 TV 脏包判定收紧**(issue #39):附件(花絮/预告/sample/广告)一律不判脏、只进 junkSignals 待 finalize 丢弃,集数覆盖 need 即收尾(用户拍板不区分严重/轻微);JUNK 正则 ost/mv/making 加分隔符守卫(修 Lost/Ghost 误报);映射输入减 junkSignals(消词表漂移) |
 | 2026-09-04 | fix | **issue #39 后续:passes 与 isDirtyPack 解耦**——passes 只看覆盖率(集号覆盖 need 即收尾),不再被 isDirtyPack 卡住;isDirtyPack 从 TV StagingDigest 接口移除(仅剩装饰性日志文案,两条分支下游行为完全一样);tryEpisodeMapping 返回简化为 passed / no / failed(删除 unmapped-but-clean);landing 主流程删除 dead missingCodes.length === 0 分支 |
 | 2026-09-06 | fix | **§41 暂存列表分页不稳**(issue #44,地球超新鲜 S02 f9a77b99 案):夸克 `file/sort` 按 `file_type,updated_at` 排序分页、批量转存同秒时间戳致分页边界重叠/漏文件 → 同一 `listTree(staging)` 两次调用结果不同,AI 认全 20 集却在归位守卫误报「不在暂存」整包清空;`_sort` 加唯一 tie-breaker `file_name:asc` 使分页稳定,`listAllItems`/`listAllShareDetail` 按 fid 去重取到「无新增页」为止;`moveToSeason` 严格守卫保持不变(用户拍板:id 对不上必是上游 bug,应大声报出) |
+| 2026-09-06 | fix | **§43 部分覆盖不落盘**(用户拍板,回退 §39 同轮延伸):此前 AI 补不全时保留已识别集先 finalize 并「已完成」收尾,与「落盘=全量对齐 need」冲突(run 以完成结束却仍缺集);改为**没拿全就不落盘**——清包换候选,primary 试穷后落兜底池别名重搜(有别名时),直到候选/预算耗尽才诚实报未覆盖;仲裁行如实报「AI 补认/代码识别只认出 N/M 集,未全量对齐就不落盘」+ args 带 covered/missing 明细 |
 | 2026-09-06 | fix | **§42 AI 调用期间 UI 无反馈**(用户实测反馈):fast path 的 AI 调用(选片/诊断/集数映射)耗时数十秒但期间零推送,UI 停在上一条 `stagingDigest`(纯代码、毫秒级)步骤上,观感像「卡在代码识别很久」;修法=每个 AI 调用**发起前**发一条「AI …进行中」心跳事件,复用活动页对 running 状态最后一步的 ⏳ 渲染(零 UI 改动),结果 emit 紧随其后自然把它覆盖为 ✅ |
 
 ---
 
 ## 详细记录
+
+### 43. 部分覆盖不落盘——落盘必须全量对齐 need(2026-09-06 用户拍板,回退 §39 同轮延伸)
+
+**背景**:地球超新鲜 S02 实测(2026-09-06,候选 5 中第 3 个)。代码识别出 8 集,AI 集数映射又补出
+8 集,共 16/20 集,**4 集缺**。当时行为(§39 落地时顺带写的):部分覆盖也算「完成」——finalize 把 16 集
+改名归位标记入库,`done` 语「已完成:… 已入库,仍有 4 集未拿全」,run 结束、剩余交给下次巡检。
+
+**用户拍板**:落盘(归位/markObtained)意味着真入库,半入库会让 run 以「已完成」结束却仍缺集,
+语义拧巴。**改回:全量对齐 need 才落盘**,部分覆盖只作记录、不落盘。
+
+**改动**(`landing.ts closeOutTvLanding`,删除 74 行的部分入库分支):
+- AI 映射后 `missingCodes` 非空(无论认到多少)→ **不 finalize、不 wipe 后收尾**,统一清空暂存 →
+  `nextCandidate` 换下一个候选 → 直到候选/转存预算耗尽才 `reportNoCoverage` + `concludeUncovered`
+  诚实报未覆盖,交给下次巡检。
+- primary 池试穷后自然落到**兜底池别名重搜**(§27 secondary 池,独立转存预算)——但兜底池
+  **仅当任务有别名时启动**(tv.ts `target.aliases.length > 0`),无别名则直接进耗尽分支。
+- 仲裁行文案如实:「AI 补认/代码识别只认出 N/M 集,未全量对齐就不落盘:清掉暂存,换一条
+  候选(本池没有可换的)」;args 带 `covered`/`missing` 集号明细(`compactCodeList`),前端展开可见。
+- 零 AI 收尾语义不变:代码已全量覆盖时仍直接 finalize、不调 AI。
+
+**没变的部分**:§39 的两处语义都保留——`passes` 要求**全量覆盖**(不是「≥1 个缺集」);
+附件/花絮/预告只进 `junkSignals`、不参与集号覆盖、不否决整包(§27/#39 判定不变)。movie 分支
+无此路径(单正片判定,不存在「部分覆盖」概念),未改动。
+
+**为什么现在能走到兜底池**:此前部分覆盖会 `done: {…}` 直接 return(tv.ts:439 提前返回),兜底池
+根本不启动;现在不落盘 → `runTvCandidatePhase` 返回 `done: null` → primary 试穷后走 §27 的两阶段
+候选池换来源再试一次(有别名时等于多一轮搜索 + 独立 3 次转存预算),而不是「落半包 + 等下次巡检」。
+
+**留待后续讨论(用户明确搁置)**:部分覆盖到底要不要为少数缺集重复转存大包——转存代价(网盘流量/
+时间/预算)与「一次补齐」的收益如何权衡,以及是否值得为「已认出 N 集」的包设计降级落盘(如落到
+临时目录、不 markObtained)。本次只做「不落盘」这一半。
+
+**测试**:fast-path.test.ts 的 §44 部分覆盖用例改写为 §43 断言(不 finalize、Season 目录空、
+missing 仍是全部 3 集、仲裁行含「只认出 2/3 集,未全量对齐就不落盘」)。fast-path(36)+
+variety-episode-landing + finalize-landing + staging-digest 合计 103 全绿;movie-fast-path(27)
+全绿;workflow 包 tsc 零错误。
 
 ### 42. AI 调用期间 UI 无反馈——观感卡在「代码识别」(2026-09-06 用户实测反馈,已修)
 
@@ -224,6 +261,10 @@ quark-storage-executor transfer 断言改用 listAllShareDetail;29 用例全绿;
   **保留已识别集先 finalize(归位/标记),不 wipe**,剩余缺集如实报告、留待下次巡检;只有零覆盖才
   清空暂存换候选(原行为)。`done` 结论语改为「已完成:… 已入库,仍有 N 集未拿全」,不再伪造全覆盖。
 - `tryEpisodeMapping` 的「passed/目标已齐」判定复用 `re.passes`,随语义修正自动变为「AI 补认后全量覆盖」。
+
+> **⚠️ 同日被 §43 回退(用户拍板)**:上面第 2 条「AI 补不全时**保留已识别集先 finalize、剩余留待巡检**」
+> 已撤销——落盘必须**全量对齐 need**,部分覆盖不落盘、清包换候选。§39 里 passes 改全量覆盖与
+> 「附件不否决整包」两处语义**不变**,仅撤掉「部分入库」那半。详见 §43。
 
 **测试**:staging-digest(36,内含新增「全量覆盖→pass」+「部分覆盖→非 pass」)、finalize-landing(12)、
 variety-episode-landing(19)、fast-path(36,部分覆盖用例由「零 AI 收尾」改为「升 AI 映射、保留已识别」)、

@@ -714,79 +714,28 @@ export async function closeOutTvLanding(options: {
     if (mappedByAI) {
       escalated = true;
     }
-    // issue #44 用户拍板(2026-09-06):「代码识别没 cover 全部缺集 → 把包里所有视频扔给 AI 映射」。
-    // AI 映射后仍未**全覆盖**时,不再一律清空暂存换候选——若代码/AI 已识别出部分有效集
-    // (部分覆盖),先 finalize 保留这批成果(归位/标记),剩余缺集留待下次巡检;只有完全没
-    // 覆盖(零成果)才清空整包换候选。issue #39 的「unparsed/附件不否决整包」保留,但不再
-    // 把「≥1 覆盖」当 done 提前收尾。
-    if (landingDigest.coveredCodes.length > 0) {
-      try {
-        const finalized = await finalizeLanding({
-          sandbox,
-          digest: landingDigest,
-          canonicalTitle: target.title,
-          seasons,
-          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
-          skipCodes: [...onDiskCodes],
-          onlyCodes: needCodes,
-          ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
-          ...(mappingTable ? { overrides: mappingTable } : {}),
-        });
-        const skipNote =
-          (finalized.skippedOnDisk.length > 0
-            ? ` / 已在库跳过 ${finalized.skippedOnDisk.length} 集`
-            : "") +
-          (finalized.skippedNotNeeded.length > 0
-            ? ` / 非缺集跳过 ${finalized.skippedNotNeeded.length} 件`
-            : "");
-        const organizeDetail = `归位到 Season 目录${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}${finalized.discarded.length > 0 ? `,清理 ${finalized.discarded.length} 个多余文件` : ""}${skipNote}`;
-        stepLog(sandbox, target.title, "归位", organizeDetail);
-        const renameRows = finalized.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
-        emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, {
-          ok: true,
-          files: pushWithinBudget<string>([], renameRows, 1300),
-        });
-        const doneDetail = `已完成:${landingDigest.coveredCodes.join(",") || "-"} 已入库,仍有 ${landingDigest.missingCodes.length} 集未拿全`;
-        stepLog(sandbox, target.title, "结论", doneDetail);
-        emitStep(onProgress, "finish", "finalize", doneDetail);
-      } catch (error) {
-        try {
-          await sandbox.discardStaging();
-        } catch {
-          // already empty.
-        }
-        const organizeFailDetail = error instanceof Error ? error.message : String(error);
-        stepLog(sandbox, target.title, "归位失败", organizeFailDetail, "error");
-        emitStep(onProgress, "finalizeLanding", "organize", organizeFailDetail, { ok: false });
-        const doneDetail = `失败(归位异常:${organizeFailDetail})`;
-        stepLog(sandbox, target.title, "结论", doneDetail);
-        emitStep(onProgress, "reportNoCoverage", "finalize", doneDetail);
-        return { verdict: "abandon", done: await concludeUncovered(sandbox, {
-          text: `fast path 归位失败:${organizeFailDetail}`,
-          steps: attempted.size,
-          escalated,
-          reason: organizeFailDetail,
-        }), next: null, escalated, deadRetries };
-      }
-      // 部分入库:保留已识别集,剩余缺集结论如实报告(不伪造全覆盖)。
-      return { verdict: "clean", done: {
-        text: `部分入库:${landingDigest.coveredCodes.join(",") || "-"}`,
-        steps: attempted.size,
-        coverage: await sandbox.finish(),
-        escalated,
-      }, next: null, escalated, deadRetries };
+    // §43(2026-09-06 用户拍板):**落盘必须全量对齐 need**——没拿全就不落盘。
+    // 此前(issue #44 同轮延伸)部分覆盖会 finalize 保住已识别集并收尾,与「全量对齐才算
+    // 完成」拧巴:落库/标记即真入库,半入库会让 run 以「已完成」结束却仍缺集。现在统一为
+    // 「没拿全就不落盘」:清空暂存 → 换下一个候选(primary 试穷后落兜底池别名重搜),直到
+    // 候选/预算耗尽才诚实报告未覆盖,交给下次巡检。issue #39 的「附件/junk 不否决整包」
+    // 语义不变(附件仍只进 junkSignals、不参与集号覆盖)。部分覆盖到底要不要为少数缺集
+    // 重复转存大包,留待后续讨论,见 FORK-CHANGES §43。
+    const leftover = await sandbox.inspectStaging();
+    if (leftover.length > 0) {
+      await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
     }
-    // 零覆盖:确实没拿到任何有效集 → 清空暂存换候选(原行为)。
-    {
-      const leftover = await sandbox.inspectStaging();
-      if (leftover.length > 0) {
-        await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
-      }
-      const next = nextCandidate(grading, tried);
-      const retryDetail = `${mappedByAI ? "AI 识别后仍没拿全缺集" : "这轮转存没拿到需要的集"}:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
-      stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size, ...(mappedByAI ? { aiUsed: true } : { aiUsed: false }) });
-      return { verdict: "retry_other", done: null, next, escalated, deadRetries };
-    }
+    const next = nextCandidate(grading, tried);
+    const coveredCount = landingDigest.coveredCodes.length;
+    // 人话:这轮认出多少 / 缺多少 / 为什么不落盘;集号明细进 args(前端展开可见)。
+    const retryDetail = `${mappedByAI ? "AI 补认" : "代码识别"}只认出 ${coveredCount}/${needCodes.length} 集,未全量对齐就不落盘:清掉暂存,换一条候选${next ? "" : "(本池没有可换的)"}`;
+    stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
+    emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, {
+      round: attempted.size,
+      ...(mappedByAI ? { aiUsed: true } : { aiUsed: false }),
+      covered: compactCodeList(landingDigest.coveredCodes),
+      missing: compactCodeList(landingDigest.missingCodes),
+    });
+    return { verdict: "retry_other", done: null, next, escalated, deadRetries };
 
 }

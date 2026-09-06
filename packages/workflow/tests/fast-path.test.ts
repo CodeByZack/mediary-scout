@@ -308,11 +308,12 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([]);
   });
 
-  it("issue #44 用户拍板: 部分覆盖(E01+E02) + 花絮附件 → 升 AI 集数映射,保留已识别、E03 仍缺", async () => {
+  it("§43 用户拍板: 部分覆盖不落盘——AI 补不全(认出 E01+E02,缺 E03)时清包换候选,不伪造半入库", async () => {
     // need=[E01,E02,E03],包=E01+E02+幕后花絮(部分覆盖 + 轻微附件)。
-    // issue #39:花絮不计集号、不否决整包;issue #44:代码没 cover 全部缺集 → 不再零 AI 收尾,
-    // 而是把包里所有正片交给 AI 集数映射。模型映射 E01/E02(与代码一致),包内无 E03 → 映射后
-    // 仍未全覆盖 → 保留 E01+E02 入库、E03 仍缺,escalated=true。
+    // issue #39:花絮不计集号、不否决整包;代码没全量 cover 缺集 → 把包里所有正片交 AI 映射。
+    // §43(2026-09-06 用户拍板):AI 补不全(包内确实没有 E03)→ **不落盘**——清空暂存换候选,
+    // primary 试穷后落兜底池别名重搜,直到候选/预算耗尽才诚实报未覆盖。此前(issue #44 同轮
+    // 延伸)会保留 E01+E02 入库 + E03 留待巡检,与「全量对齐才落盘」冲突,已按用户拍板改回。
     const { sandbox, s1, storage } = await createSetup({
       candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],
       packs: {
@@ -327,22 +328,28 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
       need: ["S01E01", "S01E02", "S01E03"],
     });
 
+    const organizers: string[] = [];
+    const mappingActivities: string[] = [];
     const result = await runFastPathAcquisition({
       sandbox,
       model: textModel('{"mapping":{"狂飙.S01E01.1080p.mkv":"S01E01","狂飙.S01E02.1080p.mkv":"S01E02"},"unmapped":[],"reasoning":"与代码一致"}'),
       target: { ...target, missingEpisodes: ["S01E01", "S01E02", "S01E03"] },
       isChineseNative: false,
+      onProgress: (e) => {
+        if (e.toolName === "finalizeLanding") organizers.push(e.activity ?? "");
+        if (e.toolName === "arbitrateEpisodeMapping") mappingActivities.push(e.activity ?? "");
+      },
     });
 
-    expect(result.escalated).toBe(true); // issue #44:部分覆盖升 AI 映射
-    // 部分覆盖(E01+E02 of E01-E03)→ 已入库 2 集,结账诚实报 E03 仍缺(不伪造全覆盖)。
+    expect(result.escalated).toBe(true); // §39:部分覆盖升 AI 映射,不是零 AI 收尾
+    // §43:未全量对齐 need → 不落盘。三集全缺,不伪造半入库。
     expect(result.coverage.coverageMet).toBe(false);
-    expect(result.coverage.missing).toEqual(["S01E03"]);
-    // 两集正片改名归位,花絮被丢弃(进 junkSignals → finalize 跳过 + wipe 清除)。
-    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
-      "狂飙.S01E01.mkv",
-      "狂飙.S01E02.mkv",
-    ]);
+    expect(result.coverage.missing).toEqual(["S01E01", "S01E02", "S01E03"]);
+    // 落盘一步都没做(finalizeLanding 未 emit),Season 目录保持空。
+    expect(organizers).toHaveLength(0);
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([]);
+    // 仲裁行如实说明「认出 2/3 集,未全量对齐就不落盘」(不再报「已入库」)。
+    expect(mappingActivities.join("\n")).toContain("只认出 2/3 集,未全量对齐就不落盘");
   });
 
   it("issue #29 八轮拍板: AI 映射覆盖缺集后直接收尾(无第二次诊断仲裁)——fansub 包保住映射集 (S03,原 2026-08-21 bugfix)", async () => {
