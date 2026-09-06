@@ -112,6 +112,11 @@ export async function tryEpisodeMapping(options: {
     airRanges.length > 0
       ? { min: 1, max: Math.max(...airRanges) }
       : computeKnownEpisodeRange(options.needCodes);
+  // §42(2026-09-06 用户实测反馈):AI 调用通常耗时数十秒且期间零推送,活动页的 live
+  // frontier 会停在上一条「代码识别」上,观感像卡死。发起前先发一条「进行中」心跳,
+  // 让活动页明确显示在等 AI;紧随其后的结果 emit 会把这条覆盖为 ✅(trace sink 串行
+  // 追加,序号不乱)。toolName/phase 与结果 emit 一致 → UI 的 AI 徽章与轮次分组不变。
+  emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", "AI 正在识别集数,可能需数十秒…");
   const arbitration = await arbitrateEpisodeMapping({
     model,
     unparsedFiles: allFiles,

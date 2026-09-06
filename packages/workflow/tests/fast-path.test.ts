@@ -449,6 +449,10 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     expect(result.coverage.obtained).toContain("S01E19");
     // AI 映射确实被触发(代码解析未覆盖 need)。
     expect(seen.length).toBeGreaterThan(0);
+    // §42:AI 调用前必须先发「进行中」心跳——否则活动页 live frontier 停在上一条
+    // 「代码识别」上,观感像卡死。心跳严格在结果 emit 之前(trace sink 串行追加)。
+    expect(seen[0]).toBe("AI 正在识别集数,可能需数十秒…");
+    expect(seen.length).toBeGreaterThanOrEqual(2);
   });
   it("2026-08-31 假集号防线:AI 把「第4期上」映射成 S02E19(期号不符)→ 拒绝,不假入库", async () => {
     // 地球超新鲜 s2:TMDB E19=Episode 10 (Part 1)。包里正片只到第4期(第4期上/下),

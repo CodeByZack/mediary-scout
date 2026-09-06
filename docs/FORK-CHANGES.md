@@ -36,27 +36,38 @@
 | 2026-09-04 | fix | **PR #42 TV 脏包判定收紧**(issue #39):附件(花絮/预告/sample/广告)一律不判脏、只进 junkSignals 待 finalize 丢弃,集数覆盖 need 即收尾(用户拍板不区分严重/轻微);JUNK 正则 ost/mv/making 加分隔符守卫(修 Lost/Ghost 误报);映射输入减 junkSignals(消词表漂移) |
 | 2026-09-04 | fix | **issue #39 后续:passes 与 isDirtyPack 解耦**——passes 只看覆盖率(集号覆盖 need 即收尾),不再被 isDirtyPack 卡住;isDirtyPack 从 TV StagingDigest 接口移除(仅剩装饰性日志文案,两条分支下游行为完全一样);tryEpisodeMapping 返回简化为 passed / no / failed(删除 unmapped-but-clean);landing 主流程删除 dead missingCodes.length === 0 分支 |
 | 2026-09-06 | fix | **§41 暂存列表分页不稳**(issue #44,地球超新鲜 S02 f9a77b99 案):夸克 `file/sort` 按 `file_type,updated_at` 排序分页、批量转存同秒时间戳致分页边界重叠/漏文件 → 同一 `listTree(staging)` 两次调用结果不同,AI 认全 20 集却在归位守卫误报「不在暂存」整包清空;`_sort` 加唯一 tie-breaker `file_name:asc` 使分页稳定,`listAllItems`/`listAllShareDetail` 按 fid 去重取到「无新增页」为止;`moveToSeason` 严格守卫保持不变(用户拍板:id 对不上必是上游 bug,应大声报出) |
-| 2026-09-06 | 待办 | **§42 AI 调用期间 UI 无反馈**(仅记录,未动工):fast path 的 AI 集数映射调用耗时数十秒但期间零推送,UI 停在上一条 `stagingDigest`(纯代码、毫秒级)步骤上,观感像「卡在代码识别很久」 |
+| 2026-09-06 | fix | **§42 AI 调用期间 UI 无反馈**(用户实测反馈):fast path 的 AI 调用(选片/诊断/集数映射)耗时数十秒但期间零推送,UI 停在上一条 `stagingDigest`(纯代码、毫秒级)步骤上,观感像「卡在代码识别很久」;修法=每个 AI 调用**发起前**发一条「AI …进行中」心跳事件,复用活动页对 running 状态最后一步的 ⏳ 渲染(零 UI 改动),结果 emit 紧随其后自然把它覆盖为 ✅ |
 
 ---
 
 ## 详细记录
 
-### 42. 已知问题(仅记录,未动工)——AI 调用期间 UI 无反馈,观感像卡在「代码识别」(2026-09-06 用户实测反馈)
+### 42. AI 调用期间 UI 无反馈——观感卡在「代码识别」(2026-09-06 用户实测反馈,已修)
 
 **现象**:每次 run 感觉总卡在「代码识别」那一步很久,期间 UI 上没有任何说明。
 
 **定位**:`stagingDigest`(代码识别)本身是纯代码判定、毫秒级;真正的等待是紧随其后的
 **AI 集数映射调用**(`arbitrateEpisodeMapping`,arbitrator.ts 单次 deepseek-v4-flash 请求,
 通常数十秒)。该调用期间**没有 emit 任何步骤/进度事件**,UI 只能停在最后一条 stagingDigest
-步骤上,观感即「卡在代码识别很久」。
+步骤上,观感即「卡在代码识别很久」。run e668ffa5(地球超新鲜 S02)三个转存候选中,第 2、3
+轮 digest 之后各有一次 AI 集数映射,期间无任何中间反馈。
 
-**证据**:run e668ffa5(地球超新鲜 S02)三个转存候选中,第 2、3 轮 digest 之后各有一次
-AI 集数映射,期间无任何中间反馈。
+**修法(复用现成的 running 渲染,零 UI 改动)**:活动页/通知页把 **running 状态下的最后一条
+步骤**渲染成 ⏳(`activity-view.ts inferStepStatuses`),所以只需在每个 AI 调用**发起前**发一条
+「进行中」心跳事件;调用结束后紧随其后的结果 emit 自然把这条覆盖为 ✅(`agent-trace-sink` 的
+append 串行链保证序号不乱、心跳不会落到结果之后)。toolName/phase 与结果 emit 一致 → UI 的
+AI 徽章(`stepUsedAI`)与轮次卡片分组(`groupStepsIntoRounds`)完全不变。
 
-**待实施(先记录,未动工)**:发起 AI 调用前 emit 一条 running 状态步骤(如「AI 集数映射
-进行中,可能需数十秒…」),或给 arbitrate 调用链加 onProgress 回调。落点:
-`consumption/fast-path/landing.ts` 的 `tryEpisodeMapping` 调用点 + 对应 UI 步骤渲染。
+- `landing.ts tryEpisodeMapping`:`arbitrateEpisodeMapping` 前发「AI 正在识别集数,可能需数十秒…」
+- `tv.ts runTvCandidatePhase`:`arbitrateSelection` 前发「AI 正在挑资源,可能需数十秒…」
+- `movie.ts runMovieCandidatePhase`:选片仲裁、诊断仲裁各发一条
+
+**有意留白**:`finalizeLanding`(改名+归位+mark,大包可能数十秒到数分钟)同样是静默期,本轮
+按用户反馈只修 AI 段;要用同一手法补上即可(landing 3 个调用点 + movie 1 处)。
+
+**测试**:fast-path.test.ts 的「第N期」重映射用例加断言——`arbitrateEpisodeMapping` 事件里
+第一条 activity 必须是心跳文案、且至少 2 条(心跳+结果)。fast-path(36)+ movie-fast-path(27)
+全绿;workflow 包 tsc 零错误。
 
 ### 31. TV 脏包判定收紧——附件不否决整包,集数满足即收尾（issue #39）
 

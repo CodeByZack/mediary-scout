@@ -283,6 +283,8 @@ async function runMovieCandidatePhase(
     emitStep(onProgress, "pickCandidate", "pick", pickDetail);
   } else {
     escalated = true;
+    // §42:同上——电影选片仲裁期间零推送,先发「进行中」。
+    emitStep(onProgress, "arbitrateSelection", "pick", "AI 正在挑资源,可能需数十秒…");
     const arbitration = await arbitrateMovieSelection({
       model,
       summary: summarizeGrading(grading),
@@ -549,6 +551,8 @@ async function runMovieCandidatePhase(
     }
     // 代码判不了 → 诊断仲裁(AI)。
     escalated = true;
+    // §42:同上——电影诊断仲裁期间零推送,先发「进行中」。
+    emitStep(onProgress, "arbitrateDiagnosis", "verify", "AI 正在诊断落盘,可能需数十秒…");
     const diagnosis = await arbitrateMovieDiagnosis({
       model,
       summary: digest.summary,

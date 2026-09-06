@@ -117,6 +117,8 @@ async function runTvCandidatePhase(
     });
   } else {
     escalated = true;
+    // §42:同 landing 的 AI 心跳——选片仲裁期间零推送,先发「进行中」让活动页不空转。
+    emitStep(onProgress, "arbitrateSelection", "pick", "AI 正在挑资源,可能需数十秒…");
     const arbitration = await arbitrateSelection({
       model,
       summary: summarizeGrading(grading),
