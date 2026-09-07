@@ -6,8 +6,8 @@ import { useRouter } from "next/navigation";
 import { Check, LoaderCircle, Plus, RefreshCcw } from "lucide-react";
 import { resetRulePatternsAction, saveRulePatternsAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
+import { BUILTIN_RULE_IDS } from "@media-track/workflow/ruleset";
 import {
-  BUILTIN_ID_SET,
   builtinSlotsFor,
   filterDisabledBuiltins,
   formatRuleBlocks,
@@ -102,7 +102,7 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
       setTimeout(() => setResult(null), 3000);
       // 空表 = ruleset.loadRulePatterns 回退内置 → 文本回到「全内置留空」形态(自定义一并清空)。
       const builtinEmpties = initial
-        .filter((row) => BUILTIN_ID_SET.has(row.ruleId))
+        .filter((row) => BUILTIN_RULE_IDS.has(row.ruleId))
         .map((row) => ({ ...row, expression: "" }));
       setBlocks(formatRuleBlocks(builtinEmpties));
       router.refresh();

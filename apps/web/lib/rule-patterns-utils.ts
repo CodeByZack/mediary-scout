@@ -2,6 +2,7 @@
 
 // 子路径导入(客户端表单也用它):ruleset 零 node 依赖,避免 barrel→sqlite→node:module 进客户端 chunk。
 import {
+  BUILTIN_RULE_IDS,
   BUILTIN_RULE_PATTERNS,
   validateRuleExpression,
   type RulePattern,
@@ -18,8 +19,6 @@ export type RulePatternDraft = {
   isDefault?: boolean;
 };
 
-/** 六大内置槽位 id（与 ruleset.ts BUILTIN_RULE_PATTERNS 同源）。 */
-export const BUILTIN_ID_SET = new Set<string>(BUILTIN_RULE_PATTERNS.map((p) => p.ruleId));
 
 /**
  * 单行校验。内置规则留空 = 恢复内置默认（允许，内置分支仍生效）；其余空表达式 / 捕获组不足 / 非法正则 → 错误文案。
@@ -27,7 +26,7 @@ export const BUILTIN_ID_SET = new Set<string>(BUILTIN_RULE_PATTERNS.map((p) => p
  */
 export function ruleRowError(row: RulePatternDraft): string | null {
   const expression = row.expression.trim();
-  if (expression.length === 0 && BUILTIN_ID_SET.has(row.ruleId)) return null;
+  if (expression.length === 0 && BUILTIN_RULE_IDS.has(row.ruleId)) return null;
   if (expression.length === 0) return "正则不能为空";
   return validateRuleExpression(row.role as RuleRole, expression);
 }
@@ -35,7 +34,7 @@ export function ruleRowError(row: RulePatternDraft): string | null {
 /** 保存时剔除留空的内置行（= 恢复内置默认）。注：缺失行在采集时经 ?? 回退内置正则仍生效，
  *  当前版本不支持真正禁用内置分支（Phase 3 复核 S1）。 */
 export function filterDisabledBuiltins(rows: RulePatternDraft[]): RulePatternDraft[] {
-  return rows.filter((row) => !(BUILTIN_ID_SET.has(row.ruleId) && row.expression.trim().length === 0));
+  return rows.filter((row) => !(BUILTIN_RULE_IDS.has(row.ruleId) && row.expression.trim().length === 0));
 }
 
 
@@ -171,7 +170,7 @@ export function parseRuleBlock(text: string, role: BlockRole, customBase = 0): {
  * 非内置槽位 / 空表达式 / 与自身默认一致 → 不提示。
  */
 function builtinShiftHint(row: RulePatternDraft): string | null {
-  if (!BUILTIN_ID_SET.has(row.ruleId) || row.expression.trim().length === 0) return null;
+  if (!BUILTIN_RULE_IDS.has(row.ruleId) || row.expression.trim().length === 0) return null;
   const own = BUILTIN_RULE_PATTERNS.find((p) => p.ruleId === row.ruleId);
   if (own?.expression.trim() === row.expression.trim()) return null;
   const other = BUILTIN_RULE_PATTERNS.find(
@@ -202,7 +201,7 @@ export function formatRuleBlocks(rows: RulePatternDraft[]): { season: string; ep
         },
     );
     const customRows = rows
-      .filter((r) => r.role === role && !BUILTIN_ID_SET.has(r.ruleId))
+      .filter((r) => r.role === role && !BUILTIN_RULE_IDS.has(r.ruleId))
       .sort((a, b) => a.sortOrder - b.sortOrder);
     const lines = [...builtinRows.map(rowToBlockLine), ...customRows.map(rowToBlockLine)];
     out[role === "season-episode" ? "season" : "episode"] = lines.join("\n");
@@ -216,7 +215,7 @@ export function parseRuleBlocks(seasonText: string, episodeText: string): {
   errors: { season: Record<string, string>; episode: Record<string, string> };
 } {
   const season = parseRuleBlock(seasonText, "season-episode", 0);
-  const seasonCustoms = season.rows.filter((r) => !BUILTIN_ID_SET.has(r.ruleId)).length;
+  const seasonCustoms = season.rows.filter((r) => !BUILTIN_RULE_IDS.has(r.ruleId)).length;
   const episode = parseRuleBlock(episodeText, "episode-only", seasonCustoms);
   return {
     rows: [...season.rows, ...episode.rows],

@@ -523,8 +523,9 @@ export async function saveQualityPreferenceAction(
   }
 }
 
-/** 类型定义与内置槽位判定在 rule-patterns-utils(与客户端表单共用,避免循环导入)。 */
-import { BUILTIN_ID_SET, type RulePatternDraft } from "../lib/rule-patterns-utils";
+/** RulePatternDraft 与客户端表单共用(rule-patterns-utils),内置槽位 id 由 ruleset 单点定义。 */
+import { type RulePatternDraft } from "../lib/rule-patterns-utils";
+import { BUILTIN_RULE_IDS } from "@media-track/workflow/ruleset";
 
 export async function saveRulePatternsAction(
   patterns: RulePatternDraft[],
@@ -548,7 +549,7 @@ export async function saveRulePatternsAction(
       isDefault: boolean;
     }> = [];
     // M1 防御:留空的内置槽位 = 停用(非 UI 直调也剔除,与客户端 filterDisabledBuiltins 一致)。
-    const effective = patterns.filter((p) => !(BUILTIN_ID_SET.has(p.ruleId) && p.expression.trim().length === 0));
+    const effective = patterns.filter((p) => !(BUILTIN_RULE_IDS.has(p.ruleId) && p.expression.trim().length === 0));
     for (const draft of effective) {
       const role = draft.role as RR;
       const error = validateRuleExpression(role, draft.expression);

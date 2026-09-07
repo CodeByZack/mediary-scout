@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { BUILTIN_RULE_IDS } from "@media-track/workflow/ruleset";
 import {
-  BUILTIN_ID_SET,
   filterDisabledBuiltins,
   formatRuleBlocks,
   parseRuleBlock,
@@ -112,7 +112,7 @@ describe("两区块 ↔ 规则行(issue #44 UI 分组)", () => {
     expect(Object.values(errors).some((m) => m.includes("1×01 / 1x01") && m.includes("槽位左移错位"))).toBe(true);
     expect(Object.values(errors).some((m) => m.includes("捕获组不足"))).toBe(true);
     expect(rows.map((r) => r.ruleId)).toEqual(["sxxexx", "variant", "cross"]);
-    expect(rows.every((r) => BUILTIN_ID_SET.has(r.ruleId))).toBe(true);
+    expect(rows.every((r) => BUILTIN_RULE_IDS.has(r.ruleId))).toBe(true);
   });
 
   it("parseRuleBlock:自定义行(内置之后)内容等于其它内置默认 → 不误报错位", () => {
