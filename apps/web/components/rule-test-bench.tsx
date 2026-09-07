@@ -86,12 +86,12 @@ export function RuleTestBench() {
           ) : result.code === null ? (
             <span>
               未解析出集数（<span style={{ color: "#b45309" }}>不认这个文件为某集</span>
-              {result.matched ? `　·　命中槽位：${result.matched}` : ""}）
+              {result.matched ? `　·　命中：${result.matched}` : ""}）
             </span>
           ) : (
             <span>
               解析结果：<strong style={{ fontFamily: "ui-monospace, monospace" }}>{result.code}</strong>
-              {result.matched ? `　·　命中槽位：${result.matched}` : ""}
+              {result.matched ? `　·　命中：${result.matched}` : ""}
             </span>
           )}
         </div>

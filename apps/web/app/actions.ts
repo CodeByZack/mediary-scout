@@ -703,11 +703,25 @@ export async function testEpisodeRuleAction(input: {
       ["digits", isolate({ digits: slot("digits") })],
       ...(compiled.custom ?? []).map((c, i) => [`自定义 ${i + 1}`, isolate({ custom: [c] })] as [string, Parameters<typeof episodeCodeFromFileName>[3]]),
     ];
+    // 命中显示口径与表单一致:类型(带季号/仅集号)· 组内序号(内置 1..3、自定义 自N)· 正则字符串。
+    const ROLE_LABEL: Record<string, string> = { "season-episode": "带季号", "episode-only": "仅集号" };
+    const builtinById = new Map(BUILTIN_RULE_PATTERNS.map((p) => [p.ruleId, p] as const));
+    const customs = patterns.filter((p) => !builtinById.has(p.ruleId));
+    const builtinSerial = (b: (typeof BUILTIN_RULE_PATTERNS)[number]) =>
+      String(BUILTIN_RULE_PATTERNS.filter((p) => p.role === b.role).indexOf(b) + 1);
+    const customSerial = (c: (typeof BUILTIN_RULE_PATTERNS)[number]) =>
+      "自" + (customs.filter((x) => x.role === c.role).indexOf(c) + 1);
     let matched: string | null = null;
     for (const [label, slotRules] of probe) {
       const slotCode = episodeCodeFromFileName(fileName, seasons, undefined, slotRules);
       if (slotCode !== null) {
-        matched = label;
+        const builtin = /^自定义 \d+$/.test(label) ? null : builtinById.get(label);
+        if (builtin) {
+          matched = `${ROLE_LABEL[builtin.role] ?? builtin.role} · ${builtinSerial(builtin)} · ${builtin.expression}`;
+        } else {
+          const c = customs[Number(label.slice("自定义 ".length)) - 1];
+          matched = c ? `${ROLE_LABEL[c.role] ?? c.role} · ${customSerial(c)} · ${c.expression}` : label;
+        }
         break;
       }
     }

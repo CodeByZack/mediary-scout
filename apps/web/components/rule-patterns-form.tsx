@@ -48,9 +48,10 @@ interface EditorState {
 
 export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
   const [customs, setCustoms] = useState<RulePatternDraft[]>(initial);
+  // 默认折叠(2026-09-07 用户拍板),点标题行展开;+ 添加 点击会自动展开该组。
   const [expanded, setExpanded] = useState<Record<RuleRole, boolean>>({
-    "season-episode": true,
-    "episode-only": true,
+    "season-episode": false,
+    "episode-only": false,
   });
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
@@ -218,7 +219,7 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
       </div>
 
       {ROLES.map(({ role, title, note }) => {
-        const isOpen = expanded[role] ?? true;
+        const isOpen = expanded[role] ?? false;
         const slots = BUILTIN_RULE_PATTERNS.filter((p) => p.role === role);
         const groupCustoms = customs.filter((c) => c.role === role);
         const editingThisGroup = editor?.role === role;
@@ -241,7 +242,7 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
                   e.stopPropagation();
                   openAdd(role);
                 }}
-                style={{ marginLeft: "auto", fontSize: 12.5, color: "#2563eb", cursor: "pointer", userSelect: "none" }}
+                style={{ marginLeft: "auto", fontSize: 12.5, color: "inherit", cursor: "pointer", userSelect: "none" }}
               >
                 + 添加
               </span>

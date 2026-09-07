@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeAll, beforeEach, afterEach } from "vitest";
 import { DemoReadOnlyError } from "../lib/demo-mode";
+import { BUILTIN_RULE_PATTERNS } from "@media-track/workflow/ruleset";
 
 // 用真实 :memory: 库跑 action 级验证(M1 过滤/整批失败/自定义保存/恢复默认)。
 process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
@@ -131,16 +132,22 @@ describe("解析测试台 testEpisodeRuleAction (issue #44 Phase 3)", () => {
     await getWorkflowRepository().replaceRulePatterns([]);
   });
 
+  // 命中显示口径与 actions.ts 里的 testEpisodeRuleAction 一致:
+  // 类型(带季号/仅集号)· 组内序号(内置 1..3、自定义 自N)· 正则字符串。
+  const builtinExpr = (ruleId: string) =>
+    BUILTIN_RULE_PATTERNS.find((p) => p.ruleId === ruleId)?.expression ?? ruleId;
+  const HIT = { sxxexx: "sxxexx", variant: "variant", chinese: "chinese" } as const;
+
   it("内置规则:标准 SxxExx 命中 sxxexx 槽位", async () => {
     const r = await actions.testEpisodeRuleAction({ fileName: "狂飙.S01E01.1080p.mkv", multiSeason: false });
     expect(r.code).toBe("S01E01");
-    expect(r.matched).toBe("sxxexx");
+    expect(r.matched).toBe(`带季号 · 1 · ${builtinExpr(HIT.sxxexx)}`);
   });
 
   it("内置规则:第N集单季命中 chinese,多季禁用无季规则 → null", async () => {
     const single = await actions.testEpisodeRuleAction({ fileName: "第3集.mkv", multiSeason: false });
     expect(single.code).toBe("S01E03");
-    expect(single.matched).toBe("chinese");
+    expect(single.matched).toBe(`仅集号 · 2 · ${builtinExpr(HIT.chinese)}`);
     const multi = await actions.testEpisodeRuleAction({ fileName: "第3集.mkv", multiSeason: true });
     expect(multi.code).toBeNull();
     expect(multi.matched).toBeNull();
@@ -149,23 +156,24 @@ describe("解析测试台 testEpisodeRuleAction (issue #44 Phase 3)", () => {
   it("已保存自定义规则参与试跑:自定义季集规则参与解析", async () => {
     // 自定义规则对**未剥扩展名**的原始文件名执行(与内置 digits 自带剥壳不同,见
     // episode-code.ts 自定义循环)——用内置都不认的 S01_0012 写法验证自定义命中。
+    const expr = String.raw`[Ss](\d{1,2})_(\d{1,4})`;
     await actions.saveRulePatternsAction([
-      { ruleId: "custom-underscore", role: "season-episode", expression: "[Ss](\\d{1,2})_(\\d{1,4})", label: "Sxx_Exx", sortOrder: 7, isDefault: false },
+      { ruleId: "custom-underscore", role: "season-episode", expression: expr, label: "Sxx_Exx", sortOrder: 7, isDefault: false },
     ]);
     const r = await actions.testEpisodeRuleAction({ fileName: "S01_0012.mkv", multiSeason: false });
     expect(r.code).toBe("S01E12");
-    expect(r.matched).toBe("自定义 1");
+    expect(r.matched).toBe(`带季号 · 自1 · ${expr}`);
   });
 it("内置只读语义:不保存任何规则时六条内置全部参与试跑", async () => {
     const sxx = await actions.testEpisodeRuleAction({ fileName: "狂飙.S01E01.1080p.mkv", multiSeason: false });
     expect(sxx.code).toBe("S01E01");
-    expect(sxx.matched).toBe("sxxexx");
+    expect(sxx.matched).toBe(`带季号 · 1 · ${builtinExpr(HIT.sxxexx)}`);
     const variant = await actions.testEpisodeRuleAction({ fileName: "S01 E01.mkv", multiSeason: false });
     expect(variant.code).toBe("S01E01");
-    expect(variant.matched).toBe("variant");
+    expect(variant.matched).toBe(`带季号 · 2 · ${builtinExpr(HIT.variant)}`);
     const chinese = await actions.testEpisodeRuleAction({ fileName: "第3集.mkv", multiSeason: false });
     expect(chinese.code).toBe("S01E03");
-    expect(chinese.matched).toBe("chinese");
+    expect(chinese.matched).toBe(`仅集号 · 2 · ${builtinExpr(HIT.chinese)}`);
   });
 
   it("空文件名 → 提示", async () => {
