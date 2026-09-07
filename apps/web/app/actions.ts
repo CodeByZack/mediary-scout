@@ -526,6 +526,7 @@ export async function saveQualityPreferenceAction(
 /** RulePatternDraft 与客户端表单共用(rule-patterns-utils),内置槽位 id 由 ruleset 单点定义。 */
 import { type RulePatternDraft } from "../lib/rule-patterns-utils";
 import { BUILTIN_RULE_IDS } from "@media-track/workflow/ruleset";
+import type { EpisodeParseRules } from "@media-track/workflow";
 
 export async function saveRulePatternsAction(
   patterns: RulePatternDraft[],
@@ -682,14 +683,25 @@ export async function testEpisodeRuleAction(input: {
     const NEVER = /[^\s\S]/; // 永不匹配(type 兜底;内置 6 槽位经 builtinRules 全有值)
     const slot = (n: "sxxexx" | "variant" | "epOnly" | "cross" | "chinese" | "digits") =>
       compiled[n] ?? builtinRules[n] ?? NEVER;
+    // 只开一个槽位、其余全填 NEVER,保证命中来自且仅来自被探槽位。
+    const isolate = (active: EpisodeParseRules): EpisodeParseRules => ({
+      sxxexx: NEVER,
+      variant: NEVER,
+      epOnly: NEVER,
+      cross: NEVER,
+      chinese: NEVER,
+      digits: NEVER,
+      custom: [],
+      ...active,
+    });
     const probe: Array<[string, Parameters<typeof episodeCodeFromFileName>[3]]> = [
-      ["sxxexx", { sxxexx: slot("sxxexx"), variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
-      ["variant", { sxxexx: NEVER, variant: slot("variant"), epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
-      ["ep-only", { sxxexx: NEVER, variant: NEVER, epOnly: slot("epOnly"), cross: NEVER, chinese: NEVER, digits: NEVER, custom: [] }],
-      ["cross", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: slot("cross"), chinese: NEVER, digits: NEVER, custom: [] }],
-      ["chinese", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: slot("chinese"), digits: NEVER, custom: [] }],
-      ["digits", { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: slot("digits"), custom: [] }],
-      ...(compiled.custom ?? []).map((c, i) => [`自定义 ${i + 1}`, { sxxexx: NEVER, variant: NEVER, epOnly: NEVER, cross: NEVER, chinese: NEVER, digits: NEVER, custom: [c] }] as [string, Parameters<typeof episodeCodeFromFileName>[3]]),
+      ["sxxexx", isolate({ sxxexx: slot("sxxexx") })],
+      ["variant", isolate({ variant: slot("variant") })],
+      ["ep-only", isolate({ epOnly: slot("epOnly") })],
+      ["cross", isolate({ cross: slot("cross") })],
+      ["chinese", isolate({ chinese: slot("chinese") })],
+      ["digits", isolate({ digits: slot("digits") })],
+      ...(compiled.custom ?? []).map((c, i) => [`自定义 ${i + 1}`, isolate({ custom: [c] })] as [string, Parameters<typeof episodeCodeFromFileName>[3]]),
     ];
     let matched: string | null = null;
     for (const [label, slotRules] of probe) {

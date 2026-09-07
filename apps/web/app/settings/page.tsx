@@ -277,18 +277,13 @@ async function QualityPreferenceSection() {
 async function RecognitionRulesSection() {
   await connection();
   const repository = getWorkflowRepository();
-  const { loadRulePatterns, loadPromptOverrides, ARBITRATION_KINDS, BUILTIN_RULE_PATTERNS, PROMPT_TEMPLATES } = await import("@media-track/workflow");
+  const { loadRulePatterns, loadPromptOverrides, ARBITRATION_KINDS, BUILTIN_RULE_PATTERNS, BUILTIN_RULE_IDS, PROMPT_TEMPLATES } = await import("@media-track/workflow");
   // 生效规则(空表 = 内置;损坏行自动回退内置)——与采集时 loadEpisodeRules 同一语义。
   // R1(Phase 1 复核):生效集 ∪ 缺失内置 —— 留空保存的内置槽位(恢复内置默认)刷新后
   // 仍可见,便于单独改回而不用整体「恢复默认」;缺失内置以空表达式占位(表单「留空=恢复内置」)。
   // 注:缺失槽位在采集时经 ?? 回退内置正则仍生效 —— 当前版本不支持真正禁用内置分支(Phase 3 复核 S1)。
   const effective = await loadRulePatterns(repository);
-  const effectiveByRuleId = new Map(
-    BUILTIN_RULE_PATTERNS.map((p) => p.ruleId).map((id) => [
-      id,
-      effective.find((p) => p.ruleId === id),
-    ]),
-  );
+  const effectiveByRuleId = new Map(effective.map((p) => [p.ruleId, p] as const));
   const initial = BUILTIN_RULE_PATTERNS.map((p) => {
     const present = effectiveByRuleId.get(p.ruleId);
     return {
@@ -301,7 +296,7 @@ async function RecognitionRulesSection() {
     };
   }).concat(
     effective
-      .filter((p) => !effectiveByRuleId.has(p.ruleId))
+      .filter((p) => !BUILTIN_RULE_IDS.has(p.ruleId))
       .map((p) => ({
         ruleId: p.ruleId,
         role: p.role,
