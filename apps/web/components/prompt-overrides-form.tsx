@@ -8,7 +8,7 @@ import { resetPromptOverridesAction, savePromptOverridesAction } from "../app/ac
 import { runAction } from "../lib/run-action";
 // 子路径导入:ruleset/prompt-templates 零 node 依赖,可安全进客户端 chunk(barrel 含 sqlite→node:module,Turbopack 会炸)。
 import { PROMPT_TEMPLATES } from "@media-track/workflow/prompt-templates";
-import { validatePromptBody } from "@media-track/workflow/ruleset";
+import { ARBITRATION_KINDS, validatePromptBody, type ArbitrationKind } from "@media-track/workflow/ruleset";
 
 /** 只读展示段(head / tail)的统一样式。 */
 const READONLY_PRE_STYLE: CSSProperties = {
@@ -27,13 +27,13 @@ function isBuiltinBody(kind: string, text: string): boolean {
   return text.trim() === (PROMPT_TEMPLATES[kind as keyof typeof PROMPT_TEMPLATES]?.body ?? "").trim();
 }
 
-/** 四种仲裁 kind 的展示名称(head/body/tail 取 PROMPT_TEMPLATES 真实文本,只读展示)。 */
-const KIND_META: Array<{ kind: string; name: string }> = [
-  { kind: "selection", name: "选片仲裁（剧集）" },
-  { kind: "episode-mapping", name: "集数映射仲裁（剧集）" },
-  { kind: "movie-selection", name: "选片仲裁（电影）" },
-  { kind: "movie-diagnosis", name: "落盘诊断仲裁（电影）" },
-];
+/** kind → 展示名称。遍历 ARBITRATION_KINDS 渲染卡片,所以新增 kind 不会静默不显示。 */
+const KIND_LABELS: Record<ArbitrationKind, string> = {
+  selection: "选片仲裁（剧集）",
+  "episode-mapping": "集数映射仲裁（剧集）",
+  "movie-selection": "选片仲裁（电影）",
+  "movie-diagnosis": "落盘诊断仲裁（电影）",
+};
 
 interface PromptDraft {
   arbitrationKind: string;
@@ -116,24 +116,22 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
     });
   }
 
-  const openKinds = Array.from(expanded);
-
   return (
     <div style={{ display: "grid", gap: 10, marginTop: 18 }}>
       <div style={{ fontSize: 13, color: "var(--text-secondary, #888)" }}>
         四段升级仲裁的系统提示词。展开卡片直接改「规则指令」中段（已预填内置正文）；角色定位与 JSON 输出契约固定不可改。清空输入框 = 恢复内置；有改动时保存是整段替换，不是追加。
       </div>
-      {KIND_META.map((meta) => {
-        const draft = drafts.find((d) => d.arbitrationKind === meta.kind) ?? {
-          arbitrationKind: meta.kind,
+      {ARBITRATION_KINDS.map((kind) => {
+        const draft = drafts.find((d) => d.arbitrationKind === kind) ?? {
+          arbitrationKind: kind,
           promptText: "",
         };
-        const template = PROMPT_TEMPLATES[meta.kind as keyof typeof PROMPT_TEMPLATES];
-        const error = errors[meta.kind];
-        const isOpen = expanded.has(meta.kind);
+        const template = PROMPT_TEMPLATES[kind];
+        const error = errors[kind];
+        const isOpen = expanded.has(kind);
         return (
           <div
-            key={meta.kind}
+            key={kind}
             style={{
               border: "1px solid rgba(127,127,127,.22)",
               borderRadius: 8,
@@ -141,7 +139,7 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
           >
             <button
               type="button"
-              onClick={() => toggle(meta.kind)}
+              onClick={() => toggle(kind)}
               aria-expanded={isOpen}
               style={{
                 display: "flex",
@@ -158,8 +156,8 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
               }}
             >
               {isOpen ? <ChevronDown size={15} aria-hidden /> : <ChevronRight size={15} aria-hidden />}
-              <strong>{meta.name}</strong>
-              {!isBuiltinBody(meta.kind, draft.promptText) ? (
+              <strong>{KIND_LABELS[kind]}</strong>
+              {!isBuiltinBody(kind, draft.promptText) ? (
                 <span style={{ fontSize: 12, color: "#2563eb", marginLeft: 4 }}>已覆盖</span>
               ) : null}
               {error ? <span style={{ fontSize: 12, color: "#dc2626", marginLeft: 4 }}>⚠ 校验未过</span> : null}
@@ -181,7 +179,7 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
                 </div>
                 <textarea
                   value={draft.promptText}
-                  onChange={(e) => setBody(meta.kind, e.target.value)}
+                  onChange={(e) => setBody(kind, e.target.value)}
                   rows={7}
                   spellCheck={false}
                   placeholder={"清空 = 恢复内置模板（head 与 JSON 契约自动环绕，不可改）"}
