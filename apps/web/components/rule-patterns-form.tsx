@@ -1,176 +1,183 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
-import type { CSSProperties } from "react";
-import { useRouter } from "next/navigation";
-import { Check, LoaderCircle, Plus, RefreshCcw } from "lucide-react";
+import { useState, useTransition } from "react";
+import { Check, LoaderCircle, Pencil, Plus, RefreshCcw, Trash2, X } from "lucide-react";
 import { resetRulePatternsAction, saveRulePatternsAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
-import { BUILTIN_RULE_IDS } from "@media-track/workflow/ruleset";
-import {
-  builtinSlotsFor,
-  filterDisabledBuiltins,
-  formatRuleBlocks,
-  parseRuleBlocks,
-  type RulePatternDraft,
-} from "../lib/rule-patterns-utils";
+import { BUILTIN_RULE_PATTERNS, type RuleRole } from "@media-track/workflow/ruleset";
+import { ruleRowError, type RulePatternDraft } from "../lib/rule-patterns-utils";
 
-/** issue #44 UI 重构:解析规则按 role 拆成两个区块(2026-09-07 用户拍板「(a) UI 分组」)。
- *  S 区块 = 文件名里带季号的写法,E 区块 = 只有集号的写法;区块内行序 = 优先级,
- *  前 N 行 = 该区块的内置槽位(留空 = 恢复内置)。行格式 S:/E: 前缀 + 正则。 */
+/**
+ * 正则区 UI(2026-09-07 用户拍板定稿):
+ * - 内置 6 条**只读**文字展示,按角色分两组「带季号 / 仅集号」,每组各自追加自定义;
+ * - [+ 添加正则] 点开才出现输入框;自定义每条独立 保存 / 编辑 / 删除(每条自己带保存);
+ * - 自定义排在各组内置之后,优先级低于内置(内置不认的写法才轮到自定义)。
+ */
 
-/** 图例里的匹配示例(等宽、弱化底色)——让用户一眼看出该槽位认哪种写法。 */
-const EXAMPLE_CODE_STYLE: CSSProperties = {
-  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  fontSize: 11.5,
-  padding: "0 4px",
-  borderRadius: 3,
-  background: "rgba(127,127,127,.12)",
-};
+const ROLES: Array<{ role: RuleRole; title: string; note: string }> = [
+  { role: "season-episode", title: "带季号", note: "文件名里同时带季号和集号,任何任务都认" },
+  { role: "episode-only", title: "仅集号", note: "文件名里只有集号,仅单季任务启用" },
+];
+
+/** 内置槽位总数 = 自定义 sortOrder 起点。 */
+const CUSTOM_ORDER_BASE = BUILTIN_RULE_PATTERNS.length;
+
+/** 下一个自定义 ruleId 序号(整表替换保存,删除释放的序号可复用,取当前最大 +1)。 */
+function nextCustomId(customs: RulePatternDraft[]): string {
+  let max = 0;
+  for (const c of customs) {
+    const m = /^custom-(\d+)$/.exec(c.ruleId);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return "custom-" + (max + 1);
+}
+
+/** 保存前按数组位置重排 sortOrder,保证显示顺序 == 采集优先级顺序。 */
+function indexSortOrder(customs: RulePatternDraft[]): RulePatternDraft[] {
+  return customs.map((c, i) => ({ ...c, sortOrder: CUSTOM_ORDER_BASE + i }));
+}
+
+interface EditorState {
+  role: RuleRole;
+  editingId: string | null; // null = 新增
+  expression: string;
+}
 
 export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
-  const router = useRouter();
+  const [customs, setCustoms] = useState<RulePatternDraft[]>(initial);
+  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [editorError, setEditorError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
-  const [blocks, setBlocks] = useState(() => formatRuleBlocks(initial));
-  const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
-  const [result, setResult] = useState<string | null>(null);
-  const seasonRef = useRef<HTMLTextAreaElement>(null);
-  const episodeRef = useRef<HTMLTextAreaElement>(null);
 
-  // 实时解析:分区块行错误(行号 → 文案)。只读,不触发重渲染循环。
-  const parsed = useMemo(() => parseRuleBlocks(blocks.season, blocks.episode), [blocks]);
-  const hasLineErrors = Object.keys(parsed.errors.season).length + Object.keys(parsed.errors.episode).length > 0;
-  const hasServerErrors = Object.keys(serverErrors).length > 0;
-
-  function setBlock(key: "season" | "episode", value: string) {
-    setBlocks((prev) => ({ ...prev, [key]: value }));
-    setServerErrors({});
+  function openAdd(role: RuleRole) {
+    setEditor({ role, editingId: null, expression: "" });
+    setEditorError(null);
   }
 
-  const addCustom = (key: "season" | "episode") => {
-    setServerErrors({});
-    setBlocks((prev) => {
-      const text = prev[key].replace(/\s+$/, "");
-      const prefix = key === "season" ? "S: " : "E: ";
-      return { ...prev, [key]: text.length > 0 ? text + "\n" + prefix : prefix };
-    });
-    requestAnimationFrame(() => {
-      const el = key === "season" ? seasonRef.current : episodeRef.current;
-      if (el) {
-        el.focus();
-        el.selectionStart = el.selectionEnd = el.value.length;
-      }
-    });
-  };
+  function openEdit(role: RuleRole, row: RulePatternDraft) {
+    setEditor({ role, editingId: row.ruleId, expression: row.expression });
+    setEditorError(null);
+  }
 
-  const handleSave = () => {
-    if (hasLineErrors) {
-      setResult("❌ 有行未通过校验,修正后再保存");
-      setTimeout(() => setResult(null), 3000);
-      return;
-    }
+  function closeEditor() {
+    setEditor(null);
+    setEditorError(null);
+  }
+
+  function flash(msg: string) {
+    setFeedback(msg);
+    setTimeout(() => setFeedback(null), 3000);
+  }
+
+  function persist(next: RulePatternDraft[], onSaved: () => void) {
     startTransition(async () => {
-      const payload = filterDisabledBuiltins(parsed.rows);
-      const r = await runAction(() => saveRulePatternsAction(payload), (msg) => {
-        setResult("❌ " + msg);
-        setTimeout(() => setResult(null), 3000);
-      });
+      const ordered = indexSortOrder(next);
+      const r = await runAction(() => saveRulePatternsAction(ordered), (msg) => flash("❌ " + msg));
       if (!r.ok) return;
-      const res = r.value;
-      if (!res.success) {
-        setServerErrors(res.errors ?? {});
-        setResult("❌ " + (res.message ?? "保存失败"));
-        setTimeout(() => setResult(null), 3000);
+      if (!r.value.success) {
+        flash("❌ " + (r.value.message ?? "保存失败"));
         return;
       }
-      setServerErrors({});
-      setResult("✅ 保存成功(下次采集任务即生效)");
-      setTimeout(() => setResult(null), 3000);
-      router.refresh();
+      setCustoms(ordered);
+      onSaved();
     });
-  };
+  }
 
-  const handleReset = () => {
+  function commit() {
+    if (!editor || isPending) return;
+    const expression = editor.expression.trim();
+    const err = ruleRowError({ ruleId: "custom-x", role: editor.role, expression, sortOrder: 0 });
+    if (err !== null) {
+      setEditorError(err);
+      return;
+    }
+    setEditorError(null);
+    const ok = () => {
+      setEditor(null);
+      flash("✅ 已保存(下次采集任务即生效)");
+    };
+    if (editor.editingId === null) {
+      const next = [
+        ...customs,
+        { ruleId: nextCustomId(customs), role: editor.role, expression, label: "自定义规则", sortOrder: 0, isDefault: false },
+      ];
+      persist(next, ok);
+    } else {
+      const next = customs.map((c) => (c.ruleId === editor.editingId ? { ...c, role: editor.role, expression } : c));
+      persist(next, ok);
+    }
+  }
+
+  function remove(row: RulePatternDraft) {
+    if (isPending) return;
+    const next = customs.filter((c) => c.ruleId !== row.ruleId);
+    persist(next, () => flash("✅ 已删除"));
+  }
+
+  function handleReset() {
+    if (isPending) return;
     startTransition(async () => {
-      const r = await runAction(() => resetRulePatternsAction(), (msg) => {
-        setResult("❌ " + msg);
-        setTimeout(() => setResult(null), 3000);
-      });
+      const r = await runAction(() => resetRulePatternsAction(), (msg) => flash("❌ " + msg));
       if (!r.ok) return;
-      setResult(r.value.success ? "✅ 已恢复默认规则" : "❌ " + (r.value.message ?? "恢复失败"));
-      setServerErrors({});
-      setTimeout(() => setResult(null), 3000);
-      // 空表 = ruleset.loadRulePatterns 回退内置 → 文本回到「全内置留空」形态(自定义一并清空)。
-      const builtinEmpties = initial
-        .filter((row) => BUILTIN_RULE_IDS.has(row.ruleId))
-        .map((row) => ({ ...row, expression: "" }));
-      setBlocks(formatRuleBlocks(builtinEmpties));
-      router.refresh();
+      if (r.value.success) {
+        setCustoms([]);
+        setEditor(null);
+        flash("✅ 已恢复默认(清空全部自定义)");
+      } else {
+        flash("❌ " + (r.value.message ?? "恢复失败"));
+      }
     });
-  };
+  }
 
-  const blockUi = (key: "season" | "episode") => {
-    const role = key === "season" ? "season-episode" : "episode-only";
-    const prefix = key === "season" ? "S" : "E";
-    const slots = builtinSlotsFor(role);
-    const errors = key === "season" ? parsed.errors.season : parsed.errors.episode;
-    const errorCount = Object.keys(errors).length;
+
+  const editorForm = (role: RuleRole) => {
+    const captureHint = role === "season-episode" ? "第 1 组季号、第 2 组集号" : "1 个捕获组:集号";
     return (
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-          <strong style={{ fontSize: 13 }}>
-            {key === "season" ? "季集规则" : "纯集号规则"}
-          </strong>
-          <span style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>
-            <strong>{prefix}:</strong>
-            {key === "season" ? " 文件名里带季号" : " 文件名里只有集号(仅单季任务启用)"}
-          </span>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+          margin: "8px 0",
+          padding: "10px 12px",
+          border: "1px dashed rgba(127,127,127,.35)",
+          borderRadius: 8,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <input
+            value={editor?.expression ?? ""}
+            onChange={(e) => setEditor((prev) => (prev ? { ...prev, expression: e.target.value } : prev))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit();
+              else if (e.key === "Escape") closeEditor();
+            }}
+            placeholder={"正则,如 [Ss]([0-9]{1,2})_([0-9]{1,4}) —— " + captureHint}
+            spellCheck={false}
+            style={{
+              flex: 1,
+              minWidth: 240,
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 12.5,
+              padding: "6px 8px",
+              borderRadius: 6,
+              border: "1px solid rgba(127,127,127,.3)",
+              background: "transparent",
+              color: "inherit",
+            }}
+            aria-label={role === "season-episode" ? "自定义带季号正则" : "自定义仅集号正则"}
+          />
+          <button type="button" className="secondary-button" onClick={commit} disabled={isPending}>
+            {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Check size={14} aria-hidden />}
+            保存
+          </button>
+          <button type="button" className="secondary-button" onClick={closeEditor} disabled={isPending}>
+            <X size={14} aria-hidden />
+            取消
+          </button>
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 12, color: "var(--text-secondary, #888)", marginBottom: 6 }}>
-          {slots.map((slot, i) => (
-            <span key={slot.ruleId} style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}>
-              <strong>{i + 1}</strong>
-              <span>{slot.label ?? slot.ruleId}</span>
-              {slot.example ? <code style={EXAMPLE_CODE_STYLE}>{slot.example}</code> : null}
-            </span>
-          ))}
-        </div>
-        <div style={{ fontSize: 12, color: "var(--text-secondary, #888)", lineHeight: 1.6, marginBottom: 6 }}>
-          · 前 {slots.length} 行 = 内置(留空 = 恢复内置,<strong>勿删整行</strong>);其后为自定义,行序 = 优先级。前缀 <strong>{prefix}:</strong> 不属于正则,<code>#</code> 开头为注释。
-        </div>
-        <textarea
-          ref={key === "season" ? seasonRef : episodeRef}
-          value={blocks[key]}
-          onChange={(e) => setBlock(key, e.target.value)}
-          spellCheck={false}
-          wrap="off"
-          rows={Math.max(5, blocks[key].split("\n").length + 1)}
-          style={{
-            width: "100%",
-            boxSizing: "border-box",
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: 12.5,
-            lineHeight: 1.65,
-            padding: 10,
-            border: "1px solid " + (errorCount > 0 ? "rgba(220,38,38,.55)" : "rgba(127,127,127,.3)"),
-            borderRadius: 6,
-            background: "transparent",
-            color: "inherit",
-            whiteSpace: "pre",
-          }}
-          aria-label={key === "season" ? "季集规则(S: 前缀)" : "纯集号规则(E: 前缀)"}
-        />
-        {errorCount > 0 ? (
-          <ul style={{ marginTop: 6, paddingLeft: 18, color: "#dc2626", fontSize: 12.5 }}>
-            {Object.entries(errors).map(([lineNo, msg]) => (
-              <li key={lineNo} style={{ margin: "2px 0" }}>第 {lineNo} 行: {msg}</li>
-            ))}
-          </ul>
-        ) : null}
-        <button type="button" className="secondary-button" style={{ marginTop: 8 }} onClick={() => addCustom(key)} disabled={isPending}>
-          <Plus size={14} aria-hidden />
-          添加自定义{key === "season" ? "季集" : "集号"}规则
-        </button>
+        {editorError ? <span style={{ color: "#dc2626", fontSize: 12.5 }}>⚠ {editorError}</span> : null}
       </div>
     );
   };
@@ -178,31 +185,70 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
   return (
     <div>
       <div style={{ fontSize: 12.5, color: "var(--text-secondary, #888)", lineHeight: 1.7, marginBottom: 12 }}>
-        <div>· 优先级:内置槽位 → 季集自定义 → 纯集号自定义(纯集号仅单季任务启用)。</div>
+        <div>· 内置规则只读,不可修改;自定义规则排在各组内置之后(内置不认的写法才轮到自定义)。</div>
         <div>· 正则只决定匹配文本;剥扩展名 / 集数守卫 / 年份排除 / 衍生黑名单等由解析代码固定保留。</div>
       </div>
-      {blockUi("season")}
-      {blockUi("episode")}
-      {hasServerErrors ? (
-        <ul style={{ marginTop: 8, paddingLeft: 18, color: "#dc2626", fontSize: 12.5 }}>
-          {Object.entries(serverErrors).map(([ruleId, msg]) => (
-            <li key={ruleId} style={{ margin: "2px 0" }}>
-              {ruleId}: {msg}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+
+      {ROLES.map(({ role, title, note }) => {
+        const slots = BUILTIN_RULE_PATTERNS.filter((p) => p.role === role);
+        const groupCustoms = customs.filter((c) => c.role === role);
+        const editingThisGroup = editor?.role === role;
+        return (
+          <div key={role} style={{ marginBottom: 18 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+              <strong style={{ fontSize: 13.5 }}>{title}</strong>
+              <span style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>{note}</span>
+              <span style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>
+                {role === "season-episode" ? "· 需 2 个捕获组:第 1 组季号、第 2 组集号" : "· 需 1 个捕获组:集号"}
+              </span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {slots.map((p, i) => (
+                <div key={p.ruleId} style={{ display: "flex", alignItems: "baseline", gap: 8, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12.5 }}>
+                  <span style={{ minWidth: 22, textAlign: "right", color: "var(--text-secondary, #888)" }}>{i + 1}.</span>
+                  <code>{p.expression}</code>
+                  {p.example ? <span style={{ color: "var(--text-secondary, #888)" }}>example: {p.example}</span> : null}
+                </div>
+              ))}
+              {groupCustoms.map((c, i) => (
+                <div key={c.ruleId} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, flexWrap: "wrap" }}>
+                  <span style={{ minWidth: 22, textAlign: "right", color: "#2563eb" }}>自{i + 1}.</span>
+                  {editingThisGroup && editor.editingId === c.ruleId ? (
+                    editorForm(role)
+                  ) : (
+                    <>
+                      <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{c.expression}</code>
+                      <button type="button" className="secondary-button" style={{ padding: "2px 6px", fontSize: 12 }} onClick={() => openEdit(role, c)} disabled={isPending}>
+                        <Pencil size={12} aria-hidden /> 编辑
+                      </button>
+                      <button type="button" className="secondary-button" style={{ padding: "2px 6px", fontSize: 12 }} onClick={() => remove(c)} disabled={isPending}>
+                        <Trash2 size={12} aria-hidden /> 删除
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+            {editingThisGroup && editor?.editingId === null ? (
+              editorForm(role)
+            ) : editingThisGroup ? null : (
+              <button type="button" className="secondary-button" style={{ marginTop: 8 }} onClick={() => openAdd(role)} disabled={isPending}>
+                <Plus size={14} aria-hidden />
+                添加正则
+              </button>
+            )}
+          </div>
+        );
+      })}
+
+      {feedback ? <p className="panel-note" style={{ marginTop: 8 }}>{feedback}</p> : null}
+
       <div className="setting-row" style={{ marginTop: 12, flexWrap: "wrap", gap: 8 }}>
-        <button type="button" className="primary-button" onClick={handleSave} disabled={isPending || hasLineErrors}>
-          {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Check size={14} aria-hidden />}
-          保存规则
-        </button>
         <button type="button" className="secondary-button" onClick={handleReset} disabled={isPending}>
           <RefreshCcw size={14} aria-hidden />
-          恢复默认
+          恢复默认(清空全部自定义)
         </button>
       </div>
-      {result ? <p className="panel-note" style={{ marginTop: 10 }}>{result}</p> : null}
     </div>
   );
 }

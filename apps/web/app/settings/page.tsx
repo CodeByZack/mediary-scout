@@ -277,35 +277,20 @@ async function QualityPreferenceSection() {
 async function RecognitionRulesSection() {
   await connection();
   const repository = getWorkflowRepository();
-  const { loadRulePatterns, loadPromptOverrides, ARBITRATION_KINDS, BUILTIN_RULE_PATTERNS, BUILTIN_RULE_IDS, PROMPT_TEMPLATES } = await import("@media-track/workflow");
-  // 生效规则(空表 = 内置;损坏行自动回退内置)——与采集时 loadEpisodeRules 同一语义。
-  // R1(Phase 1 复核):生效集 ∪ 缺失内置 —— 留空保存的内置槽位(恢复内置默认)刷新后
-  // 仍可见,便于单独改回而不用整体「恢复默认」;缺失内置以空表达式占位(表单「留空=恢复内置」)。
-  // 注:缺失槽位在采集时经 ?? 回退内置正则仍生效 —— 当前版本不支持真正禁用内置分支(Phase 3 复核 S1)。
+  const { loadRulePatterns, loadPromptOverrides, ARBITRATION_KINDS, BUILTIN_RULE_IDS, PROMPT_TEMPLATES } = await import("@media-track/workflow");
+  // 生效规则(内置恒在 + 自定义追加,loadRulePatterns 语义)。内置只读(2026-09-07 拍板):
+  // 表单拿到的只含自定义行;内置展示数据由表单直接读 BUILTIN_RULE_PATTERNS。
   const effective = await loadRulePatterns(repository);
-  const effectiveByRuleId = new Map(effective.map((p) => [p.ruleId, p] as const));
-  const initial = BUILTIN_RULE_PATTERNS.map((p) => {
-    const present = effectiveByRuleId.get(p.ruleId);
-    return {
+  const customInitial = effective
+    .filter((p) => !BUILTIN_RULE_IDS.has(p.ruleId))
+    .map((p) => ({
       ruleId: p.ruleId,
       role: p.role,
-      expression: present?.expression ?? "", // 缺失 = 留空(恢复内置,行仍显示)
-      label: present?.label ?? "",
+      expression: p.expression,
+      label: p.label ?? "",
       sortOrder: p.sortOrder,
-      isDefault: true,
-    };
-  }).concat(
-    effective
-      .filter((p) => !BUILTIN_RULE_IDS.has(p.ruleId))
-      .map((p) => ({
-        ruleId: p.ruleId,
-        role: p.role,
-        expression: p.expression,
-        label: p.label,
-        sortOrder: p.sortOrder,
-        isDefault: false,
-      })),
-  );
+      isDefault: false,
+    }));
 
   // AI 仲裁提示词覆盖(kind → body;缺失 kind = 内置模板)一并并入本区。
   // 预填内置正文:初值 = 生效覆盖 ?? 内置 body,用户在原文上直接改。
@@ -328,7 +313,7 @@ async function RecognitionRulesSection() {
           <p className="panel-note">文件名 → 集数 解析正则 + 升级仲裁提示词（改动对后续采集任务生效）</p>
         </div>
       </div>
-      <RulePatternsForm initial={initial} />
+      <RulePatternsForm initial={customInitial} />
       <RuleTestBench />
       <PromptOverridesForm initial={promptInitial} />
     </section>
