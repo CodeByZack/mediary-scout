@@ -131,6 +131,43 @@ function anchorVarietyPeriod(
   return (first ?? hits[0])!.code;
 }
 
+/**
+ * 可配置集数解析规则（issue #44 Phase 1)：6 个内置槽位各有一个可选 RegExp 覆盖，
+ * 外加自定义规则（ruleId 非内置）。这是「裸正则 + 代码守卫」两层模型（FORK-CHANGES
+ * §34）：裸正则只决定匹配文本；剥扩展名/合理集数守卫/年份排除/衍生黑名单/Part 锚定/
+ * 多季禁用等语义不进配置，由本函数按内置分支固定保留。缺省（不传或全部缺省槽位）
+ * = 模块内置正则，行为与旧版逐字节一致 —— storage 执行器等 15 处旧调用点零改动。
+ */
+export interface EpisodeParseRules {
+  /** 规则 0: SxxExx（group1=季 group2=集）。 */
+  sxxexx?: RegExp;
+  /** 规则 1: SxxExx 变体（空格/点分隔）。 */
+  variant?: RegExp;
+  /** 规则 2: E01 / EP01（group1=集号，单季）。 */
+  epOnly?: RegExp;
+  /** 规则 3: 1x01（Plex 兼容）。 */
+  cross?: RegExp;
+  /** 规则 4: 第N集/话/期（group1=集号，单季；期附带衍生黑名单）。 */
+  chinese?: RegExp;
+  /** 规则 5: 纯数字整名（group1=集号，单季 + 剥扩展名 + 年份排除）。 */
+  digits?: RegExp;
+  /** 自定义规则（sortOrder 升序），在所有内置分支之后 apply；season-episode 恒可用，
+   *  episode-only 仅单季上下文。集号一律过 isPlausibleEpisodeNumber。 */
+  custom?: Array<{ role: "season-episode" | "episode-only"; regex: RegExp }>;
+}
+
+/** 捕获组 → 规范集号文本:数字化去除空白/前导零,按两位补零;非法/越界 → null(跳过)。
+ *  S1 防「用户正则捕获组带空白/非数字」产出畸形集码(如 "S03E 02"),畸形码与 needCodes
+ *  恒对不上造成幻影/漏认。内置正则捕获纯数字,Number 规范化后行为逐字节一致。 */
+function numPart(value: string | undefined): string | null {
+  if (value === undefined || value.trim() === "") return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) return null;
+  const text = String(n);
+  if (text.length > 4) return null;
+  return text.padStart(2, "0");
+}
+
 export function episodeCodeFromFileName(
   name: string,
   seasons?: number[],
@@ -138,21 +175,31 @@ export function episodeCodeFromFileName(
    * 期号 N + Part 一一定位集号,免疫「一期拆多集」的 E(N) 机械错位(地球超新鲜案)。
    * 缺省 = 无锚定,「第N期」仍按旧机械 E(N) 解析(兼容无 TMDB 数据的部署)。 */
   episodeNames?: Record<string, string>,
+  /** issue #44: 可配置规则（UI 编辑后经 ruleset.loadEpisodeRules 编译注入）。缺省 = 内置正则。 */
+  rules?: EpisodeParseRules | null,
 ): string | null {
   // 0. 标准 SxxExx — 自带季信息,始终可解析(与 seasons 上下文无关)。
   //    Episode allows up to 4 digits for 1000+ episode anime (One Piece/柯南/蜡笔小新);
   //    \d{1,3} truncated "E1050" → "E105".
-  const seasonEpisodeMatch = /[Ss](\d{1,2})[Ee](\d{1,4})/.exec(name);
+  const seasonEpisodeMatch = (rules?.sxxexx ?? /[Ss](\d{1,2})[Ee](\d{1,4})/).exec(name);
   if (seasonEpisodeMatch?.[1] && seasonEpisodeMatch[2]) {
-    return `S${seasonEpisodeMatch[1].padStart(2, "0")}E${seasonEpisodeMatch[2].padStart(2, "0")}`;
+    const s = numPart(seasonEpisodeMatch[1]);
+    const e = numPart(seasonEpisodeMatch[2]);
+    if (s !== null && e !== null) {
+      return `S${s}E${e}`;
+    }
   }
 
   // 1. SxxExx 变体:空格 / 点分隔 (`S01 E01`、`s01.e01`),多集包取起始集
   //    (`S01E01-E03` → S01E01;上一正则已先吃掉 `S01E01-E03` 的 S01E01 部分,
   //    这里补「数字之间无紧贴」的变体)。
-  const looseMatch = /[Ss](\d{1,2})\s*[. ]\s*[Ee](\d{1,4})(?!\d)/.exec(name);
+  const looseMatch = (rules?.variant ?? /[Ss](\d{1,2})\s*[. ]\s*[Ee](\d{1,4})(?!\d)/).exec(name);
   if (looseMatch?.[1] && looseMatch[2]) {
-    return `S${looseMatch[1].padStart(2, "0")}E${looseMatch[2].padStart(2, "0")}`;
+    const s = numPart(looseMatch[1]);
+    const e = numPart(looseMatch[2]);
+    if (s !== null && e !== null) {
+      return `S${s}E${e}`;
+    }
   }
 
   // 单季上下文(seasons 不传或恰为单季):无季规则可用,目标季 = seasons[0](默认为 1)。
@@ -164,15 +211,18 @@ export function episodeCodeFromFileName(
   const seasonLabel = seasons !== undefined && seasons.length === 1 ? String(seasons[0]).padStart(2, "0") : "01";
   if (singleSeason) {
     // 2. `E01` / `EP01` / `Ep.01` — 无季信息 → 目标季(如 S03E01,单季任务可信)。
-    const epOnlyMatch = /(?:^|[^A-Za-z0-9])[Ee][Pp]?\.?\s*(\d{1,4})(?:$|[^0-9])/.exec(name);
+    const epOnlyMatch = (rules?.epOnly ?? /(?:^|[^A-Za-z0-9])[Ee][Pp]?\.?\s*(\d{1,4})(?:$|[^0-9])/).exec(name);
     if (epOnlyMatch?.[1] && isPlausibleEpisodeNumber(Number(epOnlyMatch[1]))) {
-      return `S${seasonLabel}E${epOnlyMatch[1].padStart(2, "0")}`;
+      const e = numPart(epOnlyMatch[1]);
+      if (e !== null) return `S${seasonLabel}E${e}`;
     }
 
     // 3. `1×01` / `1x01`(Plex 兼容:季×集)。
-    const crossMatch = /(?:^|[^A-Za-z0-9])(\d{1,2})\s*[x×]\s*(\d{1,4})(?:$|[^0-9])/.exec(name);
+    const crossMatch = (rules?.cross ?? /(?:^|[^A-Za-z0-9])(\d{1,2})\s*[x×]\s*(\d{1,4})(?:$|[^0-9])/).exec(name);
     if (crossMatch?.[1] && crossMatch[2] && isPlausibleEpisodeNumber(Number(crossMatch[2]))) {
-      return `S${crossMatch[1].padStart(2, "0")}E${crossMatch[2].padStart(2, "0")}`;
+      const s = numPart(crossMatch[1]);
+      const e = numPart(crossMatch[2]);
+      if (s !== null && e !== null) return `S${s}E${e}`;
     }
 
     // 4. `第N集` / `第N话` / `第N期`(动漫「集/话」,国产综艺「期」;容忍空格;日文汉字「話」一并支持)。
@@ -182,7 +232,7 @@ export function episodeCodeFromFileName(
     //    文件名含加更/直拍/手记等衍生 token 时「第N期」不是正片证据(正片「第8期」
     //    旁边的「合伙人手记第8期」是衍生内容,计入覆盖会造出假集数)。「集/话」维持
     //    原样、黑名单不外溢,避免改动既有动漫语义。
-    const chineseMatch = /第\s*(\d{1,4})\s*(?:集|话|話|期)/.exec(name);
+    const chineseMatch = (rules?.chinese ?? /第\s*(\d{1,4})\s*(?:集|话|話|期)/).exec(name);
     if (chineseMatch?.[1] && Number(chineseMatch[1]) <= 9999) {
       const derivativeBlocked = chineseMatch[0].endsWith("期") && VARIETY_DERIVATIVE_MARKER.test(name);
       if (!derivativeBlocked) {
@@ -200,12 +250,14 @@ export function episodeCodeFromFileName(
         if (anchored !== null) {
           return anchored;
         }
-        return `S${seasonLabel}E${chineseMatch[1].padStart(2, "0")}`;
+        const ce = numPart(chineseMatch[1]);
+        if (ce !== null) return `S${seasonLabel}E${ce}`;
       }
       // 「第N期」被衍生黑名单挡掉后,再看是否另有 `第N集/话` 证据(不放过混名)。
       const fallbackMatch = /第\s*(\d{1,4})\s*(?:集|话|話)/.exec(name);
       if (fallbackMatch?.[1] && Number(fallbackMatch[1]) <= 9999) {
-        return `S${seasonLabel}E${fallbackMatch[1].padStart(2, "0")}`;
+        const fe = numPart(fallbackMatch[1]);
+        if (fe !== null) return `S${seasonLabel}E${fe}`;
       }
     }
   }
@@ -216,12 +268,41 @@ export function episodeCodeFromFileName(
   //    标题的数字("Show 01")歧义大,交仲裁。
   if (singleSeason) {
     const base = name.replace(/\.[A-Za-z0-9]+$/, "");
-    const digits = base.match(/^(\d{1,3})$/);
+    const digits = (rules?.digits ?? /^(\d{1,3})$/).exec(base);
     if (digits?.[1]) {
       const n = Number(digits[1]);
       // 排除年份(1900–2099)、分辨率、超大 CRC/体积数字。
       if (isPlausibleEpisodeNumber(n) && !(n >= 1900 && n <= 2099)) {
-        return `S${seasonLabel}E${digits[1].padStart(2, "0")}`;
+        const de = numPart(digits[1]);
+        if (de !== null) return `S${seasonLabel}E${de}`;
+      }
+    }
+  }
+
+  // 6. 自定义规则(issue #44 Phase 1):ruleId 非内置的规则由 ruleset.compileEpisodeRules
+  //    注入到这里,在全部内置分支之后按 sortOrder apply。season-episode 自带季信息,
+  //    任意上下文可用;episode-only 只在单季上下文(与内置 E01/第N集 同规则)。集号一律
+  //    过 isPlausibleEpisodeNumber(排除分辨率/超大垃圾数字);group 缺失或空匹配天然跳过。
+  if (rules?.custom) {
+    for (const custom of rules.custom) {
+      if (custom.role === "season-episode") {
+        const m = custom.regex.exec(name);
+        const s = numPart(m?.[1]);
+        const e = numPart(m?.[2]);
+        if (s !== null && e !== null && isPlausibleEpisodeNumber(Number(e))) {
+          return `S${s}E${e}`;
+        }
+      }
+    }
+    if (singleSeason) {
+      for (const custom of rules.custom) {
+        if (custom.role === "episode-only") {
+          const m = custom.regex.exec(name);
+          const ce = numPart(m?.[1]);
+          if (ce !== null && isPlausibleEpisodeNumber(Number(ce))) {
+            return `S${seasonLabel}E${ce}`;
+          }
+        }
       }
     }
   }

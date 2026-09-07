@@ -62,11 +62,12 @@ describe("settingsTabQuery", () => {
 });
 
 describe("SETTINGS_TABS", () => {
-  it("六个 tab、顺序与标签固定", () => {
+  it("七个 tab、顺序与标签固定", () => {
     expect(SETTINGS_TABS.map((tab) => tab.id)).toEqual([
       "drives",
       "services",
       "preferences",
+      "recognition",
       "patrol",
       "account",
       "remote",
@@ -75,6 +76,7 @@ describe("SETTINGS_TABS", () => {
       "网盘",
       "资源与服务",
       "获取偏好",
+      "识别规则",
       "巡检与通知",
       "账号",
       "远程访问",

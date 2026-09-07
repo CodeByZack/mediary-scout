@@ -11,6 +11,9 @@ import { UnbindStorageButton } from "../../components/unbind-storage-button";
 import { PushNotificationForm } from "../../components/push-notification-form";
 import { PreferredLanguageForm } from "../../components/preferred-language-form";
 import { QualityPreferenceForm } from "../../components/quality-preference-form";
+import { RulePatternsForm } from "../../components/rule-patterns-form";
+import { PromptOverridesForm } from "../../components/prompt-overrides-form";
+import { RuleTestBench } from "../../components/rule-test-bench";
 import { LlmConfigForm } from "../../components/llm-config-form";
 import { TmdbApiKeyForm } from "../../components/tmdb-api-key-form";
 import { AssrtTokenForm } from "../../components/assrt-token-form";
@@ -122,6 +125,11 @@ export default function SettingsPage({
                     <QualityPreferenceSection />
                   </Suspense>
                 </>
+              }
+              recognition={
+                <Suspense fallback={<div className="skeleton skeleton-heading" />}>
+                  <RecognitionRulesSection />
+                </Suspense>
               }
               patrol={
                 <>
@@ -266,6 +274,53 @@ async function QualityPreferenceSection() {
   );
 }
 
+async function RecognitionRulesSection() {
+  await connection();
+  const repository = getWorkflowRepository();
+  const { loadRulePatterns, loadPromptOverrides, ARBITRATION_KINDS, BUILTIN_RULE_IDS, PROMPT_TEMPLATES } = await import("@media-track/workflow");
+  // 生效规则(内置恒在 + 自定义追加,loadRulePatterns 语义)。内置只读(2026-09-07 拍板):
+  // 表单拿到的只含自定义行;内置展示数据由表单直接读 BUILTIN_RULE_PATTERNS。
+  const effective = await loadRulePatterns(repository);
+  const customInitial = effective
+    .filter((p) => !BUILTIN_RULE_IDS.has(p.ruleId))
+    .map((p) => ({
+      ruleId: p.ruleId,
+      role: p.role,
+      expression: p.expression,
+      label: p.label ?? "",
+      sortOrder: p.sortOrder,
+      isDefault: false,
+    }));
+
+  // AI 仲裁提示词覆盖(kind → body;缺失 kind = 内置模板)一并并入本区。
+  // 预填内置正文:初值 = 生效覆盖 ?? 内置 body,用户在原文上直接改。
+  // 表单以「与内置 body 逐字相同」判未覆盖,留空(手动清空)也算内置。
+  const overrides = await loadPromptOverrides(repository);
+  const byKind = new Map(overrides.map((o) => [o.arbitrationKind, o.promptText]));
+  const promptInitial = ARBITRATION_KINDS.map((kind) => ({
+    arbitrationKind: kind,
+    promptText: byKind.get(kind) ?? PROMPT_TEMPLATES[kind].body,
+  }));
+
+  return (
+    <section className="panel" style={{ maxWidth: 960, marginTop: 24 }}>
+      {/* 大 Section ① 正则:节标题 + 恢复默认 由 RulePatternsForm 渲染 */}
+      <div>
+        <RulePatternsForm initial={customInitial} />
+        <RuleTestBench />
+      </div>
+
+      {/* 大 Section ② Prompt:AI 仲裁升级点的提示词覆盖 */}
+      <div style={{ marginTop: 26, paddingTop: 18, borderTop: "1px solid rgba(127,127,127,.18)" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <h3 style={{ fontSize: 15, margin: 0 }}>Prompt</h3>
+          <span style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>AI 仲裁升级点的提示词覆盖（留空 = 内置模板）</span>
+        </div>
+        <PromptOverridesForm initial={promptInitial} />
+      </div>
+    </section>
+  );
+}
 async function LlmConfigSection() {
   await connection();
   const repository = getAccountScopedSettings(await getCurrentAccountId());

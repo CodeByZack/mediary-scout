@@ -1,4 +1,6 @@
 import type { LanguageModel } from "ai";
+import type { EpisodeParseRules } from "../../episode-code.js";
+import type { PromptOverrideLookup } from "../../ruleset.js";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
 import { arbitrateEpisodeMapping } from "../../acquisition-v2/arbitrator.js";
 import { finalizeLanding } from "../../acquisition-v2/finalize-landing.js";
@@ -39,9 +41,13 @@ import {
  *
  * 校验规则(代码,不信任 AI 输出):
  *   1. 文件名必须在本次落盘的全部视频清单里(防幻觉文件名);
- *   2. code 必须 SxxExx 形状且季与任务匹配(单季任务强制赛季一致);
- *   3. 一个集数最多被映射一次(冲突 → 整体放弃该映射,回落仲裁);
- *   4. 映射后的文件必须落在任务的 need/已收集范围内(防 AI 编造不存在的集数)。
+ *   2. 一个集数最多被映射一次(重复 code → 整表作废);
+ *   3. 期号一致性:文件名里的「第M期」与该集 TMDB 集名里的「Episode N」不符 → 整表作废
+ *      (防 AI 把不存在的期硬安上最新集号迎合 need);无 episodeNames 时惰性。
+ *
+ * 注意:这里**不校验** code 形状(SxxExx),也**不校验**季与任务匹配。单季任务下越季的
+ * code 会被 digest 的 need 集合运算自然排除(need 只含目标季的 SxxExx),不会误入库,
+ * 但没有显式闸门;多季任务整段不调用本函数(入口的单季判定直接返回 "no")。
  */
 export async function tryEpisodeMapping(options: {
   sandbox: TaskSandbox;
@@ -65,6 +71,8 @@ export async function tryEpisodeMapping(options: {
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")—— ram 重建 digest 时透传给
    *  episodeCodeFromFileName 做「第N期」Part 锚定(与年守卫同源)。 */
   episodeNames?: Record<string, string>;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }): Promise<"passed" | "no" | "failed"> {
   const { digest } = options;
   // 仅 TV 单季值得让 AI 映射;movie / 多季 → no。
@@ -108,12 +116,18 @@ export async function tryEpisodeMapping(options: {
     airRanges.length > 0
       ? { min: 1, max: Math.max(...airRanges) }
       : computeKnownEpisodeRange(options.needCodes);
+  // §42(2026-09-06 用户实测反馈):AI 调用通常耗时数十秒且期间零推送,活动页的 live
+  // frontier 会停在上一条「代码识别」上,观感像卡死。发起前先发一条「进行中」心跳,
+  // 让活动页明确显示在等 AI;紧随其后的结果 emit 会把这条覆盖为 ✅(trace sink 串行
+  // 追加,序号不乱)。toolName/phase 与结果 emit 一致 → UI 的 AI 徽章与轮次分组不变。
+  emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", "AI 正在识别集数,可能需数十秒…");
   const arbitration = await arbitrateEpisodeMapping({
     model,
     unparsedFiles: allFiles,
     title: options.targetTitle,
     seasons: options.seasons,
     knownEpisodeRange: knownRange,
+    ...(options.promptOverrides !== undefined ? { promptOverrides: options.promptOverrides } : {}),
   });
 
   // 校验映射(代码,不信任 AI)。
@@ -133,7 +147,8 @@ export async function tryEpisodeMapping(options: {
     // ★ 期号一致性校验(2026-08-31 地球超新鲜假集号案修复):AI 可能把不存在的期硬
     // 安上最新集号(S02E19/E20)迎合 need。当有 episodeNames(TMDB 每集原始 name)时
     // 反查该集号对应的期号 N(TMDB name "Episode N");若文件名里有「第M期」且 M≠N,
-    // 说明文件与集号对不上 → 该条映射不采信(整表作废,回落诊断仲裁)。
+    // 说明文件与集号对不上 → 该条映射不采信(整表作废,返回 "failed" → 清暂存换候选;
+    // TV 无落盘诊断仲裁)。
     if (options.episodeNames) {
       const filePeriod = /第\s*(\d{1,4})\s*期/.exec(fileName)?.[1];
       const tmdbName = options.episodeNames[code];
@@ -153,16 +168,16 @@ export async function tryEpisodeMapping(options: {
     clean[fileName] = code;
   }
   if (!valid) {
-    const failDetail = `AI 补认结果与文件名对不上,交给诊断仲裁`;
+    const failDetail = `AI 补认结果与文件名对不上(整表作废)`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
     emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "failed";
   }
 
   // 校验通过的部分映射先交出去:无论重建 digest 是否整体通过,这些映射都是
-  // 可信的(AI 确认 + 代码校验过),诊断仲裁 accept 时 finalizeLanding 需要
+  // 可信的(AI 确认 + 代码校验过),映射分支收尾时 finalizeLanding 需要
   // 它们才能让映射的文件 rename/归位。2026-08-21 bugfix:此前只有 "passed"
-  // 分支回调 onMapping,部分映射(valid 但重建仍脏)走 accept 时 overrides 为
+  // 分支回调 onMapping,部分映射(valid 但重建仍脏)换候选时 overrides 为
   // undefined,AI 确认过的文件全部被 staging wipe 清掉(假入库)。
   options.onMapping?.(clean);
 
@@ -170,7 +185,7 @@ export async function tryEpisodeMapping(options: {
   const re = options.ram(clean);
   options.onDigest(re);
   if (re.passes) {
-        // issue #29 用户反馈:人话——AI 根据文件名补认了哪些集,结果如何。
+    // issue #29 用户反馈:人话——AI 根据文件名补认了哪些集,结果如何。
     // review REQUEST_CHANGES ①:coveredCodes 是代码+AI 合并口径,混源包会把代码功劳
     // 记在 AI 头上(AI 只认 3 集却报「AI 识别出 20 集」)——统一用 AI 有效映射数。
     const mapDetail = `AI 识别出 ${Object.keys(clean).length} 集,目标集数已齐`;
@@ -348,9 +363,11 @@ export async function aliasesFallbackReSearch(input: {
 
 /**
  * TV 落地收口状态机（design §5 LandingVerdict）：一个候选的落地回合内，
- * digest → 集数映射(§2.2) → 诊断仲裁 → finalize/丢弃，收敛为七种判定：
+ * digest → 集数映射(§2.2,仅单季)→ finalize 或清暂存换候选，收敛为六种判定：
  *   systemic(系统阻塞) / dead(死链探测) / clean(干净落地) / mapped_clean(映射通过)
- *   / accept(诊断 accept) / retry_other(换候选续跑) / abandon(诚实终止)。
+ *   / retry_other(未全量对齐,换候选续跑) / abandon(诚实终止)。
+ * TV 没有落盘诊断仲裁:未覆盖即清暂存换下一个候选,候选/预算耗尽才 reportNoCoverage。
+ * 类型里遗留的 "accept" 已无生产产出方(旧诊断仲裁路径删除后未清,仅类型定义仍在)。
  * done 非空 = 本轮终局（调用方直接 return）；done=null 用 next 继续循环。
  * escalated/deadRetries 随判定带出，循环侧统一回收 —— 预算语义原样
  * （死链不占转存预算：dead 分支不触 attempted.add）。
@@ -386,6 +403,10 @@ export async function closeOutTvLanding(options: {
   episodeAirDates?: Record<string, string>;
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")——「第N期」Part 锚定数据。 */
   episodeNames?: Record<string, string>;
+  /** issue #44: 可配置集数解析规则(UI 编辑后注入)。缺省 = 内置正则。 */
+  episodeRules?: EpisodeParseRules;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
   grading: ReturnType<typeof gradeCandidates>;
   tried: Set<string>;
   attempted: Set<string>;
@@ -406,6 +427,8 @@ export async function closeOutTvLanding(options: {
     tried,
     attempted,
     transfer,
+    episodeRules,
+    promptOverrides,
   } = options;
   const current = options.current;
   let escalated = options.escalated;
@@ -461,6 +484,7 @@ export async function closeOutTvLanding(options: {
       needCodes,
       ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
       ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
+      ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
     });
     // issue #29 用户反馈:activity 人话化——直接复用 summarizeDigest 的人话结论
     // (pass=「转存内容已识别…」/ fail=「识别出…还缺…」),与 args 的 missingCodes 一致,
@@ -477,7 +501,7 @@ export async function closeOutTvLanding(options: {
     );
     // issue #29:digest 步骤结构化证据(卡片化判定)。videoCount=落盘视频文件数;
     // passes/coveredCodes/missingCodes 给前端红绿判定与「还缺什么」。
-    const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates);
+    const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates, episodeRules);
     // issue #29 用户拍板(九轮):逐文件明细并入 stagingDigest 一张卡——不再单独
     // emit「digestFiles 逐文件识别 N 条」步骤(标题+明细一张卡,无需两个步骤)。
     const argsFiles = pushWithinBudget<string>([], parseRows, 1300);
@@ -524,6 +548,7 @@ export async function closeOutTvLanding(options: {
           skipCodes: [...onDiskCodes],
           onlyCodes: needCodes,
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
         });
         const skipNote =
           // 九轮复核:与归位去集号一致——已在库/非缺集跳过的明细都在 args.files。
@@ -584,7 +609,8 @@ export async function closeOutTvLanding(options: {
     // the design intent the old agent loop had ("you can read that
     // [NC-Raws] Lyricis Recoil - 01.mkv is S01E01"). A verified mapping lets the
     // pack land like a clean digest (zero further LLM decisions); a failed or
-    // partial mapping falls through to the diagnostic arbitrator.
+    // partial mapping wipes staging and retries the next candidate (TV has no
+    // diagnosis arbitration).
     // Movie landings never map episodes — they go straight to the movie diagnosis.
     // issue #29 八轮复核:escalated 不再在映射前预置 true(之前会虚增 aiEscalated——
     // tryEpisodeMapping 的 "no" 返回:多季/代码已全覆盖/全衍生文件不调 AI)。置位推迟到
@@ -602,6 +628,7 @@ export async function closeOutTvLanding(options: {
       needCodes,
       ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
       ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
+      ...(options.promptOverrides !== undefined ? { promptOverrides: options.promptOverrides } : {}),
       ram: (overrides) =>
         digestStaging({
           files: transfer.staging,
@@ -610,6 +637,7 @@ export async function closeOutTvLanding(options: {
           overrides,
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
           ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
+          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
         }),
       onDigest: (d) => {
         landingDigest = d;
@@ -627,6 +655,7 @@ export async function closeOutTvLanding(options: {
           digest: landingDigest,
           canonicalTitle: target.title,
           seasons,
+          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
           skipCodes: [...onDiskCodes],
           onlyCodes: needCodes,
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
@@ -693,19 +722,28 @@ export async function closeOutTvLanding(options: {
     if (mappedByAI) {
       escalated = true;
     }
-    // AI 识别后仍未覆盖全部缺集 → 清掉暂存,机械换下一条候选(不再让 AI 指认下一个——覆盖对比已经说明这包不行,直接试下一条)。
-    {
-      const leftover = await sandbox.inspectStaging();
-      if (leftover.length > 0) {
-        await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
-      }
-      const next = nextCandidate(grading, tried);
-      // 八轮复核:AI 参与过才署「AI 识别」;否则(no 路径)用中性文案。
-      const retryDetail = `${mappedByAI ? "AI 识别后仍没拿全缺集" : "这轮转存没拿到需要的集"}:清掉暂存,换一条候选${next ? "" : "(没有可换的,终止)"}`;
-      stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
-      // 九轮复核(第二轮):aiUsed 显式透出——mappedByAI=false 的 no 支(零 AI)不得挂「AI」徽章。
-      emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, { round: attempted.size, ...(mappedByAI ? { aiUsed: true } : { aiUsed: false }) });
-      return { verdict: "retry_other", done: null, next, escalated, deadRetries };
+    // §43(2026-09-06 用户拍板):**落盘必须全量对齐 need**——没拿全就不落盘。
+    // 此前(issue #44 同轮延伸)部分覆盖会 finalize 保住已识别集并收尾,与「全量对齐才算
+    // 完成」拧巴:落库/标记即真入库,半入库会让 run 以「已完成」结束却仍缺集。现在统一为
+    // 「没拿全就不落盘」:清空暂存 → 换下一个候选(primary 试穷后落兜底池别名重搜),直到
+    // 候选/预算耗尽才诚实报告未覆盖,交给下次巡检。issue #39 的「附件/junk 不否决整包」
+    // 语义不变(附件仍只进 junkSignals、不参与集号覆盖)。部分覆盖到底要不要为少数缺集
+    // 重复转存大包,留待后续讨论,见 FORK-CHANGES §43。
+    const leftover = await sandbox.inspectStaging();
+    if (leftover.length > 0) {
+      await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
     }
+    const next = nextCandidate(grading, tried);
+    const coveredCount = landingDigest.coveredCodes.length;
+    // 人话:这轮认出多少 / 缺多少 / 为什么不落盘;集号明细进 args(前端展开可见)。
+    const retryDetail = `${mappedByAI ? "AI 补认" : "代码识别"}只认出 ${coveredCount}/${needCodes.length} 集,未全量对齐就不落盘:清掉暂存,换一条候选${next ? "" : "(本池没有可换的)"}`;
+    stepLog(sandbox, target.title, "仲裁", retryDetail, "warn");
+    emitStep(onProgress, "arbitrateEpisodeMapping", "pick", retryDetail, {
+      round: attempted.size,
+      ...(mappedByAI ? { aiUsed: true } : { aiUsed: false }),
+      covered: compactCodeList(landingDigest.coveredCodes),
+      missing: compactCodeList(landingDigest.missingCodes),
+    });
+    return { verdict: "retry_other", done: null, next, escalated, deadRetries };
 
 }

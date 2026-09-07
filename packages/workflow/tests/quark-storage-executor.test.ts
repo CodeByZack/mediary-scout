@@ -32,6 +32,11 @@ function makeFakeClient(opts?: {
       return [...files.values()]
         .filter((f) => f.pdir_fid === directoryId)
         .map((f) => ({ fid: f.fid, file_name: f.file_name, dir: f.dir, size: f.size }));
+    },    async listAllItems({ directoryId }: { directoryId: string }) {
+      calls.push(`listAllItems:${directoryId}`);
+      return [...files.values()]
+        .filter((f) => f.pdir_fid === directoryId)
+        .map((f) => ({ fid: f.fid, file_name: f.file_name, dir: f.dir, size: f.size }));
     },
     async getFileInfo(fid: string) {
       const f = files.get(fid);
@@ -50,6 +55,9 @@ function makeFakeClient(opts?: {
     },
     async listShareDetail() {
       calls.push("listShareDetail");
+      return opts?.share?.items ?? [];
+    },    async listAllShareDetail() {
+      calls.push("listAllShareDetail");
       return opts?.share?.items ?? [];
     },
     async saveShare({ to_pdir_fid }: { to_pdir_fid: string }) {
@@ -125,11 +133,11 @@ describe("QuarkStorageExecutor", () => {
     });
 
     expect(calls).toEqual(
-      expect.arrayContaining(["getShareToken", "listShareDetail", "saveShare:STAGE", "pollTask"]),
+      expect.arrayContaining(["getShareToken", "listAllShareDetail", "saveShare:STAGE", "pollTask"]),
     );
     // order: token before detail before save before poll
-    expect(calls.indexOf("getShareToken")).toBeLessThan(calls.indexOf("listShareDetail"));
-    expect(calls.indexOf("listShareDetail")).toBeLessThan(calls.indexOf("saveShare:STAGE"));
+    expect(calls.indexOf("getShareToken")).toBeLessThan(calls.indexOf("listAllShareDetail"));
+    expect(calls.indexOf("listAllShareDetail")).toBeLessThan(calls.indexOf("saveShare:STAGE"));
     expect(calls.indexOf("saveShare:STAGE")).toBeLessThan(calls.indexOf("pollTask"));
     expect(attempt.status).toBe("succeeded");
     expect(attempt.materializedFileIds).toEqual(["shared_mkv"]);

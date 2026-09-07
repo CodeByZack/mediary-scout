@@ -1,0 +1,185 @@
+import { describe, expect, it, beforeAll, beforeEach, afterEach } from "vitest";
+import { DemoReadOnlyError } from "../lib/demo-mode";
+import { BUILTIN_RULE_PATTERNS } from "@media-track/workflow/ruleset";
+
+// 用真实 :memory: 库跑 action 级验证(M1 过滤/整批失败/自定义保存/恢复默认)。
+process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
+
+describe("识别规则 actions (issue #44)", () => {
+  let actions: typeof import("./actions");
+  let getWorkflowRepository: typeof import("../lib/workflow-runtime").getWorkflowRepository;
+
+  beforeAll(async () => {
+    [actions, getWorkflowRepository] = await Promise.all([
+      import("./actions"),
+      import("../lib/workflow-runtime").then((m) => m.getWorkflowRepository),
+    ]);
+  }, 30_000);
+
+  beforeEach(async () => {
+    // 每个用例从空表开始(:memory: 库在模块级缓存,用例间共享)。
+    await getWorkflowRepository().replaceRulePatterns([]);
+  });
+
+  afterEach(() => {
+    delete process.env.MEDIA_TRACK_DEMO_MODE;
+  });
+
+  it("demo 模式拒绝写", async () => {
+    process.env.MEDIA_TRACK_DEMO_MODE = "1";
+    await expect(actions.saveRulePatternsAction([])).rejects.toBeInstanceOf(DemoReadOnlyError);
+    await expect(actions.resetRulePatternsAction()).rejects.toBeInstanceOf(DemoReadOnlyError);
+    await expect(actions.savePromptOverridesAction([])).rejects.toBeInstanceOf(DemoReadOnlyError);
+    await expect(actions.resetPromptOverridesAction()).rejects.toBeInstanceOf(DemoReadOnlyError);
+  });
+
+  it("内置行一律不落库(内置只读):只存自定义行", async () => {
+    const res = await actions.saveRulePatternsAction([
+      { ruleId: "sxxexx", role: "season-episode", expression: "", label: "", sortOrder: 0, isDefault: true },
+      { ruleId: "digits", role: "episode-only", expression: "^([0-9]{1,4})$", label: "纯数字", sortOrder: 5, isDefault: false },
+      { ruleId: "custom-1", role: "episode-only", expression: "^([0-9]{1,4})$", label: "自定义纯数字", sortOrder: 7, isDefault: false },
+    ]);
+    expect(res.success).toBe(true);
+    const rows = await getWorkflowRepository().listRulePatterns();
+    expect(rows.map((r) => r.ruleId)).toEqual(["custom-1"]);
+    expect(rows[0]?.expression).toBe("^([0-9]{1,4})$");
+  });
+
+  it("任一自定义行校验失败 → 整批不落库,errors 逐行返回", async () => {
+    const res = await actions.saveRulePatternsAction([
+      { ruleId: "digits", role: "episode-only", expression: "^([0-9]{1,4})$", label: "", sortOrder: 5, isDefault: false },
+      { ruleId: "custom-bad", role: "episode-only", expression: "([unclosed", label: "坏", sortOrder: 6, isDefault: false },
+    ]);
+    expect(res.success).toBe(false);
+    expect(res.errors?.["custom-bad"]).toBe("不是合法的正则表达式");
+    expect(await getWorkflowRepository().listRulePatterns()).toEqual([]); // 整批未落库
+  });
+
+  it("恢复默认 = 清空表(回退内置)", async () => {
+    const res = await actions.resetRulePatternsAction();
+    expect(res.success).toBe(true);
+    expect(await getWorkflowRepository().listRulePatterns()).toEqual([]);
+  });
+});
+
+describe("AI 仲裁提示词 actions (issue #44 Phase 2)", () => {
+  let actions: typeof import("./actions");
+  let getWorkflowRepository: typeof import("../lib/workflow-runtime").getWorkflowRepository;
+
+  beforeAll(async () => {
+    [actions, getWorkflowRepository] = await Promise.all([
+      import("./actions"),
+      import("../lib/workflow-runtime").then((m) => m.getWorkflowRepository),
+    ]);
+  }, 30_000);
+
+  beforeEach(async () => {
+    await getWorkflowRepository().replacePromptOverrides([]);
+  });
+
+  afterEach(() => {
+    delete process.env.MEDIA_TRACK_DEMO_MODE;
+  });
+
+  it("保存覆盖(kind → body),空体 kind 不落库", async () => {
+    const res = await actions.savePromptOverridesAction([
+      { arbitrationKind: "selection", promptText: "规则甲\n- 只看 B 级" },
+      { arbitrationKind: "movie-selection", promptText: "   " }, // 空体 = 内置,不写行
+    ]);
+    expect(res.success).toBe(true);
+    const rows = await getWorkflowRepository().listPromptOverrides();
+    expect(rows.map((o) => o.arbitrationKind)).toEqual(["selection"]);
+    expect(rows[0]?.promptText).toBe("规则甲\n- 只看 B 级");
+  });
+
+  it("超长 body → 整批不落库 + errors 逐 kind 返回", async () => {
+    const res = await actions.savePromptOverridesAction([
+      { arbitrationKind: "selection", promptText: "x".repeat(2001) },
+    ]);
+    expect(res.success).toBe(false);
+    expect(res.errors?.["selection"]).toContain("提示词过长");
+    expect(await getWorkflowRepository().listPromptOverrides()).toEqual([]);
+  });
+
+  it("未知 kind → errors,不落库", async () => {
+    const res = await actions.savePromptOverridesAction([
+      { arbitrationKind: "not-a-kind", promptText: "whatever" },
+    ]);
+    expect(res.success).toBe(false);
+    expect(res.errors?.["not-a-kind"]).toBe("未知 kind");
+  });
+
+  it("恢复默认 = 清空 prompt_overrides", async () => {
+    await actions.savePromptOverridesAction([{ arbitrationKind: "selection", promptText: "规则甲" }]);
+    const res = await actions.resetPromptOverridesAction();
+    expect(res.success).toBe(true);
+    expect(await getWorkflowRepository().listPromptOverrides()).toEqual([]);
+  });
+});
+
+describe("解析测试台 testEpisodeRuleAction (issue #44 Phase 3)", () => {
+  let actions: typeof import("./actions");
+  let getWorkflowRepository: typeof import("../lib/workflow-runtime").getWorkflowRepository;
+
+  beforeAll(async () => {
+    [actions, getWorkflowRepository] = await Promise.all([
+      import("./actions"),
+      import("../lib/workflow-runtime").then((m) => m.getWorkflowRepository),
+    ]);
+  }, 30_000);
+
+  beforeEach(async () => {
+    await getWorkflowRepository().replaceRulePatterns([]);
+  });
+
+  // 命中显示口径与 actions.ts 里的 testEpisodeRuleAction 一致:
+  // 类型(带季号/仅集号)· 组内序号(内置 1..3、自定义 自N)· 正则字符串。
+  const builtinExpr = (ruleId: string) =>
+    BUILTIN_RULE_PATTERNS.find((p) => p.ruleId === ruleId)?.expression ?? ruleId;
+  const HIT = { sxxexx: "sxxexx", variant: "variant", chinese: "chinese" } as const;
+
+  it("内置规则:标准 SxxExx 命中 sxxexx 槽位", async () => {
+    const r = await actions.testEpisodeRuleAction({ fileName: "狂飙.S01E01.1080p.mkv", multiSeason: false });
+    expect(r.code).toBe("S01E01");
+    expect(r.matched).toBe(`带季号 · 1 · ${builtinExpr(HIT.sxxexx)}`);
+  });
+
+  it("内置规则:第N集单季命中 chinese,多季禁用无季规则 → null", async () => {
+    const single = await actions.testEpisodeRuleAction({ fileName: "第3集.mkv", multiSeason: false });
+    expect(single.code).toBe("S01E03");
+    expect(single.matched).toBe(`仅集号 · 2 · ${builtinExpr(HIT.chinese)}`);
+    const multi = await actions.testEpisodeRuleAction({ fileName: "第3集.mkv", multiSeason: true });
+    expect(multi.code).toBeNull();
+    expect(multi.matched).toBeNull();
+  });
+
+  it("已保存自定义规则参与试跑:自定义季集规则参与解析", async () => {
+    // 自定义规则对**未剥扩展名**的原始文件名执行(与内置 digits 自带剥壳不同,见
+    // episode-code.ts 自定义循环)——用内置都不认的 S01_0012 写法验证自定义命中。
+    const expr = String.raw`[Ss](\d{1,2})_(\d{1,4})`;
+    await actions.saveRulePatternsAction([
+      { ruleId: "custom-underscore", role: "season-episode", expression: expr, label: "Sxx_Exx", sortOrder: 7, isDefault: false },
+    ]);
+    const r = await actions.testEpisodeRuleAction({ fileName: "S01_0012.mkv", multiSeason: false });
+    expect(r.code).toBe("S01E12");
+    expect(r.matched).toBe(`带季号 · 自1 · ${expr}`);
+  });
+it("内置只读语义:不保存任何规则时六条内置全部参与试跑", async () => {
+    const sxx = await actions.testEpisodeRuleAction({ fileName: "狂飙.S01E01.1080p.mkv", multiSeason: false });
+    expect(sxx.code).toBe("S01E01");
+    expect(sxx.matched).toBe(`带季号 · 1 · ${builtinExpr(HIT.sxxexx)}`);
+    const variant = await actions.testEpisodeRuleAction({ fileName: "S01 E01.mkv", multiSeason: false });
+    expect(variant.code).toBe("S01E01");
+    expect(variant.matched).toBe(`带季号 · 2 · ${builtinExpr(HIT.variant)}`);
+    const chinese = await actions.testEpisodeRuleAction({ fileName: "第3集.mkv", multiSeason: false });
+    expect(chinese.code).toBe("S01E03");
+    expect(chinese.matched).toBe(`仅集号 · 2 · ${builtinExpr(HIT.chinese)}`);
+  });
+
+  it("空文件名 → 提示", async () => {
+    const r = await actions.testEpisodeRuleAction({ fileName: "   ", multiSeason: false });
+    expect(r.message).toContain("文件名不能为空");
+  });
+});
+
+

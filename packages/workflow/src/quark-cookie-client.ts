@@ -107,10 +107,51 @@ export class QuarkCookieClient {
       ["_page", String(input.page ?? 1)],
       ["_size", String(input.size ?? DEFAULT_LIST_PAGE_SIZE)],
       ["_fetch_total", "1"],
-      ["_sort", "file_type:asc,updated_at:desc"],
+      ["_sort", "file_type:asc,updated_at:desc,file_name:asc"],
     ]);
     const data = unwrap(response, "QUARK_LIST_ITEMS_FAILED");
     return listFrom(data);
+  }
+
+
+  /** 分页遍历到底(listAllItems / listAllShareDetail 共用):按 fid 去重,直到某页
+   *  没有新增或不足一页;512 页硬上限兜住忽略 _page 的坏接口。
+   *  为什么必须去重:夸克 /file/sort 按 `file_type:asc,updated_at:desc` 排序,批量转存
+   *  会给几百个文件同一个 updated_at,并列顺序不稳定 → 两次独立调用的分页边界可能
+   *  重叠、或漏掉边界上的一个文件(同一个暂存目录两次列出来不一样,moveToSeason 的
+   *  范围守卫因此误报「文件不在暂存」)。去重 + 逐页重扫能把边界文件捞回来。 */
+  private async listAllPages<T extends { fid?: string }>(
+    size: number,
+    fetchPage: (page: number, size: number) => Promise<T[]>,
+  ): Promise<T[]> {
+    const seen = new Map<string, T>();
+    let page = 1;
+    for (;;) {
+      const items = await fetchPage(page, size);
+      let added = 0;
+      for (const item of items) {
+        const id = item.fid;
+        if (id === undefined) continue;
+        if (!seen.has(id)) {
+          seen.set(id, item);
+          added += 1;
+        }
+      }
+      if (added === 0 || items.length < size) break;
+      page += 1;
+      if (page > 512) break;
+    }
+    return [...seen.values()];
+  }
+
+  /** All immediate children of a directory, paginating through every page.
+   *  listItems only returns ONE page (default size 50), so directories with more
+   *  than one page of children were silently truncated (source shares were never
+   *  fully transferred / inspected). */
+  async listAllItems(input: { directoryId: string; size?: number }): Promise<QuarkItem[]> {
+    return this.listAllPages(input.size ?? DEFAULT_LIST_PAGE_SIZE, (page, size) =>
+      this.listItems({ directoryId: input.directoryId, page, size }),
+    );
   }
 
   /** A single file/directory's identity incl. its immediate parent (pdir_fid).
@@ -174,10 +215,31 @@ export class QuarkCookieClient {
       ["_fetch_banner", "0"],
       ["_fetch_share", "0"],
       ["_fetch_total", "1"],
-      ["_sort", "file_type:asc,updated_at:desc"],
+      ["_sort", "file_type:asc,updated_at:desc,file_name:asc"],
     ]);
     const data = unwrap(response, "QUARK_SHARE_DETAIL_FAILED");
     return listFrom(data) as QuarkShareItem[];
+  }
+
+
+  /** All files inside a share, paginating through every page. listShareDetail
+   *  returns ONE page (default size 50); a share with more items only ever
+   *  transferred the first page unless we loop here. */
+  async listAllShareDetail(input: {
+    pwd_id: string;
+    stoken: string;
+    pdirFid?: string;
+    size?: number;
+  }): Promise<QuarkShareItem[]> {
+    return this.listAllPages(input.size ?? DEFAULT_LIST_PAGE_SIZE, (page, size) =>
+      this.listShareDetail({
+        pwd_id: input.pwd_id,
+        stoken: input.stoken,
+        ...(input.pdirFid !== undefined ? { pdirFid: input.pdirFid } : {}),
+        page,
+        size,
+      }),
+    );
   }
 
   /** Step 3: save selected share files into a destination directory; returns task_id. */

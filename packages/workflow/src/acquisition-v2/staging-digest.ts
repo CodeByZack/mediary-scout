@@ -1,4 +1,4 @@
-import { episodeCodeFromFileName, episodeDateConflict } from "../episode-code.js";
+import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../episode-code.js";
 import type { SimTreeFile } from "./storage-115-simulator.js";
 
 /**
@@ -71,6 +71,8 @@ export interface StagingDigestInput {
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")。综艺「第N期上/下 ↔
    *  Episode N (Part 1/2)」锚定用(2026-08-31 地球超新鲜案);缺省 = 无锚定。 */
   episodeNames?: Record<string, string>;
+  /** issue #44: 可配置集数解析规则(UI 编辑后注入)。缺省 = 内置正则。 */
+  rules?: EpisodeParseRules;
 }
 
 export function fileBaseName(file: SimTreeFile): string {
@@ -107,7 +109,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
       continue;
     }
     const parsedCode =
-      overrides[base] ?? episodeCodeFromFileName(base, input.seasons, input.episodeNames);
+      overrides[base] ?? episodeCodeFromFileName(base, input.seasons, input.episodeNames, input.rules);
     if (parsedCode) {
       // 年守卫(issue #21 同族):文件自带日期与该集播出日明显矛盾 → 不采信,
       // 按解析失败处理(宁可少认不乱认;映射表给出的 code 同样过守卫)。
@@ -136,9 +138,13 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
   const coveredCodes = episodeCodes.filter((code) => needSet.has(code));
   const missingCodes = input.needCodes.filter((need) => !needSet.has(need) || !episodeCodes.includes(need));
 
-  // Coverage: ≥1 needed item landed (TV), or a video landed (movie).
-  // issue #39: passes 只看覆盖率——集号覆盖 need 即收尾,unparsed 文件不否决整包。
-  const coveragePasses = seasonSet.size > 0 ? coveredCodes.length > 0 : videos.length > 0;
+  // Coverage pass (issue #44 用户拍板 2026-09-06):TV 必须**全量覆盖**缺集才算 pass——
+  // 只要还缺任一集,就不该走 clean 收尾,而要把包里所有视频交给 AI 集数映射再补认
+  // (此前「覆盖 ≥1 缺集即 pass」会把「识别出一半、还缺一大截」误判为收尾,漏掉的集
+  // 永远没有机会升 AI)。issue #39 的「unparsed/附件不否决整包」仍然成立(附件/junk 只进
+  // junkSignals、不参与集号覆盖判定),但「部分覆盖即收尾」被移除。
+  // Movie 无集号,passes = 有视频落盘(单正片判定在 digestMovieStaging)。
+  const coveragePasses = seasonSet.size > 0 ? missingCodes.length === 0 : videos.length > 0;
   const passes = coveragePasses;
 
   return {

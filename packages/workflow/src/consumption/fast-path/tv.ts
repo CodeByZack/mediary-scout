@@ -1,5 +1,6 @@
-import { episodeCodeFromFileName, episodeDateConflict } from "../../episode-code.js";
+import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
 import { arbitrateSelection } from "../../acquisition-v2/arbitrator.js";
+import type { PromptOverrideLookup } from "../../ruleset.js";
 import { gradeCandidates, summarizeGrading } from "../../acquisition-v2/candidate-grader.js";
 import {
   MAX_DEAD_LINK_RETRIES,
@@ -37,7 +38,11 @@ export type { FastPathOptions, FastPathResult };
  *
  *   inspect landing point (§6b#8) → candidate grading (code) →
  *     A-grade? transfer : arbitrateSelection →
- *     transfer (code) → staging digest (code) → passes ? finalize : arbitrateDiagnosis
+ *     transfer (code) → staging digest (code) → passes ? finalize : wipe + next candidate
+ *
+ *     A single-season landing that the code cannot fully cover gets ONE retry with AI
+ *     episode mapping (landing.tryEpisodeMapping); TV has no diagnosis arbitration —
+ *     not-all-covered means wipe staging and try the next candidate (§43).
  *
  * A clean run (an A-grade that lands and digests cleanly) makes ZERO LLM
  * calls. Only genuine ambiguity — no A-grade, or a dirty/off-target
@@ -73,6 +78,10 @@ interface TvPoolContext {
   urlById?: Record<string, string>;
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")—— 综艺「第N期」Part 锚定。 */
   episodeNames?: Record<string, string>;
+  /** issue #44: 可配置集数解析规则(UI 编辑后注入)。缺省 = 内置正则。 */
+  episodeRules?: EpisodeParseRules;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }
 
 /** 阶段运行结果。done 非空 = 该池已收尾(入库或诚实终止)，直接返回；否则 caller 决定是否
@@ -112,11 +121,14 @@ async function runTvCandidatePhase(
     });
   } else {
     escalated = true;
+    // §42:同 landing 的 AI 心跳——选片仲裁期间零推送,先发「进行中」让活动页不空转。
+    emitStep(onProgress, "arbitrateSelection", "pick", "AI 正在挑资源,可能需数十秒…");
     const arbitration = await arbitrateSelection({
       model,
       summary: summarizeGrading(grading),
       title: target.title,
       seasons,
+      ...(ctx.promptOverrides !== undefined ? { promptOverrides: ctx.promptOverrides } : {}),
     });
     current = arbitration.candidateId;
     if (current === null) {
@@ -178,7 +190,7 @@ async function runTvCandidatePhase(
     });
   }
 
-  // 3. Transfer → digest → finalize / diagnose, with limited retries for dead
+  // 3. Transfer → digest → finalize / wipe-and-retry, with limited retries for dead
   //    links and off-target packs. A dead link (nothing landed) is a CHEAP
   //    fail-loud probe — it must NOT consume the transfer-attempt budget, so it
   //    is counted separately (MAX_DEAD_LINK_RETRIES) and only a real materialized
@@ -225,6 +237,8 @@ async function runTvCandidatePhase(
       transfer,
       ...(ctx.episodeAirDates !== undefined ? { episodeAirDates: ctx.episodeAirDates } : {}),
       ...(ctx.episodeNames !== undefined ? { episodeNames: ctx.episodeNames } : {}),
+      ...(ctx.episodeRules !== undefined ? { episodeRules: ctx.episodeRules } : {}),
+      ...(ctx.promptOverrides !== undefined ? { promptOverrides: ctx.promptOverrides } : {}),
     });
     if (closed.done) {
       return { done: closed.done, escalated: closed.escalated, deadRetries: closed.deadRetries };
@@ -237,7 +251,7 @@ async function runTvCandidatePhase(
 }
 
 export async function runFastPathAcquisition(options: FastPathOptions): Promise<FastPathResult> {
-  const { sandbox, model, target, isChineseNative, onProgress } = options;
+  const { sandbox, model, target, isChineseNative, onProgress, episodeRules, promptOverrides } = options;
   const seasons = target.seasons;
   logStorageProvider(sandbox, target.title, options.storageProvider);
 
@@ -255,7 +269,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
   const onDisk = await sandbox.inspectTargetDir();
   for (const file of onDisk) {
     const base = fileBaseName(file.path);
-    const code = episodeCodeFromFileName(base, seasons);
+    const code = episodeCodeFromFileName(base, seasons, undefined, episodeRules);
     if (!code) continue;
     // 年守卫同样作用于在库文件:名字像 E11 但自带日期与播出日矛盾的,不据此
     // 反标 obtained(防历史错标件把缺集"自我认证"掉)。
@@ -410,6 +424,8 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     escalated,
     ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
     ...(target.episodeNames !== undefined ? { episodeNames: target.episodeNames } : {}),
+    ...(episodeRules !== undefined ? { episodeRules } : {}),
+    ...(promptOverrides !== undefined ? { promptOverrides } : {}),
   };
 
   // ★ 阶段1 —— primary 池:只要 primary 有 A 候选(或根本没有别名可兜底)就先转存 primary,

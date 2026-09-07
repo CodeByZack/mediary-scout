@@ -55,6 +55,49 @@ export function runRepositoryContract(name: string, harness: RepoHarness): void 
       });
     });
 
+    describe("rule patterns + prompt overrides (issue #44)", () => {
+      it("round-trips rule patterns and replaces wholesale", async () => {
+        const repo = await fresh();
+        expect(await repo.listRulePatterns()).toEqual([]);
+        await repo.replaceRulePatterns([
+          { ruleId: "digits", role: "episode-only", expression: "^(\\d{1,4})$", label: "纯数字", sortOrder: 5, isDefault: false },
+        ]);
+        const rows = await repo.listRulePatterns();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ ruleId: "digits", expression: "^(\\d{1,4})$", isDefault: false });
+        await repo.replaceRulePatterns([]); // 清空 = 回退内置
+        expect(await repo.listRulePatterns()).toEqual([]);
+      });
+
+      it("duplicate ruleId is last-wins in both engines (S3)", async () => {
+        const repo = await fresh();
+        await repo.replaceRulePatterns([
+          { ruleId: "digits", role: "episode-only", expression: "^\\d{1,3}$", label: "第一版", sortOrder: 5, isDefault: false },
+          { ruleId: "digits", role: "episode-only", expression: "^(\\d{1,4})$", label: "第二版", sortOrder: 5, isDefault: false },
+        ]);
+        const rows = await repo.listRulePatterns();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ expression: "^(\\d{1,4})$", label: "第二版" });
+      });
+
+      it("round-trips prompt overrides and clears them", async () => {
+        const repo = await fresh();
+        expect(await repo.listPromptOverrides()).toEqual([]);
+        await repo.replacePromptOverrides([
+          { arbitrationKind: "selection", promptText: "自定义选片", isActive: true },
+          { arbitrationKind: "movie-diagnosis", promptText: "自定义电影诊断", isActive: false },
+        ]);
+        const rows = await repo.listPromptOverrides();
+        expect(rows).toHaveLength(2);
+        expect(rows.find((r) => r.arbitrationKind === "selection")).toMatchObject({
+          promptText: "自定义选片",
+          isActive: true,
+        });
+        await repo.replacePromptOverrides([]);
+        expect(await repo.listPromptOverrides()).toEqual([]);
+      });
+    });
+
     describe("accounts + sessions", () => {
       const account = (over: Partial<Account> = {}): Account => ({
         id: "acct_1",

@@ -1,4 +1,5 @@
 import type { LanguageModel } from "ai";
+import type { PromptOverrideLookup } from "../../ruleset.js";
 import {
   arbitrateMovieDiagnosis,
   arbitrateMovieSelection,
@@ -65,6 +66,8 @@ export interface MovieFastPathOptions {
     provider: AssrtProviderPort;
     preferredLanguage: string;
   };
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }
 
 export interface MovieFastPathResult {
@@ -245,6 +248,8 @@ interface MoviePoolContext {
   attempted: Set<string>;
   deadRetries: number;
   escalated: boolean;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }
 
 interface MoviePhaseOutcome {
@@ -278,11 +283,14 @@ async function runMovieCandidatePhase(
     emitStep(onProgress, "pickCandidate", "pick", pickDetail);
   } else {
     escalated = true;
+    // §42:同上——电影选片仲裁期间零推送,先发「进行中」。
+    emitStep(onProgress, "arbitrateSelection", "pick", "AI 正在挑资源,可能需数十秒…");
     const arbitration = await arbitrateMovieSelection({
       model,
       summary: summarizeGrading(grading),
       title: target.title,
       year: target.year,
+      ...(ctx.promptOverrides !== undefined ? { promptOverrides: ctx.promptOverrides } : {}),
     });
     current = arbitration.candidateId;
     if (current === null) {
@@ -543,11 +551,14 @@ async function runMovieCandidatePhase(
     }
     // 代码判不了 → 诊断仲裁(AI)。
     escalated = true;
+    // §42:同上——电影诊断仲裁期间零推送,先发「进行中」。
+    emitStep(onProgress, "arbitrateDiagnosis", "verify", "AI 正在诊断落盘,可能需数十秒…");
     const diagnosis = await arbitrateMovieDiagnosis({
       model,
       summary: digest.summary,
       title: target.title,
       year: target.year,
+      ...(ctx.promptOverrides !== undefined ? { promptOverrides: ctx.promptOverrides } : {}),
     });
     if (diagnosis.action === "accept") {
       // issue #33 映射日志:AI 支把输入名单(喂给 AI 的 digest.summary 含全量文件)一起
@@ -601,7 +612,7 @@ async function runMovieCandidatePhase(
 export async function runMovieFastPathAcquisition(
   options: MovieFastPathOptions,
 ): Promise<MovieFastPathResult> {
-  const { sandbox, model, target, subtitle, onProgress } = options;
+  const { sandbox, model, target, subtitle, onProgress, promptOverrides } = options;
   logStorageProvider(sandbox, target.title, options.storageProvider);
 
   // 0. Landing-point check FIRST (movie has no episode codes): if the movie dir
@@ -727,6 +738,7 @@ export async function runMovieFastPathAcquisition(
         deadRetries,
         escalated,
         urlById: mtUrlById,
+        ...(promptOverrides !== undefined ? { promptOverrides } : {}),
       },
       raw,
       grading,
@@ -808,6 +820,7 @@ export async function runMovieFastPathAcquisition(
         deadRetries,
         escalated,
         urlById: mbUrlById,
+        ...(promptOverrides !== undefined ? { promptOverrides } : {}),
       },
       fallbackView,
       grading,

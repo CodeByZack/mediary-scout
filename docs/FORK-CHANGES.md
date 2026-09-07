@@ -35,10 +35,76 @@
 | 2026-09-03 | feat | **PR #37 movie 落盘诊断去 LLM 深化**(issue #33):多视频包最大正片明显占优(体积下限+附件上限+2x 判据)代码直收、判据与删除名单进日志、三支收尾抽 finishMovieAccept 共用、finalize 透传 keepVideoId(与日志删除名单一致) |
 | 2026-09-04 | fix | **PR #42 TV 脏包判定收紧**(issue #39):附件(花絮/预告/sample/广告)一律不判脏、只进 junkSignals 待 finalize 丢弃,集数覆盖 need 即收尾(用户拍板不区分严重/轻微);JUNK 正则 ost/mv/making 加分隔符守卫(修 Lost/Ghost 误报);映射输入减 junkSignals(消词表漂移) |
 | 2026-09-04 | fix | **issue #39 后续:passes 与 isDirtyPack 解耦**——passes 只看覆盖率(集号覆盖 need 即收尾),不再被 isDirtyPack 卡住;isDirtyPack 从 TV StagingDigest 接口移除(仅剩装饰性日志文案,两条分支下游行为完全一样);tryEpisodeMapping 返回简化为 passed / no / failed(删除 unmapped-but-clean);landing 主流程删除 dead missingCodes.length === 0 分支 |
+| 2026-09-06 | fix | **§41 暂存列表分页不稳**(issue #44,地球超新鲜 S02 f9a77b99 案):夸克 `file/sort` 按 `file_type,updated_at` 排序分页、批量转存同秒时间戳致分页边界重叠/漏文件 → 同一 `listTree(staging)` 两次调用结果不同,AI 认全 20 集却在归位守卫误报「不在暂存」整包清空;`_sort` 加唯一 tie-breaker `file_name:asc` 使分页稳定,`listAllItems`/`listAllShareDetail` 按 fid 去重取到「无新增页」为止;`moveToSeason` 严格守卫保持不变(用户拍板:id 对不上必是上游 bug,应大声报出) |
+| 2026-09-06 | fix | **§43 部分覆盖不落盘**(用户拍板,回退 §39 同轮延伸):此前 AI 补不全时保留已识别集先 finalize 并「已完成」收尾,与「落盘=全量对齐 need」冲突(run 以完成结束却仍缺集);改为**没拿全就不落盘**——清包换候选,primary 试穷后落兜底池别名重搜(有别名时),直到候选/预算耗尽才诚实报未覆盖;仲裁行如实报「AI 补认/代码识别只认出 N/M 集,未全量对齐就不落盘」+ args 带 covered/missing 明细 |
+| 2026-09-06 | fix | **§42 AI 调用期间 UI 无反馈**(用户实测反馈):fast path 的 AI 调用(选片/诊断/集数映射)耗时数十秒但期间零推送,UI 停在上一条 `stagingDigest`(纯代码、毫秒级)步骤上,观感像「卡在代码识别很久」;修法=每个 AI 调用**发起前**发一条「AI …进行中」心跳事件,复用活动页对 running 状态最后一步的 ⏳ 渲染(零 UI 改动),结果 emit 紧随其后自然把它覆盖为 ✅ |
 
 ---
 
 ## 详细记录
+
+### 43. 部分覆盖不落盘——落盘必须全量对齐 need(2026-09-06 用户拍板,回退 §39 同轮延伸)
+
+**背景**:地球超新鲜 S02 实测(2026-09-06,候选 5 中第 3 个)。代码识别出 8 集,AI 集数映射又补出
+8 集,共 16/20 集,**4 集缺**。当时行为(§39 落地时顺带写的):部分覆盖也算「完成」——finalize 把 16 集
+改名归位标记入库,`done` 语「已完成:… 已入库,仍有 4 集未拿全」,run 结束、剩余交给下次巡检。
+
+**用户拍板**:落盘(归位/markObtained)意味着真入库,半入库会让 run 以「已完成」结束却仍缺集,
+语义拧巴。**改回:全量对齐 need 才落盘**,部分覆盖只作记录、不落盘。
+
+**改动**(`landing.ts closeOutTvLanding`,删除 74 行的部分入库分支):
+- AI 映射后 `missingCodes` 非空(无论认到多少)→ **不 finalize、不 wipe 后收尾**,统一清空暂存 →
+  `nextCandidate` 换下一个候选 → 直到候选/转存预算耗尽才 `reportNoCoverage` + `concludeUncovered`
+  诚实报未覆盖,交给下次巡检。
+- primary 池试穷后自然落到**兜底池别名重搜**(§27 secondary 池,独立转存预算)——但兜底池
+  **仅当任务有别名时启动**(tv.ts `target.aliases.length > 0`),无别名则直接进耗尽分支。
+- 仲裁行文案如实:「AI 补认/代码识别只认出 N/M 集,未全量对齐就不落盘:清掉暂存,换一条
+  候选(本池没有可换的)」;args 带 `covered`/`missing` 集号明细(`compactCodeList`),前端展开可见。
+- 零 AI 收尾语义不变:代码已全量覆盖时仍直接 finalize、不调 AI。
+
+**没变的部分**:§39 的两处语义都保留——`passes` 要求**全量覆盖**(不是「≥1 个缺集」);
+附件/花絮/预告只进 `junkSignals`、不参与集号覆盖、不否决整包(§27/#39 判定不变)。movie 分支
+无此路径(单正片判定,不存在「部分覆盖」概念),未改动。
+
+**为什么现在能走到兜底池**:此前部分覆盖会 `done: {…}` 直接 return(tv.ts:439 提前返回),兜底池
+根本不启动;现在不落盘 → `runTvCandidatePhase` 返回 `done: null` → primary 试穷后走 §27 的两阶段
+候选池换来源再试一次(有别名时等于多一轮搜索 + 独立 3 次转存预算),而不是「落半包 + 等下次巡检」。
+
+**留待后续讨论(用户明确搁置)**:部分覆盖到底要不要为少数缺集重复转存大包——转存代价(网盘流量/
+时间/预算)与「一次补齐」的收益如何权衡,以及是否值得为「已认出 N 集」的包设计降级落盘(如落到
+临时目录、不 markObtained)。本次只做「不落盘」这一半。
+
+**测试**:fast-path.test.ts 的 §44 部分覆盖用例改写为 §43 断言(不 finalize、Season 目录空、
+missing 仍是全部 3 集、仲裁行含「只认出 2/3 集,未全量对齐就不落盘」)。fast-path(36)+
+variety-episode-landing + finalize-landing + staging-digest 合计 103 全绿;movie-fast-path(27)
+全绿;workflow 包 tsc 零错误。
+
+### 42. AI 调用期间 UI 无反馈——观感卡在「代码识别」(2026-09-06 用户实测反馈,已修)
+
+**现象**:每次 run 感觉总卡在「代码识别」那一步很久,期间 UI 上没有任何说明。
+
+**定位**:`stagingDigest`(代码识别)本身是纯代码判定、毫秒级;真正的等待是紧随其后的
+**AI 集数映射调用**(`arbitrateEpisodeMapping`,arbitrator.ts 单次 deepseek-v4-flash 请求,
+通常数十秒)。该调用期间**没有 emit 任何步骤/进度事件**,UI 只能停在最后一条 stagingDigest
+步骤上,观感即「卡在代码识别很久」。run e668ffa5(地球超新鲜 S02)三个转存候选中,第 2、3
+轮 digest 之后各有一次 AI 集数映射,期间无任何中间反馈。
+
+**修法(复用现成的 running 渲染,零 UI 改动)**:活动页/通知页把 **running 状态下的最后一条
+步骤**渲染成 ⏳(`activity-view.ts inferStepStatuses`),所以只需在每个 AI 调用**发起前**发一条
+「进行中」心跳事件;调用结束后紧随其后的结果 emit 自然把这条覆盖为 ✅(`agent-trace-sink` 的
+append 串行链保证序号不乱、心跳不会落到结果之后)。toolName/phase 与结果 emit 一致 → UI 的
+AI 徽章(`stepUsedAI`)与轮次卡片分组(`groupStepsIntoRounds`)完全不变。
+
+- `landing.ts tryEpisodeMapping`:`arbitrateEpisodeMapping` 前发「AI 正在识别集数,可能需数十秒…」
+- `tv.ts runTvCandidatePhase`:`arbitrateSelection` 前发「AI 正在挑资源,可能需数十秒…」
+- `movie.ts runMovieCandidatePhase`:选片仲裁、诊断仲裁各发一条
+
+**有意留白**:`finalizeLanding`(改名+归位+mark,大包可能数十秒到数分钟)同样是静默期,本轮
+按用户反馈只修 AI 段;要用同一手法补上即可(landing 3 个调用点 + movie 1 处)。
+
+**测试**:fast-path.test.ts 的「第N期」重映射用例加断言——`arbitrateEpisodeMapping` 事件里
+第一条 activity 必须是心跳文案、且至少 2 条(心跳+结果)。fast-path(36)+ movie-fast-path(27)
+全绿;workflow 包 tsc 零错误。
 
 ### 31. TV 脏包判定收紧——附件不否决整包,集数满足即收尾（issue #39）
 
@@ -105,6 +171,170 @@ TV 集成(variety-episode/v2-full-chain/v2-orchestrator)全绿,无回归。
 
 **测试**:candidate-grader(23)、fast-path(36)、consumption-evidence(11)、staging-digest(33)全绿,无回归。
 
+### 34. 识别规则可配置系统 Phase 0——数据层与 ruleset 加载器(issue #44)
+
+**目标**(issue #44):让用户在 UI 上编辑集数解析正则和 AI 仲裁 Prompt,适应不同作品的命名习惯。分四期落地,本期为 Phase 0(建表 + ruleset.ts)。
+
+**约定(用户拍板)**:
+- 集数解析正则以**实际代码为准**(issue 标题写「7 条」是笔误,实际 6 条:规则 0 SxxExx / 1 变体 / 2 E01 / 3 1x01 / 4 第N集·话·期 / 5 纯数字);
+- AI Prompt 只配 **4 个**仍在生产的:SELECTION_SYSTEM(TV 选片)、EPISODE_MAPPING_SYSTEM(TV 集数映射)、MOVIE_SELECTION_SYSTEM(Movie 选片)、MOVIE_DIAGNOSIS_SYSTEM(Movie 诊断)——TV 诊断 DIAGNOSIS_SYSTEM/arbitrateDiagnosis 在 main 上**零调用点**(#33/#42 后 TV 诊断已代码化),不开放配置。
+
+**改动**:
+- sqlite.ts 加 2 张表:rule_patterns(rule_id PK, role, expression, label, sort_order, is_default, created_at)、prompt_overrides(arbitration_kind PK, prompt_text, is_active)。**偏离 issue DDL 一处**:rule_patterns 增加 role 列(season-episode / episode-only),因为解析代码依赖捕获组位置(group1=季、group2=集 / group1=集号),自定义规则必须声明角色才能被安全消费;
+- 新增 ruleset.ts(225 行):RulePattern/PromptOverride 类型、BUILTIN_RULE_PATTERNS(6 条,逐一镜像 episode-code.ts 的解析正则)、ARBITRATION_KINDS(4 个)、compileRulePattern(安全编译,非法返回 null)、countCaptureGroups(跳过转义/字符类/非捕获/前瞻后顾;命名捕获组 (?<name> 正确计入)、validateRuleExpression(先校验 role 合法,再验可编译 + 必需捕获组数:season-episode ≥ 2、episode-only ≥ 1;组数大于必需宽容放行,顺序/空匹配由 Phase 1 apply 侧运行时拒)、loadRulePatterns(表空 → 内置深拷贝;内置行覆盖表达式;内置行损坏 → 回退该条内置;非空表中缺失的内置 = 用户停用;自定义损坏/未知 role 丢弃;expression 读侧 trim;按 sort_order 排序)、loadPromptOverrides(透传,合并逻辑留 Phase 2);
+- **内置正则是「裸正则 + 代码守卫」两层模型(重要设计约束)**:裸正则承载匹配文本,但 digits 的剥扩展名/合理集数守卫/年份排除、chinese 的衍生黑名单/Part 锚定/集话回退、ep-only/cross 的 isPlausibleEpisodeNumber、多季禁用无季规则等语义**不进配置**,由 episode-code.ts 按 ruleId 的固定分支保留(Phase 1 只替换正则文本,保守起见自定义规则走通用 apply);正则不支持 flags(JS 拒内联 (?i),内置靠 [Ss][Ee] 字符类兜底);is_default 默认 1,自定义规则写入需显式 0(Phase 1 UI 注意)。
+- repository.ts:接口 + InMemory 实现各加 listRulePatterns / replaceRulePatterns(整体替换,空数组=清空回退内置)/ listPromptOverrides / replacePromptOverrides;
+- sqlite.ts:SqliteWorkflowRepository 实现同 4 方法(事务内 clear+insert;replaceRulePatterns 用 INSERT OR REPLACE,重复 ruleId 双引擎一致 last-wins;replacePromptOverrides 仍是普通 INSERT,重复 kind 时 SQLite 抛错——Phase 2 触碰 prompt 覆盖时顺手统一为 OR REPLACE);
+- index.ts 导出 ruleset。
+
+**安全边界**(对应 issue):正则保存时 new RegExp 试编译 + 捕获组契约校验(界面标红在 Phase 1);表为空或规则损坏自动回退内置值;prompt 模板化(固定块不可改)在 Phase 2。
+
+**子代理 review(REQUEST_CHANGES → 修订闭环)**:唯一必须修 M1(自定义规则未知 role 被 validateRuleExpression/loadRulePatterns 双双放行,破坏「损坏丢弃」安全边界)已修(validateRuleExpression 开头拒未知 role + 自定义行按损坏丢弃 + 测试);建议改按实落地:共享引用深拷贝(S2)、重复 ruleId 双引擎统一 last-wins(SQLite 改 INSERT OR REPLACE,S3)、读侧 trim 与校验一致(S4)、repo+loader 端到端回退测试(S7)、「≥ 组数 + 顺序/空匹配运行时拒」契约注释(S5);S1/S6/S8 记录在改动列表与安全边界段;I1 行数修正为 225。待复核子代理确认闭环。
+
+**测试**:新增 ruleset.test.ts(19 用例:组计数/校验/编译/加载语义/深拷贝/trim/端到端回退)+ repository-contract 加 3 组 round-trip(含重复 ruleId last-wins)(InMemory 56 + SQLite 59 全绿);workflow 包 tsc 零错误;episode-code(24)无回归。
+
+### 41. 暂存列表分页不稳——同一 `listTree(staging)` 两次调用结果不同,AI 认全 20 集却一集没落库(issue #44,地球超新鲜 S02 run f9a77b99)
+
+**症状**:v0.0.6 实跑,AI 集数映射把 20 集全认对(第N期上→E(2N-1)、第N期下→E(2N)),
+改名 20 个文件全部成功(renameVideo 逐文件在 `listTree(staging)` 里校验过),但紧接着归位
+`moveToSeason` 的守卫用**同一次 `listTree(staging)`** 再查,2 个文件 id(815e6f0d…、
+22651e4…)不在结果里 → 抛 `SANDBOX_FILES_NOT_IN_STAGING` → 整包清空,`no_coverage` 收尾,
+一集都没落库。
+
+**根因(用户质疑成立:AI 的 id 就是 stage 查出来的,必然对齐 → 反证唯一成立项)**:
+digest 喂给 AI 的 `transfer.staging` 与 `moveToSeason` 守卫用的都是 `this.storage.listTree(staging)`
+同一个方法;改名后暂存目录内容没变,两次调用结果却不同(改名那次列表全,归位那次漏 2)→
+`listTree`/`listAllItems` **非幂等**。夸克 `/file/sort` 每页 50、`_sort=file_type:asc,
+updated_at:desc`:批量转存几百个文件落在几乎同一 `updated_at` 秒,排序大量并列,OFFSET 分页
+在并列边界处**重叠/漏项**;旧 `listAllItems` 既不去重、又用 `items.length < size` 提前截断,
+漏掉的文件在下一页不会回来。
+
+**修法(修前面的根,守卫保持严格)**:用户拍板——id 对不上一定是前面出问题,该大声报出来,
+不该让守卫装糊涂。故只修列表本身:`quark-cookie-client.ts` 的 `_sort` 加唯一 tie-breaker
+`file_name:asc`(目录内文件名唯一,排序全序化,OFFSET 分页稳定、不再漏项);`listAllItems`/
+`listAllShareDetail` 按 `fid` 去重、持续取页直到「本页无新增」或短页,对残余重叠免疫
+(512 页上限防 `_page` 失效死循环)。`moveToSeason` 的 `SANDBOX_FILES_NOT_IN_STAGING` 严格守卫
+保持不变——列表修好后它应当不再误报;若再触发,就是真实上游 bug,值得抛错彻查。
+
+**测试**:quark-cookie-client 加「分页重叠去重仍收全 120」回归 + `_sort` 含 `file_name:asc` 断言;
+v2-sandbox-move 严格守卫用例(not_in_staging 拒绝移动)保持不变;finalize-landing/fast-path/
+v2-acceptance/staging-digest/quark-storage-executor 全绿;workflow 包 tsc 零错误。
+
+**验证(2026-09-06 v0.0.7 实测,run e668ffa5,地球超新鲜 S02)**:3 轮转存候选全部走完
+finalizeLanding(归位 16 个文件、非缺集跳过 10 件、清理 1 个多余文件),**`moveToSeason` 的
+`SANDBOX_FILES_NOT_IN_STAGING` 严格守卫未再触发**——列表修复生效。结局 `partial`(最终候选包
+本身只含 16 集,缺 E17–E20,非守卫误报),行为符合预期。
+
+### 40. 夸克转存/列出只取第一页(50 项)——大分享包静默丢文件(地球超新鲜实测暴露)
+
+**背景**:「地球超新鲜 第2季」源分享包有 116+ 个文件(用户手动点开能看到第9期/第10期/福利篇),但转存进暂存区只有 50 个、代码只认到第1–4期。排查根因在夸克 executor/client:
+`listItems` 与 `listShareDetail` 都只请求 `_page=1&_size=50`(DEFAULT_LIST_PAGE_SIZE=50),且**从不翻页**
+——任何目录/分享文件超过 50 项,超出部分被静默丢弃(源/暂存目录 >50 项时,staging 检查与树遍历同样被截断)。
+
+**改动**:
+- `quark-cookie-client.ts`:新增 `listAllItems` / `listAllShareDetail`,用 `_page` 循环取到短页/空页为止收集全部子项
+  (若一页恰好 50 项则多取下一页直到空页,稳健不死循环)。
+- `quark-storage-executor.ts`:
+  - `transfer()` 改用 `listAllShareDetail` 取全分享项,再**分批** `saveShare`(单次 fid_list 有上限,SAVE_SHARE_BATCH_SIZE=50),
+    避免 >50 项分享只转存前 50;
+  - `collectVideos` / `collectUnparsedVideos` / `listTree` / `listSubdirectories` / `listChildDirectories` /
+    `createDirectory` 全部改用 `listAllItems`,使 staging 检查/树遍历/归位能看见 >50 项目录的全部文件。
+
+**测试**:quark-cookie-client 新增 2 用例钉分页(120 项 → 3 页取全,页数组 ["1","2","3"]);
+quark-storage-executor transfer 断言改用 listAllShareDetail;29 用例全绿;workflow 包 tsc 零错误。
+
+**测试包**:CI test 模式构建 v0.0.6(GitHub Actions run 34028588805,arm+x86 mode=test+live,含 §39+§40 两个修复),产物在 /vol1/1000/download/fpk-test/v0.0.6/。
+
+### 39. 快路径「部分覆盖 → 升 AI 集数映射」修复(issue #44 用户拍板,地球超新鲜测试暴露)
+
+**背景**:实测「地球超新鲜 第2季」时,代码只从包里识别出 S02E01–E04(「第N期上/下」),还需 E05–E20;
+但 `digest.passes` 被定义为「覆盖 ≥1 个缺集」(issue #39 拍板),于是走了 clean 收尾直接归位标记 4 集、run 结束
+——那 16 集与 37 个「看不出集数」的文件从未被送去 AI 集数映射。用户拍板:只要代码没**全量** cover 缺集,
+就应该把包里所有视频扔给 AI 映射;「覆盖≥1 即 pass」这个判断不对。
+
+**改动**:
+- `staging-digest.ts`:`passes`(TV)从「覆盖≥1 个缺集」改为「**全量覆盖**缺集(`missingCodes.length === 0`)」。
+  部分覆盖仍可能保留已识别集,但不再被当作「代码识别完成」提前收尾。movie 的 passes(单正片判定)不变。
+  issue #39 的「附件/junk 不否决整包」语义保留(附件仍只进 junkSignals、不参与集号覆盖)。
+- `landing.ts closeOutTvLanding`:非全量覆盖时不再走 clean 收尾,而是进 `tryEpisodeMapping`(AI 把包里
+  非衍生视频全部交 AI 重映射)。AI 补认后全覆盖 → 按 AI 结果收尾;AI 也补不全(包内确实缺集)时
+  **保留已识别集先 finalize(归位/标记),不 wipe**,剩余缺集如实报告、留待下次巡检;只有零覆盖才
+  清空暂存换候选(原行为)。`done` 结论语改为「已完成:… 已入库,仍有 N 集未拿全」,不再伪造全覆盖。
+- `tryEpisodeMapping` 的「passed/目标已齐」判定复用 `re.passes`,随语义修正自动变为「AI 补认后全量覆盖」。
+
+> **⚠️ 同日被 §43 回退(用户拍板)**:上面第 2 条「AI 补不全时**保留已识别集先 finalize、剩余留待巡检**」
+> 已撤销——落盘必须**全量对齐 need**,部分覆盖不落盘、清包换候选。§39 里 passes 改全量覆盖与
+> 「附件不否决整包」两处语义**不变**,仅撤掉「部分入库」那半。详见 §43。
+
+**测试**:staging-digest(36,内含新增「全量覆盖→pass」+「部分覆盖→非 pass」)、finalize-landing(12)、
+variety-episode-landing(19)、fast-path(36,部分覆盖用例由「零 AI 收尾」改为「升 AI 映射、保留已识别」)、
+consumption-evidence(11)、movie-fast-path、episode-code(31)、candidate-grader(23)合计 195 全绿;workflow 包 tsc 零错误。
+
+### 38. issue #44 UI 重构——单输入框正则 + AI 提示词并入识别规则(用户拍板)
+
+**背景**:用户反馈现有 UI「每条规则一个输入框 + 独立 AI 提示词 tab」太乱不直观,要求:① 正则规则按顺序放进一个输入框(懂正则的人一眼看懂);② 去掉独立「AI 提示词」tab,并入「识别规则」;③ 整体统一视觉。
+
+**改动**:
+- 正则编辑器:RulePatternsForm 从「六内置槽位 + 自定义行的表格(每行一个 expression input + role select + sortOrder)」改为**单个多行 textarea**。行格式 `S: 正则`(季+集,两捕获组)/ `E: 正则`(仅集号,一捕获组),顺序 = 优先级;# 开头注释与空行忽略;顶部注释头解释语法。
+- 文本块 ↔ 规则行转换(rule-patterns-utils.ts 新增):`formatRuleBlock`(规则行 → 文本块,内置槽位恒在前、自定义追加在后)/ `parseRuleBlock`(文本块 → 规则行,前 N 个非注释行 = 内置槽位按 BUILTIN_RULE_PATTERNS 顺序映射、前缀与槽位角色不符报错、缺失内置补空行 = 恢复内置、其后为自定义行按行序 = sortOrder);行级校验复用 ruleRowError(与服务端同源)。
+- AI 提示词并入:PromptOverridesForm 改为**四段折叠卡片**(默认折叠,展开显示真实 head/tail 只读 + body textarea + 逐段校验);从独立 PromptOverridesSection 移入 RecognitionRulesSection(正则 → 测试台 → 提示词)。
+- tab 模型:SETTINGS_TABS 去掉 `prompts`(8 → 7);settings-tabs.tsx / page.tsx 去掉 prompts slot 与 PromptOverridesSection;识别规则 tab 承载全部。
+
+**数据/语义不变**:保存仍走 saveRulePatternsAction(RulePatternDraft[])+ filterDisabledBuiltins(留空内置剔除 = 恢复内置默认);解析语义与 episode-code 槽位绑定不变;prompt 覆盖仍走 prompt_overrides 表。仅 UI 呈现与转换层改变。
+
+**测试**:rule-patterns-utils 新增 4 用例(formatRuleBlock 输出/完整 6 内置 + 自定义映射/前缀-角色不符报错/删内置补空行);settings-tabs-model 回到 7 tab;actions.recognition 等 5 套件 60 全绿;web tsc 零错误。
+
+**复核备注**:待子代理复核。
+### 37. 识别规则可配置系统 Phase 3——解析测试台 + Phase 2 复核 S1(issue #44)
+
+**Phase 3 目标**:让用户在设置页直接试跑「样例文件名 → 集数解析」,验证已保存规则的改动效果,不必跑真实采集。
+
+**改动**:
+- actions.testEpisodeRuleAction(只读,不 assertNotDemo):与采集 worker 同源加载生效规则(loadEpisodeRules,空表/损坏自动回退内置)→ episodeCodeFromFileName 取复合结果;再**逐槽位隔离探针**找命中槽位——episodeCodeFromFileName 对未提供槽位按 ?? 回退内置(无法禁用),故隔离一个槽位时其余槽位显式填「永不匹配」正则 /[^\s\S]/(自定义槽位空数组),保证命中来自且仅来自被探槽位;探针顺序镜像 episode-code.ts 内置分支(sxxexx → variant → epOnly → cross → chinese → digits → customs);返回 { code, matched };
+- rule-test-bench.tsx(新增 client 组件):文件名输入 + 「多季任务」开关 + 试跑;显示解析结果与命中槽位(未解析出也明确告知);Enter 可触发;渲染进 RecognitionRulesSection(RulePatternsForm 下方);
+- S1(Phase 2 复核建议):PromptOverridesForm 不再展示手写摘要——head/tail 改为从 PROMPT_TEMPLATES 取**真实文本**只读展示(pre 块);为此把四个模板常量从 arbitrator.ts 原样搬迁到新建的零运行时依赖模块 `packages/workflow/src/prompt-templates.ts`(纯数据,type-only 导入 ruleset,不拉 ai),arbitrator.ts 改为导入 + 再导出 PROMPT_TEMPLATES(index.ts 补导出);字节零漂移(缺省输出不变),arbitrator-prompts 5 用例照旧全绿;
+
+**测试**:actions.recognition 新增 4 用例(SxxExx 命中 sxxexx 槽位单/多季 chinese 差异、digits 槽位覆盖 4 位——组合规则与探针同源、空文件名提示);web 3 套件 + workflow 3 文件全绿;双 tsc 零错误;dist 重建。
+
+**CI 修复(Turbopack client chunk)**:next build 报「chunking context does not support external modules (node:module)」——client 组件(prompt-overrides-form / rule-patterns-form→rule-patterns-utils)从 barrel @media-track/workflow 导入值,barrel 星导出含 sqlite.ts(import { createRequire } from "node:module"),整包被拉进客户端 chunk。修法:workflow package.json exports 增加零 node 依赖的 ./ruleset 与 ./prompt-templates 子路径,客户端改走子路径;server 侧 barrel 导入不受影响(app-sidebar/workspace-switcher 均为 server 组件)。
+
+**修订闭环(复核 REQUEST_CHANGES → 修订)**:复核实证 M1——探针隔离法把「缺失内置槽位」当停用,与 episode-code 的 ? ? 内置回退语义矛盾:只存部分内置行时(如仅 digits 一行),运行时内置分支回退仍生效,探针却报无命中/错配(狂飙.S01E01 应 sxxexx 却 matched=null 等 4 例实证)。修订:探针被探槽位改为 compiled[槽位] ?? 内置同源正则(内置从 BUILTIN_RULE_PATTERNS 编译,与 episode-code 内置字面量逐字一致),其余槽位仍「永不匹配」隔离——命中即真实复合路径的优先分支;新增 M1 回归用例(仅存 digits 一行下 sxxexx/variant/chinese 三类回退命中全部断言)。S1 措辞:「留空=停用」改为「留空 = 恢复内置默认(内置分支仍生效,当前版本不支持真正禁用内置分支)」,表单提示/页面注释/工具注释一并修正(真正禁用需显式停用机制,属后续设计决策)。S2 文案残留「】）」已清。
+
+**复核备注**:待子代理复核。
+### 36. 识别规则可配置系统 Phase 2——AI 仲裁 Prompt 配置(issue #44)
+
+**目标**:四个生产仲裁 prompt 的「规则指令中段」可 UI 编辑;角色定位(head)与 JSON 输出契约(tail)固定不可改(防破坏结构化输出);改动对后续采集任务生效(每次认领加载一次)。
+
+**改动**:
+- arbitrator.ts:四个 prompt 常量拆 head/body/tail(EPISODE_MAPPING/SELECTION/MOVIE_SELECTION/MOVIE_DIAGNOSIS);新增 PROMPT_TEMPLATES(kind → {head,body,tail})与 resolvePromptText(kind, overrides?) = head + (覆盖 body ?? 内置 body) + tail,缺省输出与旧版逐字节一致;四个仲裁函数新增可选 promptOverrides?: PromptOverrideLookup;无效行/未知 kind 一律不参与覆盖;
+- ruleset.ts:validatePromptBody(非空 + ≤2000 字符)与 compilePromptLookup(行 → kind→body 映射,active=false/未知 kind/非法体跳过),复用 isArbitrationKind;loadPromptOverrides 透传(既有);
+- 全链注入(TV + movie 两路):pipeline.consumeClaimedRun 每次认领 loadPromptOverrides + compilePromptLookup(TV/movie 都加载)→ runTvAcquisitionV2 / runMovieAcquisitionV2 → acquire.ts → orchestrator → FastPathOptions / MovieFastPathOptions → arbitrateSelection(tv)/arbitrateEpisodeMapping(landing,含 tryEpisodeMapping helper)/arbitrateMovieSelection + arbitrateMovieDiagnosis(movie)全部拿到;每层可选、缺省旧语义;
+- sqlite.replacePromptOverrides:保留全量替换(DELETE 后插入)+ 输入内重复 kind 改 INSERT OR REPLACE last-wins(补 Phase 0 复核 S3 的不对称);
+- Web:设置页新增「AI 提示词」tab(八 tab):PromptOverridesSection(server:loadPromptOverrides 读生效覆盖,缺失 kind = 内置)→ PromptOverridesForm(client:四 kind 卡片,head/JSON 契约只读展示、body textarea 可编辑、留空 = 内置模板、逐 kind 实时 validatePromptBody、保存/恢复默认 + router.refresh);服务端 savePromptOverridesAction 逐 kind 二次校验(未知 kind/空体/超长),任一失败整批不落库 + errors 逐 kind 返回,空体 draft 不写行;resetPromptOverridesAction 清空表;assertNotDemo 写门;
+- R1(Phase 1 复核建议):RecognitionRulesSection initial 改为「生效集 ∪ 缺失内置」——被停用的内置槽位刷新后仍显示(空表达式占位),可单独恢复,不必整体「恢复默认」.
+
+**安全边界**:head/tail 固定不可改(JSON 契约与角色定位不可破坏);body 只影响模型指令文本,不逃逸到代码路径;校验两端同源(validatePromptBody);长度上限防误操作;非 demo 实例可写(assertNotDemo);空体 = 内置模板(不写覆盖行,表里无行 = 内置,与加载器同源语义).
+
+**测试**:arbitrator-prompts.test.ts 新增 5 用例(缺省重组=head+body+tail、覆盖时 head/tail 固定、四 kind 模板结构、compilePromptLookup 行筛选、validatePromptBody 边界 2000);actions.recognition 扩展 prompt 4 用例(demo 拒写/保存覆盖+空体不落库/超长整批失败 errors 逐 kind/未知 kind/恢复默认清空);settings-tabs-model 更新为八 tab.workflow 9 文件 274 全绿;web 5 套件 33 全绿;workflow tsc + web tsc 零错误;@media-track/workflow dist 已重建.
+
+**复核备注**:待子代理复核.
+
+### 35. 识别规则可配置系统 Phase 1——解析正则编辑与全链注入(issue #44)
+
+**目标**:Phase 0 的 rule_patterns 表接入实际采集链路——UI 可编辑 6 条内置正则 + 自定义规则,恢复默认,改动对后续采集任务生效。
+
+**改动**:
+- episode-code.ts:episodeCodeFromFileName 新增可选第 4 参 rules?: EpisodeParseRules(6 个内置槽位 RegExp 覆盖 + custom 自定义规则数组)。内置分支逐行改为 rules?.槽位 ?? 内置正则 优先;自定义规则在所有内置分支之后按 sortOrder apply:season-episode 任意上下文、episode-only 仅单季,集号一律过 isPlausibleEpisodeNumber,空匹配/组缺失自然跳过(§34 S5 的「顺序/空匹配运行时拒」落地)。缺省不传 = 行为与旧版逐字节一致,15 处旧调用点零改动;
+- ruleset.ts:新增 compileEpisodeRules(patterns)(内置 ruleId → 槽位、非内置 → custom,按序)与 loadEpisodeRules(store)(读表 → 编译,空表/损坏自动回退内置);
+- 全链注入(每层可选参数、缺省旧语义):pipeline.ts consumeClaimedRun 每轮认领时 loadEpisodeRules(ctx.repository)(movie 分支跳过→无集数解析)→ runTvAcquisitionV2 → acquire.ts(runAcquisitionCoreStage)→ orchestrator.runAcquisitionV2 → runFastPathAcquisition(FastPathOptions.episodeRules)→ TvPoolContext → closeOutTvLanding;落点检查 onDiskCodes(tv.ts)、digestStaging(两处)、landingParseRows(steps.ts 第 4 参)、finalizeLanding(rename 源名解析 + buildSeasonMoves 两处)全部拿到 rules;renamedToCodes 解析「我们自己生成的规范名」刻意固定用内置正则(传 null)——mark 不因用户规则误改而静默失败(规则只影响识别输入文件名);
+- Web:设置页新增「识别规则」tab(七 tab):settings-tabs-model/SETTINGS_TABS + settings-tabs 壳 + page.tsx RecognitionRulesSection(server 组件,loadRulePatterns 读生效集,空表 = 内置回填入表)→ RulePatternsForm(client:内置 6 行固定 role/可改正则/可停用(留空=停用,行仍在)、自定义行 role select+正则+标签+删除、排序可调、逐行实时校验(validateRuleExpression 同款)、保存/恢复默认(清空表=回退内置+router.refresh)、服务端二次校验逐行返回错误);
+- actions.ts:saveRulePatternsAction(逐行 validateRuleExpression,任一失败整批不落库,errors 逐行返回)/resetRulePatternsAction(空表=恢复默认)。
+
+**安全边界**:规则只影响「识别输入文件名」;内置正则损坏 → 单条回退内置值(Phase 0 语义);自定义规则损坏保存被拒;多季禁用无季规则/合理集数守卫/衍生黑名单/年份排除等语义不暴露给配置(两层模型)。UI 是非 demo 实例才可写(assertNotDemo)。
+
+**测试**:episode-code +7(槽位覆盖/自定义两角色/多季禁用/合理防护/空匹配跳过/内置优先/捕获组空白规范化);digestStaging +2(自定义规则解析、digits 槽位覆盖 4 位);ruleset +2(compileEpisodeRules 映射、loadEpisodeRules 端到端);settings-tabs-model 更新为七 tab;web 新增 rule-patterns-utils(4)+ actions.recognition(4,真实 :memory: 库);staging-digest(47)/finalize-landing/fast-path(36)/variety 全部无回归;web tsc + workflow 包 build(tsc emit)零错误。
+
+**子代理 review(REQUEST_CHANGES → 修订闭环,第 1 轮)**:必须修 M1(「留空=停用」断链:客户端 rowError 把空表达式当错误 + hasErrors 禁用保存按钮,服务端也拒——停用内置完全不可达)已修:内置留空行校验放行(ruleRowError 内置留空 → null)、保存时客户端/服务端都剔除留空内置行(filterDisabledBuiltins,复用 Phase 0「缺失内置=停用」),新增 action 级测试(留空剔除/整批失败不落库/恢复默认)与 utils 纯函数测试;建议 S1(捕获组数字规范化,防「S03E 02」畸形码)已随修:episode-code 新增 numPart——所有分支(含槽位覆盖与自定义)输出前 Number 规范化、NaN/空白/超 4 位跳过,内置正则行为逐字节一致(4 位前导零输入 0700 → S01E700 属规范修正,测试同步更新);S2 已加:validateRuleExpression 长度上限 300 字符(UI+action 共用);S3 已修:表单错误行改为 Fragment 兄弟行(不再嵌套 tr);S4 已补:rule-patterns-utils(纯逻辑,类型定义迁入,actions 再导出)+ utils 测试 4 + actions.recognition 测试 4(真实 :memory: 库);S5 记档(barrel 导入、dist 不提交,CI 需 build:workflow 先于 web)。待复核子代理确认闭环。
 ### 1. 规范视频改名（canonical video rename）
 
 **提交**: `3e64c28` — feat(workflow): canonical video rename on staging normalization
@@ -460,9 +690,9 @@ sync 回填不覆盖/**fast-path 回放三连**:纯 2026 综艺包零 AI 入库�
 staging-digest/finalize-landing/fast-path/movie-fast-path/v2-run-tv/season-sync/variety);
 CI 全绿后 squash 合并。issue #21 验收单(奇异新世界3.全集 C/C/A、狂飙与电影回归、三负例)已由新用例覆盖,关闭。
 
-**遗留(未做)**:「第N期」黑名单是启发式,综艺官方若把正片就叫「XX特辑第N期」仍会漏给仲裁(可接受);
-多季任务仍完全不认期/集形态(交 AI,保守);守卫依赖文件名内嵌日期与 TMDB 播出日,二者任一缺失即惰性——
-文件名无日期的假包走原仲裁路径,行为不变。
+**遗留(未做)**:「第N期」黑名单是启发式,综艺官方若把正片就叫「XX特辑第N期」仍会被误判成衍生内容丢弃(可接受);
+多季任务仍完全不认期/集形态(E-only 规则禁用)——不调 AI 补认,未全量对齐就不落盘、换下一个候选;守卫依赖文件名内嵌日期与 TMDB 播出日,二者任一缺失即惰性——
+文件名无日期的假包按未全量对齐处理(清暂存换候选),行为不变。
 
 ---
 

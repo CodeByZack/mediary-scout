@@ -2,7 +2,8 @@ import type { LanguageModel } from "ai";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
 import type { AgentPhase, AgentToolEvent } from "../../acquisition-v2/activity.js";
 import { getStorageBrand } from "../../storage-brands.js";
-import { episodeCodeFromFileName, episodeDateConflict } from "../../episode-code.js";
+import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
+import type { PromptOverrideLookup } from "../../ruleset.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import type { TvAnimeTarget } from "../../acquisition-v2/task-agents.js";
 
@@ -75,9 +76,9 @@ export interface TransferStepMeta {
   /** 候选归属池:primary | fallback。 */
   pool: "primary" | "fallback";
   /** 选片决策来源:code=A级盲转(零 LLM);ai=仲裁器选片。
-   *  语义 = 本池「初始选片」的决策者。循环第 2+ 次转存若由诊断仲裁 retry_other
-   *  (landing.ts)点名 aiNext 推进,其选片来源是 AI —— 前端可从该轮的
-   *  arbitrateDiagnosis retry_other 事件(带 aiNext 与否)另行标注,本字段不覆盖。 */
+   *  语义 = 本池「初始选片」的决策者,固定记录首次选片;后续轮次的候选推进
+   *  (未全量对齐 → 清暂存换候选)不改写本字段,那走 arbitrateEpisodeMapping 轮
+   *  的事件口径(TV 无落盘诊断仲裁)。 */
   decidedBy: "code" | "ai";
   /** 本池内第几次转存(1/3 或 1/1…)。 */
   transferIndex: number;
@@ -101,6 +102,10 @@ export interface FastPathOptions {
    *  progress + agent-trace sinks here; the fast path emits one AgentToolEvent
    *  per step, fire-and-forget. Undefined (tests / bare sandbox) = no trace. */
   onProgress?: (event: AgentToolEvent) => void;
+  /** issue #44: 可配置集数解析规则(UI 编辑后经 pipeline 注入)。缺省 = 内置正则。 */
+  episodeRules?: EpisodeParseRules;
+  /** issue #44 Phase 2: AI 仲裁 prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
+  promptOverrides?: PromptOverrideLookup;
 }
 
 export interface FastPathResult {
@@ -235,12 +240,14 @@ export function landingParseRows(
   files: Array<{ path: string }>,
   seasons: number[],
   episodeAirDates?: Record<string, string>,
+  /** issue #44: 可配置集数解析规则。缺省 = 内置正则。 */
+  rules?: EpisodeParseRules,
 ): string[] {
   const rows = files
     .filter((file) => VIDEO_EXT.test(file.path))
     .map((file) => {
       const base = fileBaseName(file.path);
-      const code = episodeCodeFromFileName(base, seasons);
+      const code = episodeCodeFromFileName(base, seasons, undefined, rules);
       const bare = /^\d{1,3}$/.test(base.replace(/\.[^.]+$/i, ""));
       const shown = base.length > 48 ? base.slice(0, 45) + "…" : base;
       if (!code) return shown + " → 解析失败";

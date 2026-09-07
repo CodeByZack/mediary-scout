@@ -12,27 +12,65 @@ function sub(name: string, id = name): SimTreeFile {
 const tvInput = { seasons: [1], needCodes: ["S01E01", "S01E02", "S01E03"] };
 
 describe("digestStaging — TV", () => {
-  it("passes a clean landing that covers the need", () => {
+  it("does NOT pass when the landing only partially covers the need (issue #44 全量覆盖)", () => {
     const d = digestStaging({
       files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.S01E02.1080p.mkv"), sub("狂飙.S01E01.zh.ass")],
       ...tvInput,
     });
-    expect(d.passes).toBe(true);
+    // 覆盖 E01/E02 但缺 E03 → 非全量覆盖,不得提前收尾(否则漏掉的集永远没机会升 AI 映射)。
+    expect(d.passes).toBe(false);
     expect(d.episodeCodes).toEqual(["S01E01", "S01E02"]);
     expect(d.coveredCodes).toEqual(["S01E01", "S01E02"]);
     expect(d.missingCodes).toEqual(["S01E03"]);
     expect(d.subtitles).toHaveLength(1);
   });
 
-  it("sample 附件不再判脏:集数覆盖 need 即收尾(issue #39 用户拍板——不区分严重/轻微附件)", () => {
-    // sample 命中 JUNK → 只进 junkSignals(finalize 丢弃),不否决整包;E01 覆盖 → passes=true。
+  it("passes when the landing fully covers the need (issue #44 全量覆盖)", () => {
+    const d = digestStaging({
+      files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.S01E02.1080p.mkv"), video("狂飙.S01E03.1080p.mkv")],
+      ...tvInput,
+    });
+    expect(d.passes).toBe(true);
+    expect(d.episodeCodes).toEqual(["S01E01", "S01E02", "S01E03"]);
+    expect(d.coveredCodes).toEqual(["S01E01", "S01E02", "S01E03"]);
+    expect(d.missingCodes).toEqual([]);
+  });
+
+  it("sample 附件只进 junkSignals,但部分覆盖(E01)仍不算全量覆盖(issue #39 + #44)", () => {
+    // sample 命中 JUNK → 只进 junkSignals(finalize 丢弃),不参与集号覆盖;E01 覆盖但缺 E02/E03
+    // → passes=false(部分覆盖,需升 AI 映射)。
     const d = digestStaging({
       files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.S01E01.sample.mkv")],
       ...tvInput,
     });
-    expect(d.passes).toBe(true);
+    expect(d.passes).toBe(false);
     expect(d.junkSignals).toEqual(["狂飙.S01E01.sample.mkv"]);
     expect(d.coveredCodes).toEqual(["S01E01"]);
+    expect(d.missingCodes).toEqual(["S01E02", "S01E03"]);
+  });
+
+  it("issue #44:注入可配置规则后按自定义正则解析集数", () => {
+    const d = digestStaging({
+      files: [video("狂飙.S1_07.1080p.mkv")],
+      seasons: [1],
+      needCodes: ["S01E07"],
+      rules: {
+        custom: [{ role: "season-episode", regex: /[Ss](\d{1,2})_(\d{1,4})/ }],
+      },
+    });
+    expect(d.episodeCodes).toEqual(["S01E07"]);
+    expect(d.coveredCodes).toEqual(["S01E07"]);
+  });
+
+  it("issue #44:规则覆盖 digits 槽位后 4 位纯数字可解析", () => {
+    const d = digestStaging({
+      files: [video("0107.mkv")],
+      seasons: [1],
+      needCodes: ["S01E107"],
+      rules: { digits: /^(\d{1,4})$/ },
+    });
+    // 4 位纯数字(内置只认 3 位)在规则覆盖后可解析;S1 数字规范化 → 107(无前导零)。
+    expect(d.episodeCodes).toEqual(["S01E107"]);
   });
 
   it("flags a dirty pack when a TV video has no episode code AND no junk marker (unknown file)", () => {
@@ -45,24 +83,25 @@ describe("digestStaging — TV", () => {
     expect(d.unparsedVideos).toEqual(["狂飙.未识别视频.mkv"]);
   });
 
-  it("issue #39: 正片齐全 + 花絮附件 → passes=true(附件丢弃、正片保留,不再整体判脏换候选)", () => {
+  it("issue #39: 正片全覆盖 + 花絮附件 → passes=true(附件丢弃、正片保留,不再整体判脏换候选)", () => {
     const d = digestStaging({
-      files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.S01E02.1080p.mkv"), video("幕后花絮.mkv")],
+      files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.S01E02.1080p.mkv"), video("狂飙.S01E03.1080p.mkv"), video("幕后花絮.mkv")],
       ...tvInput,
     });
+    // 全量覆盖(E01-E03)+ 花絮 → passes=true;花絮只进 junkSignals(finalize 丢弃)。
     expect(d.passes).toBe(true);
-    expect(d.coveredCodes).toEqual(["S01E01", "S01E02"]);
+    expect(d.coveredCodes).toEqual(["S01E01", "S01E02", "S01E03"]);
     // 花絮进 junkSignals(finalize-landing 丢弃),不进 episodeCodes(防假覆盖)
     expect(d.junkSignals).toEqual(["幕后花絮.mkv"]);
     expect(d.unparsedVideos).toEqual([]);
   });
 
-  it("issue #39: 正片 + 预告(trailer)附件 → passes=true(trailer 丢弃)", () => {
+  it("issue #39+#44: 正片 + 预告(trailer)附件 → 部分覆盖(E01)不算全量,passes=false(trailer 丢弃)", () => {
     const d = digestStaging({
       files: [video("狂飙.S01E01.1080p.mkv"), video("狂飙.预告.mkv")],
       ...tvInput,
     });
-    expect(d.passes).toBe(true);
+    expect(d.passes).toBe(false);
     expect(d.junkSignals).toEqual(["狂飙.预告.mkv"]);
   });
 
@@ -93,14 +132,15 @@ describe("digestStaging — TV", () => {
     expect(d.passes).toBe(false);
   });
 
-  it("reports out-of-season codes without failing coverage of in-season ones", () => {
+  it("reports out-of-season codes; in-season partial coverage (E01) does not fail, but is not a full pass", () => {
     const d = digestStaging({
       files: [video("狂飙.S02E01.1080p.mkv"), video("狂飙.S01E01.1080p.mkv")],
       ...tvInput,
     });
     expect(d.outOfSeasonCodes).toEqual(["S02E01"]);
     expect(d.coveredCodes).toEqual(["S01E01"]);
-    expect(d.passes).toBe(true);
+    // 季外代码不吞并覆盖,但只覆盖 E01(缺 E02/E03)仍非全量覆盖。
+    expect(d.passes).toBe(false);
   });
 
   it("does not pass when nothing covers the need", () => {
