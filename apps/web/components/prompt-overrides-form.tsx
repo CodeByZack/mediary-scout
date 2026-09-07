@@ -27,12 +27,13 @@ function isBuiltinBody(kind: string, text: string): boolean {
   return text.trim() === (PROMPT_TEMPLATES[kind as keyof typeof PROMPT_TEMPLATES]?.body ?? "").trim();
 }
 
-/** kind → 展示名称。遍历 ARBITRATION_KINDS 渲染卡片,所以新增 kind 不会静默不显示。 */
+/** kind → 展示名称(人话版,2026-09-07 用户拍板「title 更能让人知道干什么」);
+ *  遍历 ARBITRATION_KINDS 渲染卡片,新增 kind 不会静默不显示。 */
 const KIND_LABELS: Record<ArbitrationKind, string> = {
-  selection: "选片仲裁（剧集）",
-  "episode-mapping": "集数映射仲裁（剧集）",
-  "movie-selection": "选片仲裁（电影）",
-  "movie-diagnosis": "落盘诊断仲裁（电影）",
+  selection: "剧集：多个候选里没有唯一最佳时，让 AI 挑一个",
+  "episode-mapping": "剧集：文件名解析不出集数时，让 AI 认这是哪一集",
+  "movie-selection": "电影：多部候选电影里挑一部",
+  "movie-diagnosis": "电影：落盘的文件不对劲时，让 AI 判断",
 };
 
 interface PromptDraft {

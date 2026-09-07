@@ -313,9 +313,24 @@ async function RecognitionRulesSection() {
           <p className="panel-note">文件名 → 集数 解析正则 + 升级仲裁提示词（改动对后续采集任务生效）</p>
         </div>
       </div>
-      <RulePatternsForm initial={customInitial} />
-      <RuleTestBench />
-      <PromptOverridesForm initial={promptInitial} />
+      {/* 大 Section ① 正则:文件名 → 集数 解析规则(内置只读 + 自定义 + 试跑) */}
+      <div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 4 }}>
+          <h3 style={{ fontSize: 15, margin: 0 }}>正则</h3>
+          <span style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>文件名 → 集数 解析规则</span>
+        </div>
+        <RulePatternsForm initial={customInitial} />
+        <RuleTestBench />
+      </div>
+
+      {/* 大 Section ② Prompt:AI 仲裁升级点的提示词覆盖 */}
+      <div style={{ marginTop: 26, paddingTop: 18, borderTop: "1px solid rgba(127,127,127,.18)" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <h3 style={{ fontSize: 15, margin: 0 }}>Prompt</h3>
+          <span style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>AI 仲裁升级点的提示词覆盖（留空 = 内置模板）</span>
+        </div>
+        <PromptOverridesForm initial={promptInitial} />
+      </div>
     </section>
   );
 }
