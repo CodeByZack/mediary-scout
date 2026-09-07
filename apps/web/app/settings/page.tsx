@@ -3,7 +3,7 @@ import { maskProviderUid } from "../../lib/mask-provider-uid";
 import { connection } from "next/server";
 import { headers } from "next/headers";
 import { Suspense } from "react";
-import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, Radio, Regex, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
+import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, Radio, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
 import { AppSidebar } from "../../components/app-sidebar";
 import { AddDriveBrandTabs } from "../../components/add-drive-brand-tabs";
 import { TestConnectionButton } from "../../components/test-connection-button";
@@ -304,21 +304,8 @@ async function RecognitionRulesSection() {
 
   return (
     <section className="panel" style={{ maxWidth: 960, marginTop: 24 }}>
-      <div className="panel-header">
-        <div>
-          <h2 className="panel-title">
-            <Regex size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
-            识别规则
-          </h2>
-          <p className="panel-note">文件名 → 集数 解析正则 + 升级仲裁提示词（改动对后续采集任务生效）</p>
-        </div>
-      </div>
-      {/* 大 Section ① 正则:文件名 → 集数 解析规则(内置只读 + 自定义 + 试跑) */}
+      {/* 大 Section ① 正则:节标题 + 恢复默认 由 RulePatternsForm 渲染 */}
       <div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 4 }}>
-          <h3 style={{ fontSize: 15, margin: 0 }}>正则</h3>
-          <span style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>文件名 → 集数 解析规则</span>
-        </div>
         <RulePatternsForm initial={customInitial} />
         <RuleTestBench />
       </div>
