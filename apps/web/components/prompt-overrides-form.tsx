@@ -3,14 +3,14 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { CSSProperties } from "react";
-import { ChevronDown, ChevronRight, Copy, LoaderCircle, RotateCcw, Save } from "lucide-react";
+import { ChevronDown, ChevronRight, LoaderCircle, RotateCcw, Save } from "lucide-react";
 import { resetPromptOverridesAction, savePromptOverridesAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
 // 子路径导入:ruleset/prompt-templates 零 node 依赖,可安全进客户端 chunk(barrel 含 sqlite→node:module,Turbopack 会炸)。
 import { PROMPT_TEMPLATES } from "@media-track/workflow/prompt-templates";
 import { validatePromptBody } from "@media-track/workflow/ruleset";
 
-/** 只读展示段(head / 内置 body / tail)的统一样式。 */
+/** 只读展示段(head / tail)的统一样式。 */
 const READONLY_PRE_STYLE: CSSProperties = {
   margin: 0,
   padding: "6px 8px",
@@ -21,6 +21,11 @@ const READONLY_PRE_STYLE: CSSProperties = {
   whiteSpace: "pre-wrap",
   wordBreak: "break-all",
 };
+
+/** 输入框内容是否等于内置正文(留空同样算内置)——判「已覆盖」与「要不要落库」的同一口径。 */
+function isBuiltinBody(kind: string, text: string): boolean {
+  return text.trim() === (PROMPT_TEMPLATES[kind as keyof typeof PROMPT_TEMPLATES]?.body ?? "").trim();
+}
 
 /** 四种仲裁 kind 的展示名称(head/body/tail 取 PROMPT_TEMPLATES 真实文本,只读展示)。 */
 const KIND_META: Array<{ kind: string; name: string }> = [
@@ -74,23 +79,13 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
     });
   }
 
-  /** 把内置正文抄进输入框:让用户看清当前生效的规则指令,再在此基础上改。
-   *  语义提醒 —— 保存后是整段替换内置、不是追加(resolvePromptText 的 override ?? builtIn)。 */
-  function fillBuiltin(kind: string) {
-    const body = PROMPT_TEMPLATES[kind as keyof typeof PROMPT_TEMPLATES]?.body ?? "";
-    if (body.length === 0) return;
-    setDrafts((prev) => prev.map((d) => (d.arbitrationKind === kind ? { ...d, promptText: body } : d)));
-    setMessages((prev) => {
-      const next = { ...prev };
-      delete next[kind];
-      return next;
-    });
-  }
-
   function handleSave() {
     if (hasErrors || isPending) return;
     startTransition(async () => {
-      const payload = drafts.filter((d) => d.promptText.trim().length > 0);
+      // 留空(清空恢复内置)与「未改动 = 逐字等于内置正文」都不落库,保持「空表 = 全内置」语义。
+      const payload = drafts.filter(
+        (d) => d.promptText.trim().length > 0 && !isBuiltinBody(d.arbitrationKind, d.promptText),
+      );
       const r = await runAction(() => savePromptOverridesAction(payload), (msg) => {
         setMessages((prev) => ({ ...prev, _global: msg }));
       });
@@ -114,7 +109,8 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
         setMessages((prev) => ({ ...prev, _global: msg }));
       });
       if (!r.ok) return;
-      setDrafts(initial.map((d) => ({ ...d, promptText: "" })));
+      // initial 已预填内置正文(settings/page.tsx 装配),恢复默认 = 直接回到 initial。
+      setDrafts(initial);
       setMessages({});
       router.refresh();
     });
@@ -125,7 +121,7 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
   return (
     <div style={{ display: "grid", gap: 10, marginTop: 18 }}>
       <div style={{ fontSize: 13, color: "var(--text-secondary, #888)" }}>
-        四段升级仲裁的系统提示词 —— 展开卡片编辑「规则指令」中段；角色定位(head)与 JSON 输出契约(tail)固定不可改；留空 = 内置模板。内置正文在卡片内只读展示；想在此基础上追加或修改规则，点「填充内置」把它抄进输入框再改 —— 保存时是整段替换内置，不是追加。
+        四段升级仲裁的系统提示词。展开卡片直接改「规则指令」中段（已预填内置正文）；角色定位与 JSON 输出契约固定不可改。清空输入框 = 恢复内置；有改动时保存是整段替换，不是追加。
       </div>
       {KIND_META.map((meta) => {
         const draft = drafts.find((d) => d.arbitrationKind === meta.kind) ?? {
@@ -163,7 +159,7 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
             >
               {isOpen ? <ChevronDown size={15} aria-hidden /> : <ChevronRight size={15} aria-hidden />}
               <strong>{meta.name}</strong>
-              {draft.promptText.trim().length > 0 ? (
+              {!isBuiltinBody(meta.kind, draft.promptText) ? (
                 <span style={{ fontSize: 12, color: "#2563eb", marginLeft: 4 }}>已覆盖</span>
               ) : null}
               {error ? <span style={{ fontSize: 12, color: "#dc2626", marginLeft: 4 }}>⚠ 校验未过</span> : null}
@@ -180,28 +176,15 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
                 {error ? (
                   <div style={{ color: "#dc2626", fontSize: 12, margin: "8px 0 4px" }}>⚠ {error}</div>
                 ) : null}
-                <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
-                  <span style={{ fontSize: 12, color: "var(--text-secondary, #888)", flex: "0 1 auto" }}>
-                    内置规则指令（留空时生效）：
-                  </span>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    style={{ margin: 0, fontSize: 12, padding: "3px 9px" }}
-                    onClick={() => fillBuiltin(meta.kind)}
-                    disabled={isPending || isResetting}
-                  >
-                    <Copy size={12} aria-hidden />
-                    填充内置
-                  </button>
+                <div style={{ fontSize: 12, color: "var(--text-secondary, #888)", margin: "10px 0 6px" }}>
+                  规则指令（已预填内置正文，可直接改；清空 = 恢复内置）：
                 </div>
-                <pre style={READONLY_PRE_STYLE}>{template.body}</pre>
                 <textarea
                   value={draft.promptText}
                   onChange={(e) => setBody(meta.kind, e.target.value)}
                   rows={7}
                   spellCheck={false}
-                  placeholder={"输入「规则指令」中段（head 与 JSON 契约自动环绕，不可改）"}
+                  placeholder={"清空 = 恢复内置模板（head 与 JSON 契约自动环绕，不可改）"}
                   style={{
                     width: "100%",
                     marginTop: 8,

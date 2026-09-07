@@ -277,7 +277,7 @@ async function QualityPreferenceSection() {
 async function RecognitionRulesSection() {
   await connection();
   const repository = getWorkflowRepository();
-  const { loadRulePatterns, loadPromptOverrides, ARBITRATION_KINDS, BUILTIN_RULE_PATTERNS } = await import("@media-track/workflow");
+  const { loadRulePatterns, loadPromptOverrides, ARBITRATION_KINDS, BUILTIN_RULE_PATTERNS, PROMPT_TEMPLATES } = await import("@media-track/workflow");
   // 生效规则(空表 = 内置;损坏行自动回退内置)——与采集时 loadEpisodeRules 同一语义。
   // R1(Phase 1 复核):生效集 ∪ 缺失内置 —— 留空保存的内置槽位(恢复内置默认)刷新后
   // 仍可见,便于单独改回而不用整体「恢复默认」;缺失内置以空表达式占位(表单「留空=恢复内置」)。
@@ -313,11 +313,13 @@ async function RecognitionRulesSection() {
   );
 
   // AI 仲裁提示词覆盖(kind → body;缺失 kind = 内置模板)一并并入本区。
+  // 预填内置正文:初值 = 生效覆盖 ?? 内置 body,用户在原文上直接改。
+  // 表单以「与内置 body 逐字相同」判未覆盖,留空(手动清空)也算内置。
   const overrides = await loadPromptOverrides(repository);
   const byKind = new Map(overrides.map((o) => [o.arbitrationKind, o.promptText]));
   const promptInitial = ARBITRATION_KINDS.map((kind) => ({
     arbitrationKind: kind,
-    promptText: byKind.get(kind) ?? "",
+    promptText: byKind.get(kind) ?? PROMPT_TEMPLATES[kind].body,
   }));
 
   return (
