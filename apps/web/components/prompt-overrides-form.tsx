@@ -2,14 +2,27 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronRight, LoaderCircle, RotateCcw, Save } from "lucide-react";
+import type { CSSProperties } from "react";
+import { ChevronDown, ChevronRight, Copy, LoaderCircle, RotateCcw, Save } from "lucide-react";
 import { resetPromptOverridesAction, savePromptOverridesAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
 // 子路径导入:ruleset/prompt-templates 零 node 依赖,可安全进客户端 chunk(barrel 含 sqlite→node:module,Turbopack 会炸)。
 import { PROMPT_TEMPLATES } from "@media-track/workflow/prompt-templates";
 import { validatePromptBody } from "@media-track/workflow/ruleset";
 
-/** 四种仲裁 kind 的展示名称(head/tail 取 PROMPT_TEMPLATES 真实文本,只读展示)。 */
+/** 只读展示段(head / 内置 body / tail)的统一样式。 */
+const READONLY_PRE_STYLE: CSSProperties = {
+  margin: 0,
+  padding: "6px 8px",
+  background: "rgba(127,127,127,.08)",
+  borderRadius: 6,
+  fontSize: 12,
+  lineHeight: 1.5,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-all",
+};
+
+/** 四种仲裁 kind 的展示名称(head/body/tail 取 PROMPT_TEMPLATES 真实文本,只读展示)。 */
 const KIND_META: Array<{ kind: string; name: string }> = [
   { kind: "selection", name: "选片仲裁（剧集）" },
   { kind: "episode-mapping", name: "集数映射仲裁（剧集）" },
@@ -61,6 +74,19 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
     });
   }
 
+  /** 把内置正文抄进输入框:让用户看清当前生效的规则指令,再在此基础上改。
+   *  语义提醒 —— 保存后是整段替换内置、不是追加(resolvePromptText 的 override ?? builtIn)。 */
+  function fillBuiltin(kind: string) {
+    const body = PROMPT_TEMPLATES[kind as keyof typeof PROMPT_TEMPLATES]?.body ?? "";
+    if (body.length === 0) return;
+    setDrafts((prev) => prev.map((d) => (d.arbitrationKind === kind ? { ...d, promptText: body } : d)));
+    setMessages((prev) => {
+      const next = { ...prev };
+      delete next[kind];
+      return next;
+    });
+  }
+
   function handleSave() {
     if (hasErrors || isPending) return;
     startTransition(async () => {
@@ -99,7 +125,7 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
   return (
     <div style={{ display: "grid", gap: 10, marginTop: 18 }}>
       <div style={{ fontSize: 13, color: "var(--text-secondary, #888)" }}>
-        四段升级仲裁的系统提示词 —— 展开卡片编辑「规则指令」中段；角色定位(head)与 JSON 输出契约(tail)固定不可改；留空 = 内置模板。
+        四段升级仲裁的系统提示词 —— 展开卡片编辑「规则指令」中段；角色定位(head)与 JSON 输出契约(tail)固定不可改；留空 = 内置模板。内置正文在卡片内只读展示；想在此基础上追加或修改规则，点「填充内置」把它抄进输入框再改 —— 保存时是整段替换内置，不是追加。
       </div>
       {KIND_META.map((meta) => {
         const draft = drafts.find((d) => d.arbitrationKind === meta.kind) ?? {
@@ -150,23 +176,26 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
                 <div style={{ fontSize: 12, color: "var(--text-secondary, #888)", margin: "10px 0 6px" }}>
                   角色定位（固定，从模板取真实文本）：
                 </div>
-                <pre
-                  style={{
-                    margin: 0,
-                    padding: "6px 8px",
-                    background: "rgba(127,127,127,.08)",
-                    borderRadius: 6,
-                    fontSize: 12,
-                    lineHeight: 1.5,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-all",
-                  }}
-                >
-                  {template.head}
-                </pre>
+                <pre style={READONLY_PRE_STYLE}>{template.head}</pre>
                 {error ? (
                   <div style={{ color: "#dc2626", fontSize: 12, margin: "8px 0 4px" }}>⚠ {error}</div>
                 ) : null}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
+                  <span style={{ fontSize: 12, color: "var(--text-secondary, #888)", flex: "0 1 auto" }}>
+                    内置规则指令（留空时生效）：
+                  </span>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    style={{ margin: 0, fontSize: 12, padding: "3px 9px" }}
+                    onClick={() => fillBuiltin(meta.kind)}
+                    disabled={isPending || isResetting}
+                  >
+                    <Copy size={12} aria-hidden />
+                    填充内置
+                  </button>
+                </div>
+                <pre style={READONLY_PRE_STYLE}>{template.body}</pre>
                 <textarea
                   value={draft.promptText}
                   onChange={(e) => setBody(meta.kind, e.target.value)}
@@ -188,19 +217,7 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
                     color: "inherit",
                   }}
                 />
-                <pre
-                  style={{
-                    margin: "8px 0 0",
-                    padding: "6px 8px",
-                    background: "rgba(127,127,127,.08)",
-                    borderRadius: 6,
-                    fontSize: 12,
-                    lineHeight: 1.5,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-all",
-                    color: "var(--text-secondary, #888)",
-                  }}
-                >
+                <pre style={{ ...READONLY_PRE_STYLE, margin: "8px 0 0", color: "var(--text-secondary, #888)" }}>
                   JSON 契约（固定，环绕在 body 之后）：{"{"}
                   {template.tail}
                   {"}"}

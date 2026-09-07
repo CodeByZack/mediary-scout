@@ -38,7 +38,11 @@ export type { FastPathOptions, FastPathResult };
  *
  *   inspect landing point (§6b#8) → candidate grading (code) →
  *     A-grade? transfer : arbitrateSelection →
- *     transfer (code) → staging digest (code) → passes ? finalize : arbitrateDiagnosis
+ *     transfer (code) → staging digest (code) → passes ? finalize : wipe + next candidate
+ *
+ *     A single-season landing that the code cannot fully cover gets ONE retry with AI
+ *     episode mapping (landing.tryEpisodeMapping); TV has no diagnosis arbitration —
+ *     not-all-covered means wipe staging and try the next candidate (§43).
  *
  * A clean run (an A-grade that lands and digests cleanly) makes ZERO LLM
  * calls. Only genuine ambiguity — no A-grade, or a dirty/off-target
@@ -186,7 +190,7 @@ async function runTvCandidatePhase(
     });
   }
 
-  // 3. Transfer → digest → finalize / diagnose, with limited retries for dead
+  // 3. Transfer → digest → finalize / wipe-and-retry, with limited retries for dead
   //    links and off-target packs. A dead link (nothing landed) is a CHEAP
   //    fail-loud probe — it must NOT consume the transfer-attempt budget, so it
   //    is counted separately (MAX_DEAD_LINK_RETRIES) and only a real materialized

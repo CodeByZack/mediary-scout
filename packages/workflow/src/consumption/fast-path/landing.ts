@@ -41,9 +41,13 @@ import {
  *
  * 校验规则(代码,不信任 AI 输出):
  *   1. 文件名必须在本次落盘的全部视频清单里(防幻觉文件名);
- *   2. code 必须 SxxExx 形状且季与任务匹配(单季任务强制赛季一致);
- *   3. 一个集数最多被映射一次(冲突 → 整体放弃该映射,回落仲裁);
- *   4. 映射后的文件必须落在任务的 need/已收集范围内(防 AI 编造不存在的集数)。
+ *   2. 一个集数最多被映射一次(重复 code → 整表作废);
+ *   3. 期号一致性:文件名里的「第M期」与该集 TMDB 集名里的「Episode N」不符 → 整表作废
+ *      (防 AI 把不存在的期硬安上最新集号迎合 need);无 episodeNames 时惰性。
+ *
+ * 注意:这里**不校验** code 形状(SxxExx),也**不校验**季与任务匹配。单季任务下越季的
+ * code 会被 digest 的 need 集合运算自然排除(need 只含目标季的 SxxExx),不会误入库,
+ * 但没有显式闸门;多季任务整段不调用本函数(入口的单季判定直接返回 "no")。
  */
 export async function tryEpisodeMapping(options: {
   sandbox: TaskSandbox;
@@ -143,7 +147,8 @@ export async function tryEpisodeMapping(options: {
     // ★ 期号一致性校验(2026-08-31 地球超新鲜假集号案修复):AI 可能把不存在的期硬
     // 安上最新集号(S02E19/E20)迎合 need。当有 episodeNames(TMDB 每集原始 name)时
     // 反查该集号对应的期号 N(TMDB name "Episode N");若文件名里有「第M期」且 M≠N,
-    // 说明文件与集号对不上 → 该条映射不采信(整表作废,回落诊断仲裁)。
+    // 说明文件与集号对不上 → 该条映射不采信(整表作废,返回 "failed" → 清暂存换候选;
+    // TV 无落盘诊断仲裁)。
     if (options.episodeNames) {
       const filePeriod = /第\s*(\d{1,4})\s*期/.exec(fileName)?.[1];
       const tmdbName = options.episodeNames[code];
@@ -163,16 +168,16 @@ export async function tryEpisodeMapping(options: {
     clean[fileName] = code;
   }
   if (!valid) {
-    const failDetail = `AI 补认结果与文件名对不上,交给诊断仲裁`;
+    const failDetail = `AI 补认结果与文件名对不上(整表作废)`;
     stepLog(options.sandbox, options.targetTitle, "集数映射", failDetail, "warn");
     emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", failDetail, { aiUsed: true, mapping: compactMapping(arbitration.mapping) });
     return "failed";
   }
 
   // 校验通过的部分映射先交出去:无论重建 digest 是否整体通过,这些映射都是
-  // 可信的(AI 确认 + 代码校验过),诊断仲裁 accept 时 finalizeLanding 需要
+  // 可信的(AI 确认 + 代码校验过),映射分支收尾时 finalizeLanding 需要
   // 它们才能让映射的文件 rename/归位。2026-08-21 bugfix:此前只有 "passed"
-  // 分支回调 onMapping,部分映射(valid 但重建仍脏)走 accept 时 overrides 为
+  // 分支回调 onMapping,部分映射(valid 但重建仍脏)换候选时 overrides 为
   // undefined,AI 确认过的文件全部被 staging wipe 清掉(假入库)。
   options.onMapping?.(clean);
 
@@ -180,7 +185,7 @@ export async function tryEpisodeMapping(options: {
   const re = options.ram(clean);
   options.onDigest(re);
   if (re.passes) {
-        // issue #29 用户反馈:人话——AI 根据文件名补认了哪些集,结果如何。
+    // issue #29 用户反馈:人话——AI 根据文件名补认了哪些集,结果如何。
     // review REQUEST_CHANGES ①:coveredCodes 是代码+AI 合并口径,混源包会把代码功劳
     // 记在 AI 头上(AI 只认 3 集却报「AI 识别出 20 集」)——统一用 AI 有效映射数。
     const mapDetail = `AI 识别出 ${Object.keys(clean).length} 集,目标集数已齐`;
@@ -358,9 +363,11 @@ export async function aliasesFallbackReSearch(input: {
 
 /**
  * TV 落地收口状态机（design §5 LandingVerdict）：一个候选的落地回合内，
- * digest → 集数映射(§2.2) → 诊断仲裁 → finalize/丢弃，收敛为七种判定：
+ * digest → 集数映射(§2.2,仅单季)→ finalize 或清暂存换候选，收敛为六种判定：
  *   systemic(系统阻塞) / dead(死链探测) / clean(干净落地) / mapped_clean(映射通过)
- *   / accept(诊断 accept) / retry_other(换候选续跑) / abandon(诚实终止)。
+ *   / retry_other(未全量对齐,换候选续跑) / abandon(诚实终止)。
+ * TV 没有落盘诊断仲裁:未覆盖即清暂存换下一个候选,候选/预算耗尽才 reportNoCoverage。
+ * 类型里遗留的 "accept" 已无生产产出方(旧诊断仲裁路径删除后未清,仅类型定义仍在)。
  * done 非空 = 本轮终局（调用方直接 return）；done=null 用 next 继续循环。
  * escalated/deadRetries 随判定带出，循环侧统一回收 —— 预算语义原样
  * （死链不占转存预算：dead 分支不触 attempted.add）。
@@ -602,7 +609,8 @@ export async function closeOutTvLanding(options: {
     // the design intent the old agent loop had ("you can read that
     // [NC-Raws] Lyricis Recoil - 01.mkv is S01E01"). A verified mapping lets the
     // pack land like a clean digest (zero further LLM decisions); a failed or
-    // partial mapping falls through to the diagnostic arbitrator.
+    // partial mapping wipes staging and retries the next candidate (TV has no
+    // diagnosis arbitration).
     // Movie landings never map episodes — they go straight to the movie diagnosis.
     // issue #29 八轮复核:escalated 不再在映射前预置 true(之前会虚增 aiEscalated——
     // tryEpisodeMapping 的 "no" 返回:多季/代码已全覆盖/全衍生文件不调 AI)。置位推迟到
