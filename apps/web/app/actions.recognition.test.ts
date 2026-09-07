@@ -32,14 +32,16 @@ describe("识别规则 actions (issue #44)", () => {
     await expect(actions.resetPromptOverridesAction()).rejects.toBeInstanceOf(DemoReadOnlyError);
   });
 
-  it("M1:留空的内置行保存时剔除(= 恢复内置默认),不报错", async () => {
+  it("内置行一律不落库(内置只读):只存自定义行", async () => {
     const res = await actions.saveRulePatternsAction([
       { ruleId: "sxxexx", role: "season-episode", expression: "", label: "", sortOrder: 0, isDefault: true },
       { ruleId: "digits", role: "episode-only", expression: "^([0-9]{1,4})$", label: "纯数字", sortOrder: 5, isDefault: false },
+      { ruleId: "custom-1", role: "episode-only", expression: "^([0-9]{1,4})$", label: "自定义纯数字", sortOrder: 7, isDefault: false },
     ]);
     expect(res.success).toBe(true);
     const rows = await getWorkflowRepository().listRulePatterns();
-    expect(rows.map((r) => r.ruleId)).toEqual(["digits"]);
+    expect(rows.map((r) => r.ruleId)).toEqual(["custom-1"]);
+    expect(rows[0]?.expression).toBe("^([0-9]{1,4})$");
   });
 
   it("任一自定义行校验失败 → 整批不落库,errors 逐行返回", async () => {
@@ -144,21 +146,17 @@ describe("解析测试台 testEpisodeRuleAction (issue #44 Phase 3)", () => {
     expect(multi.matched).toBeNull();
   });
 
-  it("已保存自定义规则参与试跑:digits 槽位覆盖 4 位", async () => {
+  it("已保存自定义规则参与试跑:自定义季集规则参与解析", async () => {
+    // 自定义规则对**未剥扩展名**的原始文件名执行(与内置 digits 自带剥壳不同,见
+    // episode-code.ts 自定义循环)——用内置都不认的 S01_0012 写法验证自定义命中。
     await actions.saveRulePatternsAction([
-      { ruleId: "digits", role: "episode-only", expression: "^([0-9]{1,4})$", label: "纯数字", sortOrder: 5, isDefault: false },
+      { ruleId: "custom-underscore", role: "season-episode", expression: "[Ss](\\d{1,2})_(\\d{1,4})", label: "Sxx_Exx", sortOrder: 7, isDefault: false },
     ]);
-    const r = await actions.testEpisodeRuleAction({ fileName: "0700.mkv", multiSeason: false });
-    expect(r.code).toBe("S01E700");
-    expect(r.matched).toBe("digits");
+    const r = await actions.testEpisodeRuleAction({ fileName: "S01_0012.mkv", multiSeason: false });
+    expect(r.code).toBe("S01E12");
+    expect(r.matched).toBe("自定义 1");
   });
-
-  it("M1 回归:表中仅存部分行时,缺失内置槽位按内置回退命中(未停用)", async () => {
-    // 只保存 digits 一行 → 其余内置槽位在真实路径经 ?? 回退内置正则仍生效,
-    // 探针必须镜像该语义(compiled ?? 内置同源),不得误报无命中。
-    await actions.saveRulePatternsAction([
-      { ruleId: "digits", role: "episode-only", expression: "^([0-9]{1,4})$", label: "纯数字", sortOrder: 5, isDefault: false },
-    ]);
+it("内置只读语义:不保存任何规则时六条内置全部参与试跑", async () => {
     const sxx = await actions.testEpisodeRuleAction({ fileName: "狂飙.S01E01.1080p.mkv", multiSeason: false });
     expect(sxx.code).toBe("S01E01");
     expect(sxx.matched).toBe("sxxexx");

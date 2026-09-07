@@ -549,9 +549,9 @@ export async function saveRulePatternsAction(
       sortOrder: number;
       isDefault: boolean;
     }> = [];
-    // M1 防御:留空的内置槽位 = 停用(非 UI 直调也剔除,与客户端 filterDisabledBuiltins 一致)。
-    const effective = patterns.filter((p) => !(BUILTIN_RULE_IDS.has(p.ruleId) && p.expression.trim().length === 0));
-    for (const draft of effective) {
+    // 内置完全只读(2026-09-07 用户拍板):内置行一律不进表,自定义行独占 rule_patterns。
+    for (const draft of patterns) {
+      if (BUILTIN_RULE_IDS.has(draft.ruleId)) continue;
       const role = draft.role as RR;
       const error = validateRuleExpression(role, draft.expression);
       if (error !== null) {

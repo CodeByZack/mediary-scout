@@ -198,34 +198,25 @@ export function validateRuleExpression(role: RuleRole, expression: string): stri
 }
 
 /**
- * 加载生效规则集。语义（issue #44 安全边界 3「表为空或规则损坏 → 自动回退内置」）：
- * - 表为空（全新部署 / 恢复默认清空）→ 全部内置规则；
- * - 表非空 → 行是权威来源：内置规则行覆盖其表达式；
- *   某内置规则的行缺失 = 用户停用它（不出现在结果里）；
- *   某内置规则行正则损坏（非法 / 捕获组不符）→ 回退该条内置值；
- * - 自定义规则（ruleId 非内置）行有效则按 sortOrder 追加，损坏的丢弃。
- * 结果按 sortOrder 升序。
+ * 加载生效规则集。语义（issue #44 安全边界 3「表为空或规则损坏 → 自动回退内置」；
+ * 2026-09-07 用户拍板「内置完全只读」后收紧）：
+ * - 6 条内置**恒在**：不可覆盖、不可停用（内置行一律忽略——旧数据残留也当不存在）；
+ * - 自定义规则（ruleId 非内置）行有效则按 sortOrder 追加，损坏的丢弃；
+ * - 结果 = 内置（sortOrder 0–5）+ 自定义（≥ 6），按 sortOrder 升序。
  */
 export async function loadRulePatterns(store: RulePatternStore): Promise<RulePattern[]> {
   const rows = await store.listRulePatterns();
-  if (rows.length === 0) return BUILTIN_RULE_PATTERNS.map((p) => ({ ...p })); // S2: 深拷贝，防消费端污染常量
-  const effective: RulePattern[] = [];
+  const effective = BUILTIN_RULE_PATTERNS.map((p) => ({ ...p })); // S2: 深拷贝，防消费端污染常量
   for (const row of rows) {
-    const builtin = BUILTIN_BY_ID.get(row.ruleId);
-    const role = builtin ? builtin.role : row.role;
-    const error = validateRuleExpression(role, row.expression);
-    if (error !== null) {
-      if (builtin) effective.push({ ...builtin }); // 内置规则损坏 → 回退内置值（深拷贝）
-      // 自定义规则损坏（含未知 role）→ 丢弃（不生效）
-      continue;
-    }
+    if (BUILTIN_BY_ID.has(row.ruleId)) continue; // 内置只读：内置行不再承载配置
+    if (validateRuleExpression(row.role, row.expression) !== null) continue; // 损坏自定义 → 丢弃
     effective.push({
       ruleId: row.ruleId,
-      role,
+      role: row.role,
       expression: row.expression.trim(), // S4: 与校验一致（存库原始值可能带装饰空格）
-      label: row.label || (builtin?.label ?? ""),
+      label: row.label || "自定义规则",
       sortOrder: row.sortOrder,
-      isDefault: builtin ? builtin.isDefault : row.isDefault,
+      isDefault: false,
     });
   }
   return effective.sort((a, b) => a.sortOrder - b.sortOrder);

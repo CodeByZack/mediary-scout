@@ -84,8 +84,10 @@ describe("ARBITRATION_KINDS", () => {
   });
 });
 
-describe("loadRulePatterns", () => {
-  it("falls back to builtins when the table is empty", async () => {
+describe("loadRulePatterns (内置只读, 2026-09-07 拍板)", () => {
+  const builtinIds = BUILTIN_RULE_PATTERNS.map((p) => p.ruleId);
+
+  it("空表 → 全部内置", async () => {
     const rules = await loadRulePatterns(storeOf([]));
     expect(rules).toEqual([...BUILTIN_RULE_PATTERNS]);
   });
@@ -97,44 +99,47 @@ describe("loadRulePatterns", () => {
     expect(again[0]!.expression).toBe(BUILTIN_RULE_PATTERNS[0]!.expression);
   });
 
-  it("trims expressions on load, matching the validation contract (S4)", async () => {
-    const rules = await loadRulePatterns(
-      storeOf([{ ruleId: "digits", role: "episode-only", expression: "  ^(\\d{1,3})$  ", label: "纯数字", sortOrder: 5, isDefault: false }]),
-    );
-    expect(rules[0]?.expression).toBe("^(\\d{1,3})$");
-  });
-
-  it("overrides a builtin expression when present and valid", async () => {
+  it("内置行一律忽略(旧数据残留也当不存在)——内置恒为默认值、永不缺失", async () => {
+    // 旧 UI 允许覆盖内置表达式 / 留空表示恢复;内置只读后这些行不再承载任何配置。
     const rules = await loadRulePatterns(
       storeOf([
-        { ruleId: "digits", role: "episode-only", expression: "^(\\d{1,4})$", label: "纯数字(4位)", sortOrder: 5, isDefault: true },
+        { ruleId: "digits", role: "episode-only", expression: "^(\d{1,4})$", label: "纯数字(4位)", sortOrder: 5, isDefault: true },
+        { ruleId: "sxxexx", role: "season-episode", expression: "([unclosed", label: "坏的内置行", sortOrder: 0, isDefault: false },
       ]),
     );
     const digits = rules.find((r) => r.ruleId === "digits");
-    expect(digits?.expression).toBe("^(\\d{1,4})$");
-    expect(digits?.label).toBe("纯数字(4位)");
-    // 非空表：其余内置未写入 = 被停用，不出现
-    expect(rules).toHaveLength(1);
+    expect(digits?.expression).toBe(BUILTIN_RULE_PATTERNS.find((p) => p.ruleId === "digits")!.expression);
+    expect(rules.map((r) => r.ruleId)).toEqual(builtinIds); // 非空表,六条内置一个不少
   });
 
-  it("falls back a corrupt builtin row to the builtin value", async () => {
+  it("自定义行有效则按 sortOrder 追加在内置之后", async () => {
     const rules = await loadRulePatterns(
-      storeOf([{ ruleId: "sxxexx", role: "season-episode", expression: "([unclosed", label: "坏的正则", sortOrder: 0, isDefault: false }]),
+      storeOf([
+        { ruleId: "custom-underscore", role: "season-episode", expression: "[Ss](\\d{1,2})_(\\d{1,4})", label: "Sxx_Exx", sortOrder: 6, isDefault: false },
+        { ruleId: "custom-ep", role: "episode-only", expression: "第(\\d+)回", label: "第N回", sortOrder: 7, isDefault: false },
+      ]),
     );
-    const s = rules.find((r) => r.ruleId === "sxxexx");
-    expect(s?.expression).toBe(BUILTIN_RULE_PATTERNS[0]!.expression);
+    expect(rules.map((r) => r.ruleId)).toEqual([...builtinIds, "custom-underscore", "custom-ep"]);
+    expect(rules[builtinIds.length]?.expression).toBe("[Ss](\\d{1,2})_(\\d{1,4})");
+    expect(rules[builtinIds.length]?.label).toBe("Sxx_Exx");
+    expect(rules[builtinIds.length]?.isDefault).toBe(false);
   });
 
-  it("appends valid custom rules after builtins by sortOrder and drops corrupt customs", async () => {
-    const rows: RulePattern[] = [
-      { ruleId: "sxxexx", role: "season-episode", expression: "[Ss](\\d{1,2})[Ee](\\d{1,4})", label: "SxxExx", sortOrder: 0, isDefault: true },
-      { ruleId: "custom-underscore", role: "season-episode", expression: "[Ss](\\d{1,2})_(\\d{1,4})", label: "Sxx_Exx", sortOrder: 6, isDefault: false },
-      { ruleId: "custom-broken", role: "episode-only", expression: "([broken", label: "坏自定义", sortOrder: 7, isDefault: false },
-      { ruleId: "custom-unknown-role", role: "bogus" as RuleRole, expression: "(\\d+)", label: "角色未知", sortOrder: 8, isDefault: false },
-    ];
-    const rules = await loadRulePatterns(storeOf(rows));
-    expect(rules.map((r) => r.ruleId)).toEqual(["sxxexx", "custom-underscore"]);
-    expect(rules[1]?.expression).toBe("[Ss](\\d{1,2})_(\\d{1,4})");
+  it("自定义行损坏(非法正则 / 未知角色)→ 丢弃,内置不受影响", async () => {
+    const rules = await loadRulePatterns(
+      storeOf([
+        { ruleId: "custom-broken", role: "episode-only", expression: "([broken", label: "坏自定义", sortOrder: 7, isDefault: false },
+        { ruleId: "custom-unknown-role", role: "bogus" as RuleRole, expression: "(\d+)", label: "角色未知", sortOrder: 8, isDefault: false },
+      ]),
+    );
+    expect(rules.map((r) => r.ruleId)).toEqual(builtinIds);
+  });
+
+  it("自定义表达式去装饰空格 (S4)", async () => {
+    const rules = await loadRulePatterns(
+      storeOf([{ ruleId: "custom-pad", role: "episode-only", expression: "  ^(\\d{1,3})$  ", label: "纯数字", sortOrder: 7, isDefault: false }]),
+    );
+    expect(rules[rules.length - 1]?.expression).toBe("^(\\d{1,3})$");
   });
 });
 
@@ -165,35 +170,26 @@ describe("compileEpisodeRules / loadEpisodeRules", () => {
     expect(rules.custom![0]!.role).toBe("season-episode");
   });
 
-  it("loadEpisodeRules 端到端:空表 → 内置编译结果;编辑 digits → 覆盖生效", async () => {
+  it("loadEpisodeRules 端到端:空表 → 内置编译结果;自定义行进 custom 槽", async () => {
     const { loadEpisodeRules } = await import("../src/ruleset.js");
     const { createSqliteWorkflowRepository } = await import("../src/sqlite.js");
     const repo = createSqliteWorkflowRepository({ path: ":memory:" });
-    const empty = await loadEpisodeRules(repo);
-    expect(empty.digits?.test("07")).toBe(true);
-    expect(empty.digits?.test("0700")).toBe(false);
-    await repo.replaceRulePatterns([
-      { ruleId: "digits", role: "episode-only", expression: "^(\\d{1,4})$", label: "纯数字4位", sortOrder: 5, isDefault: false },
-    ]);
-    const edited = await loadEpisodeRules(repo);
-    expect(edited.digits?.test("0700")).toBe(true);
-    expect(edited.custom ?? []).toHaveLength(0);
-  });
-});
+});});
 
 describe("repo + loader 端到端 (S7)", () => {
-  it("replace([]) 清空后 loadRulePatterns 回退内置", async () => {
+  it("replace([]) 清空后 loadRulePatterns 回退内置;自定义行按序追加在内置后", async () => {
     const { createSqliteWorkflowRepository } = await import("../src/sqlite.js");
     const repo = createSqliteWorkflowRepository({ path: ":memory:" });
     await repo.replaceRulePatterns([
-      { ruleId: "digits", role: "episode-only", expression: "^(\\d{1,4})$", label: "自定义纯数字", sortOrder: 5, isDefault: false },
+      { ruleId: "custom-4digits", role: "episode-only", expression: "^(\\d{1,4})$", label: "自定义纯数字", sortOrder: 7, isDefault: false },
     ]);
     const loaded = await loadRulePatterns(repo);
-    expect(loaded.map((r) => r.ruleId)).toEqual(["digits"]);
-    expect(loaded[0]?.expression).toBe("^(\\d{1,4})$");
+    expect(loaded.map((r) => r.ruleId)).toEqual([...BUILTIN_RULE_PATTERNS.map((p) => p.ruleId), "custom-4digits"]);
+    expect(loaded[loaded.length - 1]?.expression).toBe("^(\\d{1,4})$");
     await repo.replaceRulePatterns([]); // 恢复默认 = 清空表
     const restored = await loadRulePatterns(repo);
     expect(restored.map((r) => r.ruleId)).toEqual(BUILTIN_RULE_PATTERNS.map((p) => p.ruleId));
     expect(restored[0]).not.toBe(BUILTIN_RULE_PATTERNS[0]); // 独立引用
   });
 });
+
