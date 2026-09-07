@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState, useTransition } from "react";
+import type { CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { Check, LoaderCircle, Plus, RefreshCcw } from "lucide-react";
 import { resetRulePatternsAction, saveRulePatternsAction } from "../app/actions";
@@ -17,6 +18,16 @@ import {
 /** issue #44 UI 重构:解析规则按 role 拆成两个区块(2026-09-07 用户拍板「(a) UI 分组」)。
  *  S 区块 = 文件名里带季号的写法,E 区块 = 只有集号的写法;区块内行序 = 优先级,
  *  前 N 行 = 该区块的内置槽位(留空 = 恢复内置)。行格式 S:/E: 前缀 + 正则。 */
+
+/** 图例里的匹配示例(等宽、弱化底色)——让用户一眼看出该槽位认哪种写法。 */
+const EXAMPLE_CODE_STYLE: CSSProperties = {
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  fontSize: 11.5,
+  padding: "0 4px",
+  borderRadius: 3,
+  background: "rgba(127,127,127,.12)",
+};
+
 export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -102,7 +113,6 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
     const role = key === "season" ? "season-episode" : "episode-only";
     const prefix = key === "season" ? "S" : "E";
     const slots = builtinSlotsFor(role);
-    const slotNames = slots.map((s) => s.label ?? s.ruleId).join(" / ");
     const errors = key === "season" ? parsed.errors.season : parsed.errors.episode;
     const errorCount = Object.keys(errors).length;
     return (
@@ -113,13 +123,20 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
           </strong>
           <span style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>
             <strong>{prefix}:</strong>
-            {key === "season" ? " 文件名里带季号(如 SxxExx / 1×01)" : " 文件名里只有集号(如 E01 / 第N集,仅单季任务启用)"}
+            {key === "season" ? " 文件名里带季号" : " 文件名里只有集号(仅单季任务启用)"}
           </span>
         </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px", fontSize: 12, color: "var(--text-secondary, #888)", marginBottom: 6 }}>
+          {slots.map((slot, i) => (
+            <span key={slot.ruleId} style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}>
+              <strong>{i + 1}</strong>
+              <span>{slot.label ?? slot.ruleId}</span>
+              {slot.example ? <code style={EXAMPLE_CODE_STYLE}>{slot.example}</code> : null}
+            </span>
+          ))}
+        </div>
         <div style={{ fontSize: 12, color: "var(--text-secondary, #888)", lineHeight: 1.6, marginBottom: 6 }}>
-          · 前 {slots.length} 行 = 内置槽位({slotNames}):留空 = 恢复内置默认,<strong>不要删除整行</strong>,否则后续行会错位挂到前一槽位。
-          <br />
-          · 其后是自定义规则,顺序 = 优先级。前缀 <strong>{prefix}:</strong> 不是正则的一部分;支持 <code>#</code> 开头的注释行。
+          · 前 {slots.length} 行 = 内置(留空 = 恢复内置,<strong>勿删整行</strong>);其后为自定义,行序 = 优先级。前缀 <strong>{prefix}:</strong> 不属于正则,<code>#</code> 开头为注释。
         </div>
         <textarea
           ref={key === "season" ? seasonRef : episodeRef}
@@ -161,9 +178,8 @@ export function RulePatternsForm({ initial }: { initial: RulePatternDraft[] }) {
   return (
     <div>
       <div style={{ fontSize: 12.5, color: "var(--text-secondary, #888)", lineHeight: 1.7, marginBottom: 12 }}>
-        <div>· 识别规则分两类:<strong>季集</strong>(文件名里带季号)与<strong>纯集号</strong>(只有集号,仅单季任务启用)。多季任务只认季集类。</div>
-        <div>· 顺序 = 优先级:先试内置(按槽位顺序),再试自定义;季集区块的自定义优先于纯集号区块的自定义。</div>
-        <div>· 正则只决定匹配文本;剥扩展名 / 合理集数守卫 / 年份排除 / 衍生黑名单等语义由解析代码固定保留。</div>
+        <div>· 优先级:内置槽位 → 季集自定义 → 纯集号自定义(纯集号仅单季任务启用)。</div>
+        <div>· 正则只决定匹配文本;剥扩展名 / 集数守卫 / 年份排除 / 衍生黑名单等由解析代码固定保留。</div>
       </div>
       {blockUi("season")}
       {blockUi("episode")}

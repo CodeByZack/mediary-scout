@@ -19,7 +19,8 @@ import type { EpisodeParseRules } from "./episode-code.js";
  * 角色与内置 ruleId 绑定；自定义规则（非内置 id）必须在保存时明确选择角色。 */
 export type RuleRole = "season-episode" | "episode-only";
 
-/** rule_patterns 行（与表结构一致，camelCase 化）。 */
+/** rule_patterns 行（与表结构一致，camelCase 化）;
+ *  example 是内置槽位专有的展示元数据(表单图例里的匹配示例),不落库。 */
 export interface RulePattern {
   ruleId: string;
   role: RuleRole;
@@ -27,6 +28,8 @@ export interface RulePattern {
   label: string;
   sortOrder: number;
   isDefault: boolean;
+  /** 匹配示例：内置槽位专有,供设置页图例展示「这条规则认哪种写法」。非 DB 列。 */
+  example?: string;
 }
 
 /** prompt_overrides 行。arbitrationKind ∈ ARBITRATION_KINDS。 */
@@ -53,6 +56,7 @@ export const BUILTIN_RULE_PATTERNS: readonly RulePattern[] = [
     ruleId: "sxxexx",
     role: "season-episode",
     label: "SxxExx",
+    example: "狂飙.S01E01.1080p",
     expression: "[Ss](\\d{1,2})[Ee](\\d{1,4})",
     sortOrder: 0,
     isDefault: true,
@@ -61,6 +65,7 @@ export const BUILTIN_RULE_PATTERNS: readonly RulePattern[] = [
     ruleId: "variant",
     role: "season-episode",
     label: "SxxExx 变体（空格/点分隔）",
+    example: "S01.E01",
     expression: "[Ss](\\d{1,2})\\s*[. ]\\s*[Ee](\\d{1,4})(?!\\d)",
     sortOrder: 1,
     isDefault: true,
@@ -69,6 +74,7 @@ export const BUILTIN_RULE_PATTERNS: readonly RulePattern[] = [
     ruleId: "ep-only",
     role: "episode-only",
     label: "E01 / EP01",
+    example: "Ep.12",
     expression: "(?:^|[^A-Za-z0-9])[Ee][Pp]?\\.?\\s*(\\d{1,4})(?:$|[^0-9])",
     sortOrder: 2,
     isDefault: true,
@@ -77,6 +83,7 @@ export const BUILTIN_RULE_PATTERNS: readonly RulePattern[] = [
     ruleId: "cross",
     role: "season-episode",
     label: "1×01 / 1x01",
+    example: "01x01",
     expression: "(?:^|[^A-Za-z0-9])(\\d{1,2})\\s*[x×]\\s*(\\d{1,4})(?:$|[^0-9])",
     sortOrder: 3,
     isDefault: true,
@@ -85,6 +92,7 @@ export const BUILTIN_RULE_PATTERNS: readonly RulePattern[] = [
     ruleId: "chinese",
     role: "episode-only",
     label: "第N集/话/期",
+    example: "第01集",
     expression: "第\\s*(\\d{1,4})\\s*(?:集|话|話|期)",
     sortOrder: 4,
     isDefault: true,
@@ -93,6 +101,7 @@ export const BUILTIN_RULE_PATTERNS: readonly RulePattern[] = [
     ruleId: "digits",
     role: "episode-only",
     label: "纯数字（整名）",
+    example: "01.mp4",
     expression: "^(\\d{1,3})$",
     sortOrder: 5,
     isDefault: true,
