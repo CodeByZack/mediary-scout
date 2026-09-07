@@ -38,15 +38,6 @@ export function filterDisabledBuiltins(rows: RulePatternDraft[]): RulePatternDra
   return rows.filter((row) => !(BUILTIN_ID_SET.has(row.ruleId) && row.expression.trim().length === 0));
 }
 
-/** 收集全部未通过校验的行错误（ruleId → 文案）。 */
-export function collectRowErrors(rows: RulePatternDraft[]): Record<string, string> {
-  const errors: Record<string, string> = {};
-  for (const row of rows) {
-    const error = ruleRowError(row);
-    if (error !== null) errors[row.ruleId] = error;
-  }
-  return errors;
-}
 
 /**
  * issue #44 UI 重构:解析规则按 role 拆成两个区块(2026-09-07 用户拍板「(a) UI 分组」)。

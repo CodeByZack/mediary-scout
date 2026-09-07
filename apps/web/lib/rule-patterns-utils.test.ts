@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   BUILTIN_ID_SET,
-  collectRowErrors,
   filterDisabledBuiltins,
   formatRuleBlocks,
   parseRuleBlock,
@@ -149,12 +148,3 @@ describe("两区块 ↔ 规则行(issue #44 UI 分组)", () => {
   });
 });
 
-describe("collectRowErrors", () => {
-  it("只汇总未通过的行", () => {
-    const rows = [
-      row({ ruleId: "sxxexx", role: "season-episode", expression: "" }), // 停用,不报错
-      row({ ruleId: "custom-1", expression: "" }), // 报错
-    ];
-    expect(collectRowErrors(rows)).toEqual({ "custom-1": "正则不能为空" });
-  });
-});
