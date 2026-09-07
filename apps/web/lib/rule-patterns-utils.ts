@@ -138,17 +138,7 @@ export function parseRuleBlock(text: string, role: BlockRole, customBase = 0): {
   // 缺失内置补空行(用户删了内置行 → 留空 = 恢复内置)。
   while (positioned.length < slots.length) {
     const slot = slots[positioned.length]!;
-    positioned.push({
-      row: {
-        ruleId: slot.ruleId,
-        role: slot.role,
-        expression: "",
-        label: slot.label ?? "",
-        sortOrder: slot.sortOrder,
-        isDefault: true,
-      },
-      lineNo: -1,
-    });
+    positioned.push({ row: emptyBuiltinRow(slot), lineNo: -1 });
   }
   // 行级校验(正则合法性 / 捕获组契约),与保存 action 同源;再叠一个槽位错位探测。
   for (const { row, lineNo } of positioned) {
@@ -164,6 +154,17 @@ export function parseRuleBlock(text: string, role: BlockRole, customBase = 0): {
   return { rows: positioned.map((p) => p.row), errors };
 }
 
+/** 内置槽位的空行(留空 = 恢复内置默认)——parseRuleBlock 补位与 formatRuleBlocks 兜底共用。 */
+function emptyBuiltinRow(slot: RulePattern): RulePatternDraft {
+  return {
+    ruleId: slot.ruleId,
+    role: slot.role,
+    expression: "",
+    label: slot.label ?? "",
+    sortOrder: slot.sortOrder,
+    isDefault: true,
+  };
+}
 /**
  * 内置槽位错位探测:槽位被填成了「另一条内置规则的默认正则」→ 用户多半删掉了中间某行,
  * 后续行整体左移撞进错误槽位。拆区块后同区块内前缀一致,前缀-角色校验拦不住这种情况。
@@ -188,18 +189,7 @@ export function formatRuleBlocks(rows: RulePatternDraft[]): { season: string; ep
   const out: { season: string; episode: string } = { season: "", episode: "" };
   for (const role of BLOCK_ORDER) {
     const slots = builtinSlotsFor(role);
-    const builtinRows = slots.map(
-      (slot) =>
-        rows.find((r) => r.ruleId === slot.ruleId) ??
-        {
-          ruleId: slot.ruleId,
-          role: slot.role,
-          expression: "",
-          label: slot.label ?? "",
-          sortOrder: slot.sortOrder,
-          isDefault: true,
-        },
-    );
+    const builtinRows = slots.map((slot) => rows.find((r) => r.ruleId === slot.ruleId) ?? emptyBuiltinRow(slot));
     const customRows = rows
       .filter((r) => r.role === role && !BUILTIN_RULE_IDS.has(r.ruleId))
       .sort((a, b) => a.sortOrder - b.sortOrder);
