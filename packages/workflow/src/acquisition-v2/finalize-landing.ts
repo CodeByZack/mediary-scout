@@ -257,7 +257,7 @@ export async function finalizeLanding(
       const base = basenameOf(name);
       // 解析的是我们自己生成的规范名(Title.SxxExx.ext),固定用内置正则可保证
       // mark 不因用户规则误改而静默失败(issue #44:规则只影响"识别输入文件名")。
-      const code = episodeCodeFromFileName(base, seasons, undefined, null);
+      const code = episodeCodeFromFileName(base, seasons, undefined);
       return code ?? null;
     })
     .filter((code): code is string => code !== null);

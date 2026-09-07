@@ -175,8 +175,7 @@ export const SQLITE_SCHEMA = `
     expression text NOT NULL,
     label text,
     sort_order integer NOT NULL DEFAULT 0,
-    is_default integer NOT NULL DEFAULT 1,
-    created_at text NOT NULL DEFAULT (datetime('now'))
+    is_default integer NOT NULL DEFAULT 1
   );
   CREATE TABLE IF NOT EXISTS prompt_overrides (
     arbitration_kind text PRIMARY KEY,
@@ -1162,8 +1161,8 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
 
   async replaceRulePatterns(patterns: RulePattern[]): Promise<void> {
     const clear = this.db.prepare("DELETE FROM rule_patterns");
-    // OR REPLACE:重复 ruleId 与 InMemory 实现一致 last-wins(而不是 UNIQUE 抛错
-    // 整单回滚)——replace 是整体替换语义,去重责任归调用方(S3)。
+    // 先清空整表(整体替换语义),再 INSERT OR REPLACE:输入内重复 ruleId 取后者 last-wins,
+    // 与 InMemory 引擎一致(S3 测试),不会因 UNIQUE 整单回滚。
     const insert = this.db.prepare(
       "INSERT OR REPLACE INTO rule_patterns (rule_id, role, expression, label, sort_order, is_default) VALUES (?, ?, ?, ?, ?, ?)",
     );
@@ -1187,7 +1186,8 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
   }
 
   async replacePromptOverrides(overrides: PromptOverride[]): Promise<void> {
-    // 全量替换:先清空再插入;INSERT OR REPLACE 保证输入内重复 kind 后者覆盖(last-wins,§34 复核 S3)。*/
+    // 先清空整表(整体替换语义),再 INSERT OR REPLACE:输入内重复 kind 取后者 last-wins,
+    // 与 InMemory 引擎一致(§34 复核 S3),不会因 UNIQUE 整单回滚。
     const clear = this.db.prepare("DELETE FROM prompt_overrides");
     const insert = this.db.prepare(
       "INSERT OR REPLACE INTO prompt_overrides (arbitration_kind, prompt_text, is_active) VALUES (?, ?, ?)",

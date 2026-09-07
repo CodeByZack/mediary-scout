@@ -130,7 +130,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
           ),
         ),
         ...(episodeRules !== undefined ? { episodeRules } : {}),
-        ...(Object.keys(promptLookup).length > 0 ? { promptOverrides: promptLookup } : {}),
+        promptOverrides: promptLookup,
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,
@@ -180,7 +180,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
         model: ctx.model,
         workflowRunId: claimed.runId,
         ...(episodeRules !== undefined ? { episodeRules } : {}),
-        ...(Object.keys(promptLookup).length > 0 ? { promptOverrides: promptLookup } : {}),
+        promptOverrides: promptLookup,
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,
@@ -226,7 +226,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
         moviesParentDirectoryId: resolveMoviesParent(ctx),
         now,
         deadLinkStore: ctx.repository,
-        ...(Object.keys(promptLookup).length > 0 ? { promptOverrides: promptLookup } : {}),
+        promptOverrides: promptLookup,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,
           workflowRunId: claimed.runId,
@@ -293,7 +293,7 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
           ),
         ),
         ...(episodeRules !== undefined ? { episodeRules } : {}),
-        ...(Object.keys(promptLookup).length > 0 ? { promptOverrides: promptLookup } : {}),
+        promptOverrides: promptLookup,
         now,
         onProgress: progressAndTraceSink({
           repository: ctx.repository,
