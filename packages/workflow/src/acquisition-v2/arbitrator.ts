@@ -125,21 +125,6 @@ export async function arbitrateEpisodeMapping(options: {
   }
 }
 
-const DIAGNOSIS_SYSTEM = [
-  "你是剧集落盘诊断员。代码转存了一个候选并解析了落盘内容，但判定为「不符合」或「脏包」，需要你决定怎么处理。",
-  "决定（action）三选一：",
-  '- "accept"：虽有瑕疵但核心集数在、可用（如全集包里夹了个 sample，但需要的集都完整）——接受并归位标记。',
-  '- "retry_other"：这个包不对（季错/同名异作/纯生肉/大量杂项），换下一个候选：同时在 nextCandidateId 里给出「下一个最该试的候选 id」。',
-  '- "abandon"：没有可用的了，放弃并上报 no coverage。',
-  "若选了 retry_other，会附带「剩余候选」列表（按代码分级 A>B>C>D 排好序）。",
-  "规则：",
-  "- nextCandidateId 必须从某个候选行的 [id] 里原样复制，禁止填标题、禁止编造；没有合适的就填 null。",
-  "- 优先挑 A 级、次 B 级；排除已经列在「已尝试」里的。",
-  "- 候选列表可能很长，只看前几个即可；不要为了选候选而重读全部。",
-  "只输出 JSON，不要任何其他文字：",
-  '{"action": "accept" | "retry_other" | "abandon", "reasoning": "一句话理由", "nextCandidateId": "候选的id" | null}',
-].join("\n");
-
 /** Extract the first JSON object/array from a model reply, tolerating markdown
  *  code fences and surrounding prose. Throws when no JSON is present. */
 export function extractJson(text: string): unknown {
@@ -192,60 +177,6 @@ export async function arbitrateSelection(options: {
   } catch {
     // Safe fallback: decline rather than transfer a random candidate.
     return { candidateId: null, reasoning: "仲裁返回无法解析，安全放弃" };
-  }
-}
-
-/** Arbitrate how to handle a landing the digest rejected. */
-export async function arbitrateDiagnosis(options: {
-  model: LanguageModel;
-  /** digest.summary output — the landing's parsed picture. */
-  summary: string;
-  title: string;
-  /** 功能4: 剩余候选(按分级 A>B>C>D 排好序,带 id)。action=retry_other
-   *  时供 AI 直接挑下一个,避免每轮脏包都重新仲裁。可选。 */
-  remainingCandidates?: Array<{ id: string; title: string; grade: string }>;
-  /** 已尝试过的候选(避免 AI 重复挑同一个)。可选。 */
-  triedIds?: string[];
-}): Promise<DiagnosisArbitration> {
-  const remainingLines = (options.remainingCandidates ?? [])
-    .filter((c) => !(options.triedIds ?? []).includes(c.id))
-    .slice(0, 15)
-    .map((c) => `[${c.grade}] [${c.id}] ${c.title}`)
-    .join("\n");
-  const prompt = [
-    `目标剧集：${options.title}`,
-    "",
-    "落盘摘要：",
-    options.summary,
-    options.remainingCandidates && options.remainingCandidates.length > 0
-      ? `\n剩余候选（按分级排序，A>B>C>D，前 15 个）：\n${remainingLines}`
-      : "",
-  ]
-    .filter((line) => line !== "")
-    .join("\n");
-
-  logAiCall(options.model, "落盘诊断仲裁(剧集)", options.title, options.summary.length);
-  const result = await generateText({
-    model: options.model,
-    system: DIAGNOSIS_SYSTEM,
-    prompt,
-  });
-
-  try {
-    const parsed = extractJson(result.text) as Partial<DiagnosisArbitration>;
-    if (parsed?.action !== "accept" && parsed?.action !== "retry_other" && parsed?.action !== "abandon") {
-      throw new Error("ARBITRATOR_BAD_DIAGNOSIS: action invalid");
-    }
-    return {
-      action: parsed.action,
-      reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
-      nextCandidateId:
-        typeof parsed.nextCandidateId === "string" && parsed.nextCandidateId.length > 0
-          ? parsed.nextCandidateId
-          : null,
-    };
-  } catch {
-    return { action: "abandon", reasoning: "仲裁返回无法解析，安全放弃", nextCandidateId: null };
   }
 }
 

@@ -1073,14 +1073,6 @@ export async function getTmdbAccesses(
   return accesses;
 }
 
-/** True when the app runs inside the Electron desktop shell (server-launch sets
- *  MEDIA_TRACK_DESKTOP=1). Unlike the docker/compose stack, the desktop shell
- *  does NOT bundle a PanSou container — so the settings copy points the user at
- *  the self-host tutorial instead of claiming "内置、开箱即用". */
-export function resolveIsDesktop(env: Record<string, string | undefined> = process.env): boolean {
-  return env.MEDIA_TRACK_DESKTOP === "1";
-}
-
 export const PANSOU_BASE_URL_SETTING_KEY = "pansou_base_url";
 
 /** 自建搜索源的最新健康结论。取值只有三种:`"ok"` / `"unhealthy"` / `""`(未配或
