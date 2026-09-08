@@ -1,4 +1,4 @@
-export type DeploymentKind = "container" | "desktop" | "web" | "unknown";
+export type DeploymentKind = "container" | "web" | "unknown";
 
 export interface DeploymentUpdateState {
   kind: DeploymentKind;
@@ -7,7 +7,7 @@ export interface DeploymentUpdateState {
   currentShort: string | null;
   latestShort: string | null;
   behind: boolean | null;
-  reason: "demo" | "desktop" | "missing_current" | "probe_failed" | "ok";
+  reason: "demo" | "missing_current" | "probe_failed" | "ok";
 }
 
 export interface RemoteCommitFetcher {
@@ -32,7 +32,6 @@ export function shortCommit(commit: string | null): string | null {
  */
 export async function getDeploymentUpdateState(input: {
   demo: boolean;
-  desktop: boolean;
   currentCommit: string | null | undefined;
   fetchLatest: RemoteCommitFetcher;
 }): Promise<DeploymentUpdateState> {
@@ -45,9 +44,6 @@ export async function getDeploymentUpdateState(input: {
   };
   if (input.demo) {
     return { ...base, kind: "web", behind: null, reason: "demo" };
-  }
-  if (input.desktop) {
-    return { ...base, kind: "desktop", behind: null, reason: "desktop" };
   }
   if (!currentCommit) {
     return { ...base, kind: "container", behind: null, reason: "missing_current" };

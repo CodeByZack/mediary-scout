@@ -5,7 +5,7 @@ import { getStorageBrand } from "../../storage-brands.js";
 import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
 import type { PromptOverrideLookup } from "../../ruleset.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
-import type { TvAnimeTarget } from "../../acquisition-v2/task-agents.js";
+import type { TvAnimeTarget } from "../../acquisition-v2/target-types.js";
 
 /**
  * fast path · 共享观测与循环原语（步骤⑤ 自 acquisition-v2/fast-path.ts 逐字搬迁）。

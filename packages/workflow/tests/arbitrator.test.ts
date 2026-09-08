@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MockLanguageModelV3 } from "ai/test";
 import {
-  arbitrateDiagnosis,
+
   arbitrateEpisodeMapping,
   arbitrateMovieDiagnosis,
   arbitrateMovieSelection,
@@ -101,35 +101,6 @@ describe("arbitrateSelection", () => {
   });
 });
 
-describe("arbitrateDiagnosis", () => {
-  it("returns the action", async () => {
-    const result = await arbitrateDiagnosis({
-      model: textModel('{"action":"retry_other","reasoning":"季号错了"}'),
-      summary: "季外集数: S02E01",
-      title: "狂飙",
-    });
-    expect(result.action).toBe("retry_other");
-  });
-
-  it("validates the action against the three allowed values", async () => {
-    const result = await arbitrateDiagnosis({
-      model: textModel('{"action":"explode","reasoning":"bad"}'),
-      summary: "whatever",
-      title: "狂飙",
-    });
-    // Invalid action → safe fallback to abandon.
-    expect(result.action).toBe("abandon");
-  });
-
-  it("degrades to abandon on unparseable output", async () => {
-    const result = await arbitrateDiagnosis({
-      model: textModel("not json"),
-      summary: "whatever",
-      title: "狂飙",
-    });
-    expect(result.action).toBe("abandon");
-  });
-});
 
 describe("arbitrateMovieSelection", () => {
   it("returns the chosen candidate id (film identity = title + year)", async () => {
@@ -215,43 +186,6 @@ describe("arbitrateMovieDiagnosis", () => {
       year: 2019,
     });
     expect(result.action).toBe("abandon");
-  });
-});
-describe("arbitrateDiagnosis — 功能4 nextCandidateId (批量候选)", () => {
-  it("returns nextCandidateId when the model picks the next candidate", async () => {
-    const result = await arbitrateDiagnosis({
-      model: textModel('{"action":"retry_other","reasoning":"季错","nextCandidateId":"c-7"}'),
-      summary: "季外集数: S02E01",
-      title: "狂飙",
-      remainingCandidates: [
-        { id: "c-1", title: "狂飙.S01E01.1080p.中字", grade: "A" },
-        { id: "c-7", title: "狂飙 第一季 mkv", grade: "B" },
-      ],
-      triedIds: ["c-1"],
-    });
-    expect(result.action).toBe("retry_other");
-    expect(result.nextCandidateId).toBe("c-7");
-  });
-
-  it("returns null nextCandidateId when the model provides none", async () => {
-    const result = await arbitrateDiagnosis({
-      model: textModel('{"action":"abandon","reasoning":"没了"}'),
-      summary: "whatever",
-      title: "狂飙",
-      remainingCandidates: [{ id: "c-9", title: "x", grade: "B" }],
-    });
-    expect(result.action).toBe("abandon");
-    expect(result.nextCandidateId).toBeNull();
-  });
-
-  it("keeps working without remainingCandidates (backward compat)", async () => {
-    const result = await arbitrateDiagnosis({
-      model: textModel('{"action":"accept","reasoning":"有核心集"}'),
-      summary: "S01E01 在",
-      title: "狂飙",
-    });
-    expect(result.action).toBe("accept");
-    expect(result.nextCandidateId).toBeNull();
   });
 });
 

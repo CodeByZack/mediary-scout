@@ -53,7 +53,6 @@ export * from "./pan115-qrcode-login.js";
 export * from "./acquisition-v2/storage-115-simulator.js";
 export * from "./acquisition-v2/fake-provider.js";
 export * from "./acquisition-v2/sandbox.js";
-export * from "./acquisition-v2/task-agents.js";
 export * from "./acquisition-v2/dead-links.js";
 export * from "./acquisition-v2/search-profile.js";
 export * from "./acquisition-v2/activity.js";

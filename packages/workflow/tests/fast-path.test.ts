@@ -6,7 +6,7 @@ import { Storage115Simulator } from "../src/acquisition-v2/storage-115-simulator
 import { runFastPathAcquisition } from "../src/consumption/fast-path/tv.js";
 import { makeAgentTraceSink } from "../src/acquisition-v2/agent-trace-sink.js";
 import { InMemoryWorkflowRepository } from "../src/index.js";
-import type { TvAnimeTarget } from "../src/acquisition-v2/task-agents.js";
+import type { TvAnimeTarget } from "../src/acquisition-v2/target-types.js";
 
 /** Let the trace sink's fire-and-forget append chain settle (same as
  *  agent-trace-sink.test.ts). */
