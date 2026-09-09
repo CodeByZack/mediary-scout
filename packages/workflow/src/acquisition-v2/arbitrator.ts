@@ -1,6 +1,6 @@
 import { generateText, type LanguageModel } from "ai";
 import type { ArbitrationKind, PromptOverrideLookup } from "../ruleset.js";
-import { PROMPT_TEMPLATES } from "../prompt-templates.js";
+import { PROMPT_TEMPLATES, EPISODE_MAPPING_BODY_SINGLE, EPISODE_MAPPING_BODY_MULTI } from "../prompt-templates.js";
 export { PROMPT_TEMPLATES } from "../prompt-templates.js";
 
 /** Always-on stdout trace marking every LLM round-trip the arbitrator makes —
@@ -84,14 +84,17 @@ export async function arbitrateEpisodeMapping(options: {
     `目标剧集:${options.title}(${options.seasons.length > 0 ? `季:${options.seasons.join("/")}` : "未知季"})`,
     `已知集数范围:${options.knownEpisodeRange ? `${options.knownEpisodeRange.min} ~ ${options.knownEpisodeRange.max}` : "未知"}`,
     "",
-    "需要识别集数的文件:",
+    options.seasons.length > 1 ? "需要识别集数的文件路径(含文件夹):" : "需要识别集数的文件:",
     ...options.allFiles.map((name, i) => `${i + 1}. ${name}`),
   ].join("\n");
 
   logAiCall(options.model, "集数映射仲裁", options.title, options.allFiles.join(",").length);
   const result = await generateText({
     model: options.model,
-    system: resolvePromptText("episode-mapping", options.promptOverrides),
+    // issue #53:多季用"文件路径"body(提示文件夹含季信息),单季保持"文件名"body(零回归)。
+    system: options.promptOverrides
+      ? resolvePromptText("episode-mapping", options.promptOverrides)
+      : PROMPT_TEMPLATES["episode-mapping"].head + "\n" + (options.seasons.length > 1 ? EPISODE_MAPPING_BODY_MULTI : EPISODE_MAPPING_BODY_SINGLE) + "\n" + PROMPT_TEMPLATES["episode-mapping"].tail,
     prompt,
   });
 

@@ -2,7 +2,7 @@ import type { LanguageModel } from "ai";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
 import type { AgentPhase, AgentToolEvent } from "../../acquisition-v2/activity.js";
 import { getStorageBrand } from "../../storage-brands.js";
-import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
+import { episodeCodeFromFileName, episodeCodeFromPath, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
 import type { PromptOverrideLookup } from "../../ruleset.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import type { TvAnimeTarget } from "../../acquisition-v2/target-types.js";
@@ -247,7 +247,8 @@ export function landingParseRows(
     .filter((file) => VIDEO_EXT.test(file.path))
     .map((file) => {
       const base = fileBaseName(file.path);
-      const code = episodeCodeFromFileName(base, seasons, undefined, rules);
+      // issue #53:多季用完整路径解析(含文件夹归季),单季退化为 basename 解析(零回归)。
+      const code = episodeCodeFromPath(file.path, seasons, undefined, rules).code;
       const bare = /^\d{1,3}$/.test(base.replace(/\.[^.]+$/i, ""));
       const shown = base.length > 48 ? base.slice(0, 45) + "…" : base;
       if (!code) return shown + " → 解析失败";

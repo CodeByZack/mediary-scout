@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolvePromptText, PROMPT_TEMPLATES } from "../src/acquisition-v2/arbitrator.js";
+import { EPISODE_MAPPING_BODY_SINGLE, EPISODE_MAPPING_BODY_MULTI } from "../src/prompt-templates.js";
 import {
   ARBITRATION_KINDS,
   compilePromptLookup,
@@ -55,5 +56,28 @@ describe("compilePromptLookup / validatePromptBody", () => {
     expect(validatePromptBody("   ")).toBe("提示词不能为空");
     expect(validatePromptBody("x".repeat(MAX_PROMPT_BODY_LENGTH))).toBeNull();
     expect(validatePromptBody("x".repeat(MAX_PROMPT_BODY_LENGTH + 1))).toContain("提示词过长");
+  });
+});
+
+describe("issue #53 — 多季/单季 episode-mapping body 变体", () => {
+  it("D1: 单季 body 包含'文件名'措辞", () => {
+    expect(EPISODE_MAPPING_BODY_SINGLE).toContain("文件名");
+    expect(EPISODE_MAPPING_BODY_SINGLE).not.toContain("文件路径");
+  });
+
+  it("D2: 多季 body 包含'文件路径'措辞", () => {
+    expect(EPISODE_MAPPING_BODY_MULTI).toContain("文件路径");
+    expect(EPISODE_MAPPING_BODY_MULTI).not.toContain("文件名与集数");
+  });
+
+  it("D3: PROMPT_TEMPLATES 默认使用单季 body(零回归)", () => {
+    expect(PROMPT_TEMPLATES["episode-mapping"].body).toBe(EPISODE_MAPPING_BODY_SINGLE);
+  });
+
+  it("D4: 覆盖 body 时 head/tail 固定不变", () => {
+    const text = resolvePromptText("episode-mapping", { "episode-mapping": "自定义规则" });
+    expect(text.startsWith(PROMPT_TEMPLATES["episode-mapping"].head)).toBe(true);
+    expect(text.endsWith(PROMPT_TEMPLATES["episode-mapping"].tail)).toBe(true);
+    expect(text).toContain("自定义规则");
   });
 });

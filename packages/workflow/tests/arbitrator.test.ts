@@ -234,3 +234,49 @@ describe("arbitrateEpisodeMapping — 功能2 集数映射仲裁", () => {
     expect(result.unmapped).toEqual([]);
   });
 });
+
+describe("arbitrateEpisodeMapping — issue #53 多季路径 key", () => {
+  it("E1: 单季 → key 是 basename", async () => {
+    const result = await arbitrateEpisodeMapping({
+      model: textModel(
+        '{"mapping":{"01.mp4":"S03E01"},"unmapped":[],"reasoning":"单季裸数字"}',
+      ),
+      allFiles: ["01.mp4"],
+      title: "狂飙",
+      seasons: [3],
+      knownEpisodeRange: { min: 1, max: 39 },
+    });
+    expect(result.mapping).toEqual({ "01.mp4": "S03E01" });
+  });
+
+  it("E2: 多季 → key 是完整路径", async () => {
+    const result = await arbitrateEpisodeMapping({
+      model: textModel(
+        '{"mapping":{"Show/Season 1/01.mkv":"S01E01","Show/Season 2/01.mkv":"S02E01"},"unmapped":[],"reasoning":"多季路径归季"}',
+      ),
+      allFiles: ["Show/Season 1/01.mkv", "Show/Season 2/01.mkv"],
+      title: "狂飙",
+      seasons: [1, 2],
+      knownEpisodeRange: { min: 1, max: 10 },
+    });
+    expect(result.mapping).toEqual({
+      "Show/Season 1/01.mkv": "S01E01",
+      "Show/Season 2/01.mkv": "S02E01",
+    });
+  });
+
+  it("E3: 多季 + AI 返回幻觉路径 → 幻觉条目被丢弃", async () => {
+    const result = await arbitrateEpisodeMapping({
+      model: textModel(
+        '{"mapping":{"Show/Season 1/01.mkv":"S01E01","Show/Season 3/01.mkv":"S03E01"},"unmapped":[],"reasoning":"幻觉路径"}',
+      ),
+      allFiles: ["Show/Season 1/01.mkv", "Show/Season 2/01.mkv"],
+      title: "狂飙",
+      seasons: [1, 2],
+      knownEpisodeRange: { min: 1, max: 10 },
+    });
+    // 幻觉路径 Show/Season 3/01.mkv 不在 allFiles 里 → 被丢弃
+    expect(result.mapping).toEqual({ "Show/Season 1/01.mkv": "S01E01" });
+    expect(result.unmapped).toEqual([]);
+  });
+});

@@ -1,4 +1,4 @@
-import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../episode-code.js";
+import { episodeCodeFromFileName, episodeCodeFromPath, episodeDateConflict, type EpisodeParseRules } from "../episode-code.js";
 import type { SimTreeFile } from "./storage-115-simulator.js";
 
 /**
@@ -109,7 +109,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
       continue;
     }
     const parsedCode =
-      overrides[base] ?? episodeCodeFromFileName(base, input.seasons, input.episodeNames, input.rules);
+      overrides[video.path] ?? overrides[base] ?? episodeCodeFromPath(video.path, input.seasons, input.episodeNames, input.rules).code;
     if (parsedCode) {
       // 年守卫(issue #21 同族):文件自带日期与该集播出日明显矛盾 → 不采信,
       // 按解析失败处理(宁可少认不乱认;映射表给出的 code 同样过守卫)。

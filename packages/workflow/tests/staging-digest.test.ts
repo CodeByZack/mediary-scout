@@ -408,4 +408,55 @@ describe("digestTitle — 活动页标题计数化(issue #29 用户拍板)", () 
     expect(digestTitle(d)).toContain("1 个文件看不出集数");
   });
 });
+
+describe("digestStaging — issue #53 多季路径归季", () => {
+  it("B1: 多季包 + 路径归季 → 全量覆盖", () => {
+    const d = digestStaging({
+      files: [
+        video("Show/Season 1/01.mkv", 1_000_000_000, "v1"),
+        video("Show/Season 1/02.mkv", 1_000_000_000, "v2"),
+        video("Show/Season 2/01.mkv", 1_000_000_000, "v3"),
+      ],
+      seasons: [1, 2],
+      needCodes: ["S01E01", "S01E02", "S02E01"],
+    });
+    expect(d.passes).toBe(true);
+    expect(d.episodeCodes).toEqual(["S01E01", "S01E02", "S02E01"]);
+    expect(d.coveredCodes).toEqual(["S01E01", "S01E02", "S02E01"]);
+    expect(d.missingCodes).toEqual([]);
+    expect(d.unparsedVideos).toEqual([]);
+  });
+
+  it("B2: 多季包 + 路径无季号 + AI overrides → 全量覆盖", () => {
+    const d = digestStaging({
+      files: [
+        video("Show/早期/01.mkv", 1_000_000_000, "v1"),
+        video("Show/后期/01.mkv", 1_000_000_000, "v2"),
+      ],
+      seasons: [1, 2],
+      needCodes: ["S01E01", "S02E01"],
+      overrides: {
+        "Show/早期/01.mkv": "S01E01",
+        "Show/后期/01.mkv": "S02E01",
+      },
+    });
+    expect(d.passes).toBe(true);
+    expect(d.episodeCodes).toEqual(["S01E01", "S02E01"]);
+    expect(d.coveredCodes).toEqual(["S01E01", "S02E01"]);
+    expect(d.missingCodes).toEqual([]);
+  });
+
+  it("B3: 单季包 → 行为不变(零回归)", () => {
+    const d = digestStaging({
+      files: [
+        video("Show/01.mkv", 1_000_000_000, "v1"),
+        video("Show/02.mkv", 1_000_000_000, "v2"),
+      ],
+      seasons: [3],
+      needCodes: ["S03E01", "S03E02"],
+    });
+    expect(d.passes).toBe(true);
+    expect(d.episodeCodes).toEqual(["S03E01", "S03E02"]);
+  });
+});
 });

@@ -1,4 +1,4 @@
-import { canonicalEpisodeFileName, episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../episode-code.js";
+import { canonicalEpisodeFileName, episodeCodeFromFileName, episodeCodeFromPath, episodeDateConflict, type EpisodeParseRules } from "../episode-code.js";
 import { TaskSandbox } from "./sandbox.js";
 import type { SimTreeFile } from "./storage-115-simulator.js";
 import type { MovieStagingDigest, StagingDigest } from "./staging-digest.js";
@@ -117,7 +117,8 @@ export function buildSeasonMoves(
   for (const video of digest.videos) {
     if (junkNames.has(basenameOf(video.path))) continue;
     const base = basenameOf(video.path);
-    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons, undefined, rules);
+    // issue #53:多季用 episodeCodeFromPath(含路径归季);overrides 先查完整路径(多季 key)再查 basename(单季 key)。
+    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, undefined, rules).code;
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
@@ -131,7 +132,8 @@ export function buildSeasonMoves(
   for (const subtitle of digest.subtitles) {
     if (junkNames.has(basenameOf(subtitle.path))) continue;
     const base = basenameOf(subtitle.path);
-    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons, undefined, rules);
+    // issue #53:字幕与视频同款路径解析。
+    const code = overridesTable[subtitle.path] ?? overridesTable[base] ?? episodeCodeFromPath(subtitle.path, seasons, undefined, rules).code;
     if (code) {
       const season = seasonFromEpisodeCode(code);
       if (
@@ -174,7 +176,8 @@ export async function finalizeLanding(
   for (const video of digest.videos) {
     const base = basenameOf(video.path);
     if (junkNames.has(base)) continue;
-    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons, undefined, rules);
+    // issue #53:多季用 episodeCodeFromPath(含路径归季);overrides 先查完整路径再查 basename。
+    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, undefined, rules).code;
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;

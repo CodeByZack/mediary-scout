@@ -50,7 +50,7 @@ const VARIETY_DERIVATIVE_MARKER =
  * 年份限 2000–2099,月日做值域校验;`(?<!\d)` 边界保证分辨率/CRC 数字不被当日期。
  */
 export function explicitFileDate(name: string): string | null {
-  const separated = /(?:^|[^0-9])(20\d{2})\s*[.\-\/年]\s*(\d{1,2})\s*[.\-\/月]\s*(\d{1,2})\s*日?(?![0-9])/.exec(name);
+  const separated = /(?:^|[^0-9])(20\d{2})\s*[.\-/年]\s*(\d{1,2})\s*[.\-/月]\s*(\d{1,2})\s*日?(?![0-9])/.exec(name);
   if (separated?.[1] && separated[2] && separated[3]) {
     const month = Number(separated[2]);
     const day = Number(separated[3]);
@@ -209,20 +209,24 @@ export function episodeCodeFromFileName(
   // 仍禁用无季规则 —— 季不明 → 交仲裁,绝不瞎猜。
   const singleSeason = seasons === undefined || seasons.length === 1;
   const seasonLabel = seasons !== undefined && seasons.length === 1 ? String(seasons[0]).padStart(2, "0") : "01";
+
+  // 2. `1×01` / `1x01`(Plex 兼容:季×集)— 自带季号,任意上下文可用(issue #53)。
+  //    此前误置于 singleSeason 块内被多季禁用,现挪出。
+  //    正则要求季号前为非字母数字(^|[^A-Za-z0-9]),`1080x576` 中 `80x` 前是 `0`(字母数字)
+  //    → 不匹配,分辨率不会误判为季×集。集号经 isPlausibleEpisodeNumber 排除 1080/2160/4320/720。
+  const crossMatch = (rules?.cross ?? /(?:^|[^A-Za-z0-9])(\d{1,2})\s*[x×]\s*(\d{1,4})(?:$|[^0-9])/).exec(name);
+  if (crossMatch?.[1] && crossMatch[2] && isPlausibleEpisodeNumber(Number(crossMatch[2]))) {
+    const s = numPart(crossMatch[1]);
+    const e = numPart(crossMatch[2]);
+    if (s !== null && e !== null) return `S${s}E${e}`;
+  }
+
   if (singleSeason) {
-    // 2. `E01` / `EP01` / `Ep.01` — 无季信息 → 目标季(如 S03E01,单季任务可信)。
+    // 3. `E01` / `EP01` / `Ep.01` — 无季信息 → 目标季(如 S03E01,单季任务可信)。
     const epOnlyMatch = (rules?.epOnly ?? /(?:^|[^A-Za-z0-9])[Ee][Pp]?\.?\s*(\d{1,4})(?:$|[^0-9])/).exec(name);
     if (epOnlyMatch?.[1] && isPlausibleEpisodeNumber(Number(epOnlyMatch[1]))) {
       const e = numPart(epOnlyMatch[1]);
       if (e !== null) return `S${seasonLabel}E${e}`;
-    }
-
-    // 3. `1×01` / `1x01`(Plex 兼容:季×集)。
-    const crossMatch = (rules?.cross ?? /(?:^|[^A-Za-z0-9])(\d{1,2})\s*[x×]\s*(\d{1,4})(?:$|[^0-9])/).exec(name);
-    if (crossMatch?.[1] && crossMatch[2] && isPlausibleEpisodeNumber(Number(crossMatch[2]))) {
-      const s = numPart(crossMatch[1]);
-      const e = numPart(crossMatch[2]);
-      if (s !== null && e !== null) return `S${s}E${e}`;
     }
 
     // 4. `第N集` / `第N话` / `第N期`(动漫「集/话」,国产综艺「期」;容忍空格;日文汉字「話」一并支持)。
@@ -364,4 +368,113 @@ export function cleanTitleForCanonicalName(title: string): string {
     .replace(/[\\/:*?"<>|]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// issue #53: 全路径归季 — 多季包文件夹含季信息(Season 1 / 第1季 / S01 等),
+// 文件名无 SxxExx 时从路径 segment 归季,再在单季上下文解析 basename。
+// 单季场景不走路径扫描(零回归)。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 中文数字 → 阿拉伯数字(一~二十,覆盖常见季号范围)。 */
+const CN_NUMERAL_MAP: Record<string, number> = {
+  一: 1, 二: 2, 三: 3, 四: 4, 五: 5,
+  六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
+  十一: 11, 十二: 12, 十三: 13, 十四: 14, 十五: 15,
+  十六: 16, 十七: 17, 十八: 18, 十九: 19, 二十: 20,
+};
+
+function cnToNumber(s: string): number | null {
+  const mapped = CN_NUMERAL_MAP[s];
+  if (mapped !== undefined) return mapped;
+  const n = Number(s);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** 分辨率/年份黑名单(路径 segment 归季排除用)。 */
+const PATH_SEASON_EXCLUDE = new Set([1080, 2160, 4320, 720]);
+
+/**
+ * 扫描路径的目录 segment(不含文件名),提取季号。
+ * 匹配模式(按优先级):
+ *   1. Season N / S0N / S N / SN (case-insensitive)
+ *   2. 第N季 / N季 / N 季 / 第N季 (中文/阿拉伯数字)
+ *   3. 纯数字 segment(仅在 seasonNumbers 中包含时采信,避免年份/分辨率误判)
+ * 排除:年份 1900–2099、分辨率 1080/2160/4320/720。
+ * 首个命中即返回;无命中返回 null。
+ */
+export function seasonFromPathSegments(path: string, seasonNumbers: number[]): number | null {
+  const set = new Set(seasonNumbers);
+  const segments = path.split("/");
+  // 跳过最后一个 segment(文件名),只扫目录 segment。
+  for (let i = 0; i < segments.length - 1; i++) {
+    const seg = segments[i];
+    if (!seg) continue;
+    const trimmed = seg.trim();
+    if (!trimmed) continue;
+
+    // 1. Season N / S0N / S N / SN
+    const latin = /\b(?:Season|S)\s*(\d{1,3})\b/i.exec(trimmed);
+    if (latin?.[1]) {
+      const n = Number(latin[1]);
+      if (n >= 1 && n <= 999 && set.has(n)) return n;
+    }
+
+    // 2. 第N季 / N季 / N 季 / 第N季(含中文数字)
+    const chinese = /第?\s*([\d一二三四五六七八九十]{1,3})\s*季/.exec(trimmed);
+    if (chinese?.[1]) {
+      const n = cnToNumber(chinese[1]);
+      if (n !== null && n >= 1 && n <= 999 && set.has(n)) return n;
+    }
+
+    // 3. 纯数字 segment(仅当在 seasonNumbers 中,排除年份/分辨率)
+    if (/^\d{1,3}$/.test(trimmed)) {
+      const n = Number(trimmed);
+      if (
+        n >= 1 && n <= 999 &&
+        set.has(n) &&
+        !PATH_SEASON_EXCLUDE.has(n) &&
+        !(n >= 1900 && n <= 2099)
+      ) {
+        return n;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 从完整路径解析集数编码(issue #53)。
+ *
+ * 优先顺序:
+ *   1. basename 自带 SxxExx/cross 等自带季信息 → 直接用(最具体,任何场景)。
+ *   2. ★ 多季(seasons.length>1):路径 segment 含季号 → 用该季作单季上下文解析 basename。
+ *   3. 都归不出 → null(调用方交 AI 映射)。
+ *
+ * 单季场景:直接退化为 episodeCodeFromFileName(basename, seasons),不走路径扫描。
+ * 这保证单季流程逐字节不变(如 `Show/Season 1/01.mkv` 在 S03 任务下仍解析为 S03E01,
+ * 而非被路径的 Season 1 覆盖)。
+ */
+export function episodeCodeFromPath(
+  path: string,
+  seasons: number[],
+  episodeNames?: Record<string, string>,
+  rules?: EpisodeParseRules | null,
+): { code: string | null; seasonSource: "basename" | "path" | null } {
+  const basename = path.split("/").pop() ?? path;
+
+  // 1. basename 自带季信息(SxxExx/cross/SxxExx 变体)→ 直接用。
+  const directCode = episodeCodeFromFileName(basename, seasons, episodeNames, rules);
+  if (directCode) return { code: directCode, seasonSource: "basename" };
+
+  // 2. ★ 多季场景:扫描路径 segment 找季号,找到后以该季为单季上下文解析 basename。
+  if (seasons.length > 1) {
+    const folderSeason = seasonFromPathSegments(path, seasons);
+    if (folderSeason !== null) {
+      const code = episodeCodeFromFileName(basename, [folderSeason], episodeNames, rules);
+      if (code) return { code, seasonSource: "path" };
+    }
+  }
+
+  return { code: null, seasonSource: null };
 }
