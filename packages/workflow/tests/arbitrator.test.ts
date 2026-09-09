@@ -50,8 +50,9 @@ describe("arbitrateSelection", () => {
       summary: "[A] [c-42] 狂飙.S01E01.1080p.中字",
       title: "狂飙",
       seasons: [1],
+      maxPicks: 1,
     });
-    expect(result.candidateId).toBe("c-42");
+    expect(result.candidateIds[0] ?? null).toBe("c-42");
   });
 
   it("tells the model to copy candidateId from the [id] bracket (and the summary carries it)", async () => {
@@ -61,8 +62,9 @@ describe("arbitrateSelection", () => {
       summary: "[A] [c-42] 狂飙.S01E01.1080p.中字 — 标题命中 + 中字 OK",
       title: "狂飙",
       seasons: [1],
+      maxPicks: 1,
     });
-    expect(result.candidateId).toBe("c-42");
+    expect(result.candidateIds[0] ?? null).toBe("c-42");
 
     // The model only receives what we feed it — verify the prompt instructs
     // copying the bracketed id verbatim AND that the summary line carries the id
@@ -86,8 +88,9 @@ describe("arbitrateSelection", () => {
       summary: "[C] 狂飙 电影版",
       title: "狂飙",
       seasons: [1],
+      maxPicks: 1,
     });
-    expect(result.candidateId).toBeNull();
+    expect(result.candidateIds[0] ?? null).toBeNull();
   });
 
   it("degrades to a safe decline on unparseable output", async () => {
@@ -96,8 +99,9 @@ describe("arbitrateSelection", () => {
       summary: "[B] 狂飙",
       title: "狂飙",
       seasons: [1],
+      maxPicks: 1,
     });
-    expect(result.candidateId).toBeNull();
+    expect(result.candidateIds[0] ?? null).toBeNull();
   });
 });
 
@@ -110,7 +114,7 @@ describe("arbitrateMovieSelection", () => {
       title: "流浪地球",
       year: 2019,
     });
-    expect(result.candidateId).toBe("c-9");
+    expect(result.candidateIds[0] ?? null).toBe("c-9");
   });
 
   it("tells the model to copy candidateId from the [id] bracket (movie twin)", async () => {
@@ -121,7 +125,7 @@ describe("arbitrateMovieSelection", () => {
       title: "流浪地球",
       year: 2019,
     });
-    expect(result.candidateId).toBe("c-9");
+    expect(result.candidateIds[0] ?? null).toBe("c-9");
 
     const prompt = model.doGenerateCalls[0]!.prompt;
     const system = prompt.find((m) => m.role === "system")?.content ?? "";
@@ -143,7 +147,7 @@ describe("arbitrateMovieSelection", () => {
       title: "流浪地球",
       year: 2019,
     });
-    expect(result.candidateId).toBeNull();
+    expect(result.candidateIds[0] ?? null).toBeNull();
   });
 
   it("degrades to a safe decline on unparseable output", async () => {
@@ -153,7 +157,7 @@ describe("arbitrateMovieSelection", () => {
       title: "流浪地球",
       year: 2019,
     });
-    expect(result.candidateId).toBeNull();
+    expect(result.candidateIds[0] ?? null).toBeNull();
   });
 });
 
