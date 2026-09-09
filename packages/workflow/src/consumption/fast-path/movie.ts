@@ -292,7 +292,7 @@ async function runMovieCandidatePhase(
       year: target.year,
       ...(ctx.promptOverrides !== undefined ? { promptOverrides: ctx.promptOverrides } : {}),
     });
-    current = arbitration.candidateId;
+    current = arbitration.candidateIds[0] ?? null;
     if (current === null) {
       const declineDetail = `放弃:${arbitration.reasoning || "没有合适的资源"}`;
       stepLog(sandbox, target.title, "仲裁", declineDetail, "warn");

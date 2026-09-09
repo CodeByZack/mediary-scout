@@ -27,12 +27,12 @@ const SELECTION_BODY = [
   "- 优先选 A 级；A 级相当时，选标题最干净、最像正确季全集的那个。",
   "- 中文字幕优先（中文 release 名默认带中字；纯英文 scene release 大概率生肉）。",
   "- 排除同名异作（电影版/剧场版/真人版/OVA/SP）。",
-  "- 若没有可用的候选，返回 candidateId 为 null。",
-  "- 候选行里方括号 [id] 是候选的唯一真实 id：candidateId 必须从某个候选行的 [id] 里原样复制，禁止填标题、禁止自己编造。",
+  "- 若没有可用的候选，返回 candidateIds 为空数组 []。",
+  "- 候选行里方括号 [id] 是候选的唯一真实 id：candidateIds 中的每个 id 必须从某个候选行的 [id] 里原样复制，禁止填标题、禁止自己编造。",
 ].join("\n");
 const SELECTION_TAIL = [
   "只输出 JSON，不要任何其他文字：",
-  '{"candidateId": "候选的id" | null, "reasoning": "一句话理由"}',
+  '{"candidateIds": ["候选id1", "候选id2", ...], "reasoning": "一句话理由"}',
 ].join("\n");
 
 const MOVIE_SELECTION_HEAD = "你是电影资源选片仲裁员。代码已把搜索候选按规则分级（A>B>C>D），但没有唯一高分，需要你从候选中选出最可能是目标电影的那个资源。";
@@ -42,12 +42,12 @@ const MOVIE_SELECTION_BODY = [
   "- A 级相当时，选标题最干净、最像正确影片（发行名带目标年份）的那个。",
   "- 排除同名异作 / remake（发行年份对不上）与其他作品（OVA/特别篇/番外）。",
   "- 发行名没带年份的候选可用但不可靠，优先带年份的。",
-  "- 若没有可用的候选，返回 candidateId 为 null。",
-  "- 候选行里方括号 [id] 是候选的唯一真实 id：candidateId 必须从某个候选行的 [id] 里原样复制，禁止填标题、禁止自己编造。",
+  "- 若没有可用的候选，返回 candidateIds 为空数组 []。",
+  "- 候选行里方括号 [id] 是候选的唯一真实 id：candidateIds 中的每个 id 必须从某个候选行的 [id] 里原样复制，禁止填标题、禁止自己编造。",
 ].join("\n");
 const MOVIE_SELECTION_TAIL = [
   "只输出 JSON，不要任何其他文字：",
-  '{"candidateId": "候选的id" | null, "reasoning": "一句话理由"}',
+  '{"candidateIds": ["候选的id"], "reasoning": "一句话理由"}',
 ].join("\n");
 
 const MOVIE_DIAGNOSIS_HEAD = "你是电影落盘诊断员。代码转存了一个候选并解析了落盘内容，但判定为「不是单部正片」或「脏包」，需要你决定怎么处理。";

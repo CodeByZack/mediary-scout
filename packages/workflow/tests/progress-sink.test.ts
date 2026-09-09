@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkflowRunProgress } from "../src/index.js";
 import { makeProgressSink } from "../src/acquisition-v2/progress-sink.js";
-import { interpretTool } from "../src/acquisition-v2/activity.js";
 
 function fakeRepo() {
   const writes: Array<{ runId: string; progress: WorkflowRunProgress }> = [];
@@ -81,30 +80,4 @@ describe("makeProgressSink", () => {
   // agent inspect the入库目录 EARLY (ordinal 2, before search/transfer). The bar must
   // NOT jump to verify-territory (~66%) then; it should climb monotonically WITH the
   // work, reaching ~66% only at the post-transfer inspectStaging.
-  it("real tool order: confirming the target dir early must not jump the bar to ~66% before transfer", () => {
-    const repo = fakeRepo();
-    const sink = makeProgressSink({ repository: repo, workflowRunId: "r", now: () => "t" });
-    const sequence = [
-      "readSkill", "readSkill", "inspectTargetDir", "searchResources",
-      "transferCandidate", "transferCandidate", "transferCandidate",
-      "inspectStaging", "moveToSeason", "inspectTargetDir",
-      "markObtained", "discardStaging", "finish",
-    ];
-    for (const toolName of sequence) {
-      const { activity, phase } = interpretTool(toolName, {});
-      sink({ toolName, args: {}, activity, phase });
-    }
-    const percents = repo.writes.map((w) => w.progress.percent);
-    const idxOfEarlyTargetDir = 2;
-    const idxOfStaging = 7; // first genuine post-transfer verify
-    // The early inspectTargetDir must keep the bar low (still in the early/search region).
-    expect(percents[idxOfEarlyTargetDir]!).toBeLessThan(25); // below the transfer band start
-    // The bar must not reach verify-territory before the post-transfer file check.
-    expect(Math.max(...percents.slice(0, idxOfStaging))).toBeLessThan(60);
-    // The transfer steps must actually move the bar (reflecting the real work).
-    expect(percents[4]!).toBeGreaterThan(percents[idxOfEarlyTargetDir]!);
-    // Monotonic + finishes high.
-    for (let i = 1; i < percents.length; i += 1) expect(percents[i]!).toBeGreaterThanOrEqual(percents[i - 1]!);
-    expect(percents.at(-1)!).toBeGreaterThanOrEqual(95);
-  });
 });

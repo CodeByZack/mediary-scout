@@ -103,6 +103,7 @@ export class RealStorageV2 implements StorageV2 {
   async transferCandidate(input: {
     candidateId: string;
     intoDirectoryId: string;
+    skipDeadLinkRecording?: boolean;
   }): Promise<TransferAttemptResult> {
     const candidate = this.registry.get(input.candidateId);
     if (!candidate) {
@@ -116,7 +117,9 @@ export class RealStorageV2 implements StorageV2 {
       candidate,
     });
     this.recordedAttempts.push(attempt);
-    await this.maybeRecordDeadLink(candidate.providerPayload?.["url"], attempt);
+    if (!input.skipDeadLinkRecording) {
+      await this.maybeRecordDeadLink(candidate.providerPayload?.["url"], attempt);
+    }
     // Only a real materialization counts as success; no_target_change (115 has no
     // cached copy) is a miss the agent must recover from, surfaced as failed +
     // an empty reread. Layer-1: surface providerMessage so the agent sees WHY.

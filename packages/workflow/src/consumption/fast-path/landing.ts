@@ -363,11 +363,10 @@ export async function aliasesFallbackReSearch(input: {
 
 /**
  * TV 落地收口状态机（design §5 LandingVerdict）：一个候选的落地回合内，
- * digest → 集数映射(§2.2,仅单季)→ finalize 或清暂存换候选，收敛为六种判定：
+ * digest → 集数映射(§2.2,仅单季)→ finalize 或清暂存换候选，收敛为五种判定：
  *   systemic(系统阻塞) / dead(死链探测) / clean(干净落地) / mapped_clean(映射通过)
  *   / retry_other(未全量对齐,换候选续跑) / abandon(诚实终止)。
  * TV 没有落盘诊断仲裁:未覆盖即清暂存换下一个候选,候选/预算耗尽才 reportNoCoverage。
- * 类型里遗留的 "accept" 已无生产产出方(旧诊断仲裁路径删除后未清,仅类型定义仍在)。
  * done 非空 = 本轮终局（调用方直接 return）；done=null 用 next 继续循环。
  * escalated/deadRetries 随判定带出，循环侧统一回收 —— 预算语义原样
  * （死链不占转存预算：dead 分支不触 attempted.add）。
@@ -377,7 +376,6 @@ export type LandingVerdict =
   | "dead"
   | "clean"
   | "mapped_clean"
-  | "accept"
   | "retry_other"
   | "abandon";
 
@@ -389,6 +387,9 @@ export interface TvCloseOut {
   next: string | null;
   escalated: boolean;
   deadRetries: number;
+  /** retry_other only: 该候选覆盖的 need 集码 + AI 映射覆盖表（尾部兜底用）。 */
+  coveredCodes?: string[];
+  overrides?: Record<string, string>;
 }
 
 export async function closeOutTvLanding(options: {
@@ -744,6 +745,10 @@ export async function closeOutTvLanding(options: {
       covered: compactCodeList(landingDigest.coveredCodes),
       missing: compactCodeList(landingDigest.missingCodes),
     });
-    return { verdict: "retry_other", done: null, next, escalated, deadRetries };
+    return {
+      verdict: "retry_other", done: null, next, escalated, deadRetries,
+      coveredCodes: landingDigest.coveredCodes,
+      ...(mappingTable ? { overrides: mappingTable } : {}),
+    };
 
 }

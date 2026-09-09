@@ -474,7 +474,7 @@ export class TaskSandbox {
    *  staging and return the TRUE contents. The candidate must come from a
    *  snapshot observed in THIS task (no stale/raw ids) — the agent can never
    *  transfer-and-run; the real landing is handed back for it to judge. */
-  async transferCandidate(input: { snapshotId: string; candidateId: string }): Promise<TransferToolResult> {
+  async transferCandidate(input: { snapshotId: string; candidateId: string; skipDeadLinkRecording?: boolean }): Promise<TransferToolResult> {
     if (!this.storage || !this.stagingDirectoryId) {
       throw new Error("SANDBOX: no storage/staging handle configured for transfers");
     }
@@ -493,6 +493,7 @@ export class TaskSandbox {
     const attempt = await this.storage.transferCandidate({
       candidateId: input.candidateId,
       intoDirectoryId: this.stagingDirectoryId,
+      ...(input.skipDeadLinkRecording ? { skipDeadLinkRecording: true } : {}),
     });
     const staging = await this.storage.listTree({ directoryId: this.stagingDirectoryId });
     // A systemic block ONLY when nothing actually landed — a provider can mark an

@@ -167,34 +167,6 @@ export interface AgentStep {
   at: string;
 }
 
-export type CandidateDispositionKind = "selected" | "rejected" | "uncertain";
-
-export interface CandidateDisposition {
-  candidateId: string;
-  disposition: CandidateDispositionKind;
-  /** Episode codes this candidate covers; required non-empty for "selected". */
-  episodes: string[];
-  reason: string;
-}
-
-export interface AcquisitionPlan {
-  node: string;
-  /** Snapshot id observed in this planning run, or null when nothing covers the need. */
-  selectedSnapshotId: string | null;
-  searchedKeywords: string[];
-  candidateDispositions: CandidateDisposition[];
-  confidence: Confidence;
-  reason: string;
-}
-
-export interface AcquisitionFailureEvidence {
-  candidateId: string;
-  candidateTitle: string;
-  transferStatus: TransferStatus;
-  providerMessage: string;
-  episodesStillMissing: string[];
-}
-
 export interface TransferAttempt {
   id: string;
   workflowRunId: string;

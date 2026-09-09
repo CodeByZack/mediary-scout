@@ -6,7 +6,7 @@ import { Storage115Simulator } from "../src/acquisition-v2/storage-115-simulator
 import { runMovieFastPathAcquisition } from "../src/consumption/fast-path/movie.js";
 import { makeAgentTraceSink } from "../src/acquisition-v2/agent-trace-sink.js";
 import { InMemoryWorkflowRepository } from "../src/index.js";
-import type { MovieTarget } from "../src/acquisition-v2/task-agents.js";
+import type { MovieTarget } from "../src/acquisition-v2/target-types.js";
 import type { MediaTitle, ResourceSnapshot } from "../src/domain.js";
 import { FakeStorageExecutor } from "../src/fakes.js";
 import { runMovieAcquisitionV2 } from "../src/movie-workflow-v2.js";

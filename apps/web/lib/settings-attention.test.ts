@@ -141,7 +141,7 @@ describe("buildSettingsAttentionItems", () => {
     expect(container[0]?.prompt).toContain("aaaaaaa");
     expect(container[0]?.prompt).toContain(ORIGIN);
 
-    for (const kind of ["desktop", "web"] as const) {
+    for (const kind of ["web", "unknown"] as const) {
       const items = buildSettingsAttentionItems({
         demo: false,
         isOwner: true,

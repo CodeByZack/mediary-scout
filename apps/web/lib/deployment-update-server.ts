@@ -4,7 +4,6 @@ import {
   normalizeCommit,
   type RemoteCommitFetcher,
 } from "./deployment-update";
-import { resolveIsDesktop } from "./workflow-runtime";
 import { isDemoMode } from "./demo-mode";
 
 const DEFAULT_MAIN_COMMITS_URL =
@@ -66,7 +65,6 @@ export async function loadDeploymentUpdateState(
 ) {
   return getDeploymentUpdateState({
     demo: isDemoMode(),
-    desktop: resolveIsDesktop(),
     currentCommit: await readBuildCommit(),
     fetchLatest,
   });

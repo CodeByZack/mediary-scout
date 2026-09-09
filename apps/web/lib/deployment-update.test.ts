@@ -29,7 +29,6 @@ describe("getDeploymentUpdateState", () => {
   it("marks containers behind when main commit differs", async () => {
     const state = await getDeploymentUpdateState({
       demo: false,
-      desktop: false,
       currentCommit: CURRENT,
       fetchLatest: async () => LATEST,
     });
@@ -45,7 +44,7 @@ describe("getDeploymentUpdateState", () => {
   it("is up to date when commits match", async () => {
     const state = await getDeploymentUpdateState({
       demo: false,
-      desktop: false,
+      
       currentCommit: CURRENT,
       fetchLatest: async () => CURRENT,
     });
@@ -55,7 +54,6 @@ describe("getDeploymentUpdateState", () => {
   it("never asks the demo web deploy to update", async () => {
     const state = await getDeploymentUpdateState({
       demo: true,
-      desktop: false,
       currentCommit: CURRENT,
       fetchLatest: async () => LATEST,
     });
@@ -64,22 +62,11 @@ describe("getDeploymentUpdateState", () => {
     expect(state.behind).toBeNull();
   });
 
-  it("keeps desktop out of the container-upgrade path", async () => {
-    const state = await getDeploymentUpdateState({
-      demo: false,
-      desktop: true,
-      currentCommit: CURRENT,
-      fetchLatest: async () => LATEST,
-    });
-    expect(state.kind).toBe("desktop");
-    expect(state.reason).toBe("desktop");
-  });
-
   it("fails quiet when the remote probe throws or returns garbage", async () => {
     for (const fetchLatest of [async () => { throw new Error("offline"); }, async () => "junk"]) {
       const state = await getDeploymentUpdateState({
         demo: false,
-        desktop: false,
+        
         currentCommit: CURRENT,
         fetchLatest,
       });
@@ -91,7 +78,7 @@ describe("getDeploymentUpdateState", () => {
   it("fails quiet when BUILD_COMMIT was not stamped", async () => {
     const state = await getDeploymentUpdateState({
       demo: false,
-      desktop: false,
+      
       currentCommit: "unknown",
       fetchLatest: async () => LATEST,
     });

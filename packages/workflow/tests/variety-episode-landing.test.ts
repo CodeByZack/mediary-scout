@@ -18,7 +18,7 @@ import {
   explicitFileDate,
 } from "../src/index.js";
 import { syncSeasonAgainstMetadata } from "../src/season-sync.js";
-import type { TvAnimeTarget } from "../src/acquisition-v2/task-agents.js";
+import type { TvAnimeTarget } from "../src/acquisition-v2/target-types.js";
 
 /**
  * 2026-08-30 中餐厅 S10E11 巡检事故的四合一验收:

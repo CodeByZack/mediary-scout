@@ -63,7 +63,7 @@ const SUBTITLE_EXTENSIONS = /\.(srt|ass|ssa|sub|idx|vtt|sup|smi)$/i;
  *  executor both satisfy it. */
 export interface StorageV2 {
   createDirectory(input: { name: string; parentId: string }): Promise<string>;
-  transferCandidate(input: { candidateId: string; intoDirectoryId: string }): Promise<TransferAttemptResult>;
+  transferCandidate(input: { candidateId: string; intoDirectoryId: string; skipDeadLinkRecording?: boolean }): Promise<TransferAttemptResult>;
   /** A candidate's link kind. Every 转存分享 brand (115/夸克/天翼/123) fails LOUD
    *  on a dead link (链接已过期/分享已取消/分享不存在 come back immediately); a
    *  magnet's success is only knowable by the landing point appearing. So
@@ -159,6 +159,7 @@ export class Storage115Simulator implements StorageV2 {
   async transferCandidate(input: {
     candidateId: string;
     intoDirectoryId: string;
+    skipDeadLinkRecording?: boolean;
   }): Promise<TransferAttemptResult> {
     if (!this.dirs.has(input.intoDirectoryId)) {
       throw new Error(`SIM_DIR_NOT_FOUND: target ${input.intoDirectoryId}`);
