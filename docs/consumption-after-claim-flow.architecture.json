@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "认领成功后 · 消费任务流水线全程（fast path）",
+    "quality_profile": "showcase",
+    "viewBox": [1680, 792],
+    "repository": {
+      "url": "https://github.com/CodeByZack/mediary-scout",
+      "revision": "1b0700a4ccb3b807253b62bff035d122c6b175cd"
+    },
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "backend": { "label": "步骤节点(代码驱动)" },
+        "frontend": { "label": "早退/结束出口" },
+        "database": { "label": "SQLite 落库" },
+        "cloud": { "label": "字幕预热(assrt)" },
+        "security": { "label": "闸门 / 异常收口" },
+        "messagebus": { "label": "预搜快照" },
+        "external": { "label": "外部入口(巡检/队列)" }
+      }
+    }
+  },
+  "components": [
+    { "id": "enqueue", "type": "backend", "label": "workflow_runs 队列", "sublabel": "Web UI 获取入队 · SQLite", "pos": [60, 36], "size": [186, 46] },
+    { "id": "claim", "type": "backend", "label": "原子认领", "sublabel": "claimNextQueuedWorkflowRun · 防双认领", "tag": "事务内原子认领", "pos": [296, 36], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/worker.ts", "line": 375, "label": "runNextQueuedConsumption" }, { "path": "packages/workflow/src/worker.ts", "line": 716, "label": "claimNextQueuedWorkflowRun" }] },
+    { "id": "deps", "type": "backend", "label": "账号依赖解析", "sublabel": "resolveWorkerDeps · 115凭据/落地CID", "pos": [532, 36], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/worker.ts", "line": 69, "label": "resolveWorkerDeps" }] },
+    { "id": "ctx", "type": "backend", "label": "构建消费上下文", "sublabel": "buildConsumptionContext · 依赖一次装配", "pos": [768, 36], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/consumption/context.ts", "line": 103, "label": "buildConsumptionContext" }] },
+    { "id": "patrol", "type": "external", "label": "type3 巡检", "sublabel": "不入队 · 直接 running", "tag": "逐季补缺", "pos": [1004, 36], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/consumption/pipeline.ts", "line": 251, "label": "type3_monitor 巡检直调" }] },
+    { "id": "requeue", "type": "security", "label": "队列侧失败处理", "sublabel": "handleWorkflowRunFailure", "tag": "瞬态退避重入队", "pos": [768, 100], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/worker.ts", "line": 198, "label": "handleWorkflowRunFailure" }] },
+    { "id": "patrol_fail", "type": "security", "label": "巡检侧失败处理", "sublabel": "不重试 · 直接 failed", "tag": "保留 episode 态", "pos": [1004, 100], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/worker.ts", "line": 717, "label": "巡检侧合成 claimed 快照" }] },
+
+    { "id": "rules", "type": "backend", "label": "加载生效规则", "sublabel": "episodeRules(非movie) + prompt 覆盖", "tag": "issue #44", "pos": [60, 218], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/ruleset.ts", "line": 304, "label": "loadEpisodeRules" }] },
+    { "id": "recipe", "type": "backend", "label": "策略装配", "sublabel": "run-tv-v2 · searchProfile → 关键词+画质", "pos": [296, 218], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/run-tv-v2.ts", "line": 64, "label": "runTvAcquisitionV2" }] },
+    { "id": "dirs", "type": "backend", "label": "① prepareDirectories", "sublabel": "verify-or-create Show/Season/staging", "tag": "父目录必填", "pos": [532, 218], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/consumption/stages/directories.ts", "line": 29, "label": "prepareDirectories" }] },
+    { "id": "cleanup", "type": "security", "label": "② withStagingCleanup", "sublabel": "成败必清暂存 · 文件泄漏兜底", "pos": [768, 218], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/consumption/stages/directories.ts", "line": 40, "label": "withStagingCleanupStage" }] },
+    { "id": "need", "type": "backend", "label": "③ computeNeed", "sublabel": "应有 − 实有(DB标记,不扫网盘)", "pos": [1004, 218], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/consumption/stages/need.ts", "line": 32, "label": "computeNeed" }] },
+    { "id": "noop", "type": "frontend", "label": "no-op 早退", "sublabel": "缺集为空 → 零搜索/转存/LLM", "tag": "仍走⑦落库", "pos": [1240, 218], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/workflow-v2.ts", "line": 56, "label": "missing 空 → no-op" }] },
+
+    { "id": "sandbox", "type": "backend", "label": "装配 TaskSandbox", "sublabel": "CandidateRegistry + 双适配器", "tag": "need/作用域", "pos": [60, 298], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/orchestrator.ts", "line": 98, "label": "runAcquisitionV2" }] },
+    { "id": "prewarm", "type": "messagebus", "label": "预搜(裸标题)", "sublabel": "primeRawSnapshot · 失败仅软降级", "pos": [296, 298], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/sandbox.ts", "line": 893, "label": "primeRawSnapshot" }] },
+    { "id": "subwarm", "type": "cloud", "label": "字幕预热(软)", "sublabel": "assrt 三闸门 · 非CN+能力探测", "pos": [532, 298], "size": [186, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/sandbox.ts", "line": 964, "label": "primeSubtitleSnapshot" }] },
+
+    { "id": "tv_landing", "type": "backend", "label": "0 落点检查", "sublabel": "在库→markObtained · need 过滤", "tag": "年守卫", "pos": [60, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/tv.ts", "line": 253, "label": "runFastPathAcquisition" }] },
+    { "id": "tv_grade", "type": "backend", "label": "1 预搜+评分", "sublabel": "A/B/C/D 纯代码 · 链接透出", "pos": [188, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/candidate-grader.ts", "line": 351, "label": "gradeCandidates" }] },
+    { "id": "tv_pick", "type": "backend", "label": "2 选片", "sublabel": "唯一A 盲转 · 否则AI仲裁", "tag": "升级点①", "pos": [316, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/arbitrator.ts", "line": 145, "label": "arbitrateSelection" }] },
+    { "id": "tv_transfer", "type": "backend", "label": "3 转存暂存区", "sublabel": "transferCandidate · 死链不占预算", "pos": [444, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/tv.ts", "line": 95, "label": "runTvCandidatePhase" }] },
+    { "id": "tv_digest", "type": "backend", "label": "4 digest 判定", "sublabel": "代码解析+年守卫+第N期锚定", "pos": [572, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/staging-digest.ts", "line": 89, "label": "digestStaging" }] },
+    { "id": "tv_final", "type": "backend", "label": "5 finalize 落地", "sublabel": "改名→归位→markObtained", "tag": "零 LLM", "pos": [700, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/finalize-landing.ts", "line": 153, "label": "finalizeLanding" }] },
+    { "id": "tv_map", "type": "backend", "label": "AI 集数映射", "sublabel": "tryEpisodeMapping · 仅单季", "tag": "升级点②", "pos": [555, 484], "size": [150, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/landing.ts", "line": 52, "label": "tryEpisodeMapping" }] },
+
+    { "id": "mv_landing", "type": "backend", "label": "0 落点检查", "sublabel": "目录有影片 → 直接 mark", "tag": "绝不重转", "pos": [860, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/movie.ts", "line": 612, "label": "runMovieFastPathAcquisition" }] },
+    { "id": "mv_grade", "type": "backend", "label": "1 预搜+评分", "sublabel": "身份=标题+年份 · 纯代码", "pos": [988, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/candidate-grader.ts", "line": 351, "label": "gradeCandidates" }] },
+    { "id": "mv_pick", "type": "backend", "label": "2 选片", "sublabel": "唯一A 盲转 · 否则AI选片", "pos": [1116, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/arbitrator.ts", "line": 204, "label": "arbitrateMovieSelection" }] },
+    { "id": "mv_transfer", "type": "backend", "label": "3 转存暂存区", "sublabel": "transferCandidate · 死链不占预算", "pos": [1244, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/movie.ts", "line": 261, "label": "runMovieCandidatePhase" }] },
+    { "id": "mv_digest", "type": "backend", "label": "4 movie digest", "sublabel": "一部正片?/多视频占优?/脏包", "pos": [1372, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/staging-digest.ts", "line": 264, "label": "digestMovieStaging" }] },
+    { "id": "mv_final", "type": "backend", "label": "5 flatten+mark", "sublabel": "finalizeMovieLanding · 字幕软目标", "pos": [1500, 412], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/finalize-landing.ts", "line": 311, "label": "finalizeMovieLanding" }] },
+    { "id": "mv_diag", "type": "backend", "label": "AI 诊断仲裁", "sublabel": "arbitrateMovieDiagnosis", "tag": "升级点③", "pos": [1355, 484], "size": [150, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/arbitrator.ts", "line": 242, "label": "arbitrateMovieDiagnosis" }] },
+
+    { "id": "fb_research", "type": "backend", "label": "兜底重搜(TV)", "sublabel": "aliasesFallbackReSearch ≤3轮", "pos": [60, 556], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/landing.ts", "line": 258, "label": "aliasesFallbackReSearch" }] },
+    { "id": "fb_grade", "type": "backend", "label": "兜底评分", "sublabel": "唯一A 提前停 · 合并池", "pos": [188, 556], "size": [116, 46] },
+    { "id": "fb_pick", "type": "backend", "label": "选片(同款)", "sublabel": "唯一A 盲转 · 否则AI仲裁", "pos": [316, 556], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/arbitrator.ts", "line": 145, "label": "arbitrateSelection" }] },
+    { "id": "fb_loop", "type": "backend", "label": "转存→digest 循环", "sublabel": "独立预算 3 · 死链不占", "pos": [444, 556], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/budgets.ts", "line": 18, "label": "MAX_FALLBACK_TRANSFER_ATTEMPTS" }] },
+    { "id": "fb_final", "type": "backend", "label": "收尾 / 换候选", "sublabel": "finalize 或清空换候选", "pos": [572, 556], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/landing.ts", "line": 392, "label": "closeOutTvLanding" }] },
+    { "id": "tv_uncovered", "type": "security", "label": "诚实终止", "sublabel": "reportNoCoverage · 理由落审计", "tag": "下次巡检再来", "pos": [700, 556], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/landing.ts", "line": 392, "label": "closeOutTvLanding" }] },
+    { "id": "mv_fb_research", "type": "backend", "label": "兜底重搜(Movie)", "sublabel": "aliasesFallbackReSearch ≤3轮", "pos": [860, 556], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/landing.ts", "line": 258, "label": "aliasesFallbackReSearch" }] },
+    { "id": "mv_fb_grade", "type": "backend", "label": "兜底评分", "sublabel": "唯一A 提前停 · 合并池", "pos": [988, 556], "size": [116, 46] },
+    { "id": "mv_fb_pick", "type": "backend", "label": "选片(同款)", "sublabel": "唯一A 盲转 · 否则AI仲裁", "pos": [1116, 556], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/acquisition-v2/arbitrator.ts", "line": 204, "label": "arbitrateMovieSelection" }] },
+    { "id": "mv_fb_loop", "type": "backend", "label": "转存→digest 循环", "sublabel": "独立预算 3 · 死链不占", "pos": [1244, 556], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/budgets.ts", "line": 18, "label": "MAX_FALLBACK_TRANSFER_ATTEMPTS" }] },
+    { "id": "mv_fb_final", "type": "backend", "label": "收尾 / 换候选", "sublabel": "finalize 或清空换候选", "pos": [1372, 556], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/landing.ts", "line": 392, "label": "closeOutTvLanding" }] },
+    { "id": "mv_uncovered", "type": "security", "label": "诚实终止", "sublabel": "reportNoCoverage · 清残留", "pos": [1500, 556], "size": [116, 46], "sources": [{ "path": "packages/workflow/src/consumption/fast-path/movie.ts", "line": 83, "label": "clearMovieLanding" }] },
+
+    { "id": "reconcile", "type": "backend", "label": "⑤ reconcileNeed", "sublabel": "prior ∪ 本次标记 · 不重扫网盘", "pos": [60, 674], "size": [226, 46], "sources": [{ "path": "packages/workflow/src/consumption/stages/need.ts", "line": 48, "label": "reconcileNeed" }] },
+    { "id": "size", "type": "backend", "label": "⑥ readLandedSize", "sublabel": "真实体积 best-effort · 失败仅省略", "pos": [326, 674], "size": [226, 46], "sources": [{ "path": "packages/workflow/src/consumption/stages/directories.ts", "line": 58, "label": "readLandedSizeStage" }] },
+    { "id": "persist_tv", "type": "database", "label": "⑦ 落库(TV)", "sublabel": "persistSingleSeason / 整包逐季+锁run", "tag": "finishedAt 跑后盖章", "pos": [592, 674], "size": [226, 46], "sources": [{ "path": "packages/workflow/src/consumption/stages/persist.ts", "line": 65, "label": "persistSingleSeason" }, { "path": "packages/workflow/src/consumption/stages/persist.ts", "line": 102, "label": "persistSeriesSeasons" }] },
+    { "id": "persist_movie", "type": "database", "label": "⑦ 落库(Movie)", "sublabel": "persistMovieRun · 集状态引擎自带", "pos": [1445, 674], "size": [226, 46], "sources": [{ "path": "packages/workflow/src/consumption/stages/persist.ts", "line": 181, "label": "persistMovieRun" }] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "队列与认领(worker) · 异常收口", "wraps": ["enqueue", "claim", "deps", "ctx", "patrol", "requeue", "patrol_fail"] },
+    { "kind": "region", "label": "①–④ 装配与需求(不烧配额/token)", "wraps": ["rules", "recipe", "dirs", "cleanup", "need", "noop", "sandbox", "prewarm", "subwarm"] },
+    { "kind": "region", "label": "fast path 业务循环 · TV/Movie primary 池 + 兜底池(独立预算 3) + 诚实终止", "wraps": ["tv_landing", "tv_grade", "tv_pick", "tv_transfer", "tv_digest", "tv_map", "tv_final", "fb_research", "fb_grade", "fb_pick", "fb_loop", "fb_final", "tv_uncovered", "mv_landing", "mv_grade", "mv_pick", "mv_transfer", "mv_digest", "mv_diag", "mv_final", "mv_fb_research", "mv_fb_grade", "mv_fb_pick", "mv_fb_loop", "mv_fb_final", "mv_uncovered"] },
+    { "kind": "region", "label": "⑤ 对账 · ⑥ 体积 · ⑦ 落库(TV/Movie)", "wraps": ["reconcile", "size", "persist_tv", "persist_movie"] }
+  ],
+  "connections": [
+    { "id": "e1", "from": "enqueue", "to": "claim", "label": "tick ~3s" },
+    { "id": "e2", "from": "claim", "to": "deps", "label": "认领成功" },
+    { "id": "e3", "from": "deps", "to": "ctx", "label": "装配依赖" },
+    { "id": "e4", "from": "patrol", "to": "ctx", "label": "巡检直调消费", "variant": "dashed", "fromSide": "left", "toSide": "right" },
+    { "id": "e54", "from": "ctx", "to": "requeue", "label": "管线异常 → 队列侧", "variant": "security", "fromSide": "bottom", "toSide": "top", "via": [[861, 93], [790, 93]], "labelAt": [760, 93] },
+    { "id": "e55", "from": "patrol", "to": "patrol_fail", "label": "巡检异常 → failed", "variant": "security", "fromSide": "bottom", "toSide": "top", "via": [[1097, 93], [1010, 93]], "labelAt": [1147, 93] },
+    { "id": "e5", "from": "ctx", "to": "rules", "label": "consumeClaimedRun", "fromSide": "right", "toSide": "top", "via": [[1240, 59], [1240, 177], [153, 177]], "labelSegment": 2 },
+
+    { "id": "e6", "from": "rules", "to": "recipe", "label": "type2/type1/type3" },
+    { "id": "e7", "from": "rules", "to": "sandbox", "label": "movie_init 直入宿主", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "via": [[153, 272], [230, 272]], "labelAt": [113, 286] },
+    { "id": "e8", "from": "recipe", "to": "dirs" },
+    { "id": "e9", "from": "dirs", "to": "cleanup", "label": "① 目录树就绪" },
+    { "id": "e10", "from": "cleanup", "to": "need", "label": "② 清理兜底已包住" },
+    { "id": "e11", "from": "need", "to": "noop", "label": "缺集为空", "variant": "dashed" },
+    { "id": "e13", "from": "need", "to": "sandbox", "label": "缺集非空 → ④ 装配", "fromSide": "bottom", "toSide": "top", "via": [[1097, 288], [260, 288]], "labelAt": [1000, 302] },
+    { "id": "e14", "from": "sandbox", "to": "prewarm" },
+    { "id": "e15", "from": "prewarm", "to": "subwarm", "label": "字幕预热(软)" },
+    { "id": "e16", "from": "subwarm", "to": "tv_landing", "label": "TV/anime 分发", "fromSide": "bottom", "toSide": "top", "via": [[625, 372], [118, 372]], "labelAt": [625, 376] },
+    { "id": "e17", "from": "subwarm", "to": "mv_landing", "label": "Movie 分发", "variant": "dashed", "fromSide": "right", "toSide": "top", "via": [[760, 321], [760, 372], [918, 372]], "labelAt": [846, 376] },
+
+    { "id": "e18", "from": "tv_landing", "to": "tv_grade" },
+    { "id": "e19", "from": "tv_grade", "to": "tv_pick" },
+    { "id": "e20", "from": "tv_pick", "to": "tv_transfer", "label": "选中候选(code/AI)" },
+    { "id": "e21", "from": "tv_transfer", "to": "tv_digest", "label": "落盘 → 判定" },
+    { "id": "e22", "from": "tv_digest", "to": "tv_final", "label": "passes" },
+    { "id": "e23", "from": "tv_digest", "to": "tv_map", "label": "解析不全(单季)", "fromSide": "bottom", "toSide": "top", "via": [[630, 468]], "labelAt": [630, 474] },
+    { "id": "e24", "from": "tv_map", "to": "tv_final", "label": "映射通过 → 落地", "fromSide": "top", "toSide": "bottom", "via": [[630, 466], [700, 466]], "labelAt": [665, 462] },
+    { "id": "e26", "from": "tv_digest", "to": "tv_transfer", "label": "未对齐/映射失败 → 换候选", "variant": "dashed", "fromSide": "top", "toSide": "bottom", "via": [[630, 392], [502, 392]], "labelAt": [566, 388] },
+    { "id": "e27", "from": "tv_pick", "to": "tv_uncovered", "label": "仲裁放弃", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "via": [[374, 544], [758, 544]], "labelAt": [566, 534] },
+    { "id": "e28", "from": "tv_transfer", "to": "fb_research", "label": "primary 试尽", "variant": "dashed", "fromSide": "bottom", "toSide": "right", "via": [[446, 458], [446, 579], [176, 579]], "labelAt": [300, 549] },
+    { "id": "e29", "from": "tv_transfer", "to": "tv_uncovered", "label": "无别名/预算耗尽", "variant": "dashed", "fromSide": "bottom", "toSide": "right", "via": [[502, 458], [502, 579], [816, 579]], "labelAt": [660, 569] },
+    { "id": "e30", "from": "tv_final", "to": "reconcile", "label": "落地 → ⑤ 对账", "fromSide": "bottom", "toSide": "top", "via": [[758, 458], [758, 625], [173, 625]], "labelAt": [710.4, 528.5] },
+    { "id": "e31", "from": "tv_uncovered", "to": "reconcile", "label": "未覆盖也走 ⑤⑥⑦", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "via": [[758, 602], [758, 650], [173, 650]], "labelAt": [676.4, 656] },
+
+    { "id": "e32", "from": "mv_landing", "to": "mv_grade" },
+    { "id": "e33", "from": "mv_grade", "to": "mv_pick" },
+    { "id": "e34", "from": "mv_pick", "to": "mv_transfer", "label": "选中候选(code/AI)" },
+    { "id": "e35", "from": "mv_transfer", "to": "mv_digest", "label": "落盘 → 判定" },
+    { "id": "e36", "from": "mv_digest", "to": "mv_final", "label": "passes", "labelAt": [1482, 425] },
+    { "id": "e37", "from": "mv_digest", "to": "mv_diag", "label": "脏包 / 判不了", "fromSide": "bottom", "toSide": "top", "via": [[1430, 488]], "labelAt": [1380, 488] },
+    { "id": "e38", "from": "mv_diag", "to": "mv_final", "label": "accept → 收尾", "fromSide": "top", "toSide": "bottom", "via": [[1430, 466], [1490, 466]], "labelAt": [1490, 462] },
+    { "id": "e39", "from": "mv_diag", "to": "mv_transfer", "label": "retry_other → 换候选", "variant": "dashed", "fromSide": "top", "toSide": "bottom", "via": [[1430, 478], [1370, 478]], "labelAt": [1348.6, 464] },
+    { "id": "e40", "from": "mv_diag", "to": "mv_uncovered", "label": "abandon", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "via": [[1430, 540], [1558, 540]], "labelAt": [1448.4, 540] },
+    { "id": "e41", "from": "mv_transfer", "to": "mv_fb_research", "label": "primary 试尽", "variant": "dashed", "fromSide": "bottom", "toSide": "right", "via": [[1302, 458], [1302, 470], [1252, 470], [1252, 579], [918, 579]], "labelAt": [1248.8, 464] },
+    { "id": "e42", "from": "mv_transfer", "to": "mv_uncovered", "label": "无别名/预算耗尽", "variant": "dashed", "fromSide": "bottom", "toSide": "right", "via": [[1302, 458], [1302, 602], [1660, 602], [1660, 579]], "labelAt": [1510, 592] },
+    { "id": "e43", "from": "mv_final", "to": "persist_movie", "label": "flatten+mark → ⑦", "fromSide": "bottom", "toSide": "top", "via": [[1558, 458]], "labelAt": [1534.4, 566] },
+    { "id": "e44", "from": "mv_uncovered", "to": "persist_movie", "label": "未覆盖 → ⑦", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "via": [[1558, 602]], "labelAt": [1530.4, 638] },
+    { "id": "e51", "from": "mv_fb_final", "to": "persist_movie", "label": "Movie: 完成 → ⑦", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "via": [[1430, 602], [1430, 632], [1558, 632]], "labelAt": [1200, 626] },
+
+    { "id": "e45", "from": "fb_research", "to": "fb_grade" },
+    { "id": "e46", "from": "fb_grade", "to": "fb_pick", "label": "唯一A 停 / 合并池" },
+    { "id": "e47", "from": "fb_pick", "to": "fb_loop", "label": "独立预算 3" },
+    { "id": "e48", "from": "fb_loop", "to": "fb_final", "label": "digest → 收尾" },
+    { "id": "e49", "from": "fb_final", "to": "fb_loop", "label": "未对齐 → 换候选", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom", "via": [[630, 624], [502, 624]], "labelAt": [591, 624] },
+    { "id": "e50", "from": "fb_final", "to": "reconcile", "label": "TV: 完成 → ⑤⑥⑦", "variant": "dashed", "fromSide": "bottom", "toSide": "bottom", "via": [[630, 602], [630, 735], [173, 735]], "labelAt": [440, 664.5] },
+
+    { "id": "e52", "from": "reconcile", "to": "size", "label": "对账 → 体积", "labelAt": [306, 687] },
+    { "id": "e53", "from": "size", "to": "persist_tv", "label": "结果 → 落库", "labelAt": [572, 687] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "AI 升级点(三个活仲裁 · 单次调用零工具)",
+      "items": [
+        "选片: 无唯一 A 时挑一个或放弃(TV/movie 各一款)",
+        "集数映射: TV 单季解析不出 → fileName→SxxExx,只给映射不定收否",
+        "movie 诊断: 落盘不像一部正片 → accept/retry_other/abandon",
+        "回复解析失败一律保守降级;TV 无落盘诊断仲裁(§43)"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "硬预算(budgets.ts)",
+      "items": [
+        "primary 池真实转存 ≤3(MAX_TRANSFER_ATTEMPTS)",
+        "兜底池独立预算 ≤3,互不挤占(MAX_FALLBACK_TRANSFER_ATTEMPTS)",
+        "死链探测 ≤10,不占转存预算(MAX_DEAD_LINK_RETRIES)",
+        "别名兜底重搜 ≤3 轮,保护共享 PanSou 配额(MAX_FALLBACK_SEARCHES)"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "落地判定(LandingVerdict)",
+      "items": [
+        "clean / mapped_clean → finalize 落库(改名+归位+mark)",
+        "dead → 死链探针换候选 · systemic → 立即终止不硬磨",
+        "retry_other → 未全量对齐不落盘:清暂存换候选(§43)",
+        "abandon / 候选或预算耗尽 → reportNoCoverage 诚实未覆盖(下次巡检再来)"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "四 kind 收口与异常语义",
+      "items": [
+        "认领优先级 type2 → series → movie;type3 巡检不入队、直接 running",
+        "kind 差异只在认领/①父级/③need/⑦落库口径(⑦ finishedAt 跑后盖章)",
+        "队列侧:瞬态退避重入队 · 终态清 episode 态",
+        "巡检侧:不重试 · 保留 episode 态 · 直接写 failed"
+      ]
+    }
+  ]
+}

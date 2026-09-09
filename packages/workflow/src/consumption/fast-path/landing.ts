@@ -387,6 +387,9 @@ export interface TvCloseOut {
   next: string | null;
   escalated: boolean;
   deadRetries: number;
+  /** retry_other only: 该候选覆盖的 need 集码 + AI 映射覆盖表（尾部兜底用）。 */
+  coveredCodes?: string[];
+  overrides?: Record<string, string>;
 }
 
 export async function closeOutTvLanding(options: {
@@ -742,6 +745,10 @@ export async function closeOutTvLanding(options: {
       covered: compactCodeList(landingDigest.coveredCodes),
       missing: compactCodeList(landingDigest.missingCodes),
     });
-    return { verdict: "retry_other", done: null, next, escalated, deadRetries };
+    return {
+      verdict: "retry_other", done: null, next, escalated, deadRetries,
+      coveredCodes: landingDigest.coveredCodes,
+      ...(mappingTable ? { overrides: mappingTable } : {}),
+    };
 
 }

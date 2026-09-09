@@ -34,8 +34,8 @@ function logAiCall(
  */
 
 export interface SelectionArbitration {
-  /** The chosen candidate id, or null to decline (report no coverage). */
-  candidateId: string | null;
+  /** Picked candidate ids, best-first. Empty = decline (report no coverage). */
+  candidateIds: string[];
   reasoning: string;
 }
 
@@ -141,7 +141,7 @@ export function extractJson(text: string): unknown {
   return JSON.parse(stripped.slice(first, last + 1));
 }
 
-/** Arbitrate which candidate to transfer when the grader has no A-grade. */
+/** Arbitrate which candidate(s) to transfer when the grader has no A-grade. */
 export async function arbitrateSelection(options: {
   model: LanguageModel;
   /** summarizeGrading output — the compact ranked candidate list. */
@@ -149,10 +149,14 @@ export async function arbitrateSelection(options: {
   title: string;
   seasons: number[];
 
+  /** Maximum number of candidates to pick (best-first order). */
+  maxPicks: number;
+
   /** issue #44: prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
   promptOverrides?: PromptOverrideLookup;}): Promise<SelectionArbitration> {
   const prompt = [
     `目标剧集：${options.title}${options.seasons.length > 0 ? `（季：${options.seasons.join("/")}）` : ""}`,
+    `最多挑选 ${options.maxPicks} 个候选（按推荐顺序排列，最佳在前）`,
     "",
     "候选（按分级排序，A>B>C>D）：",
     options.summary,
@@ -166,17 +170,22 @@ export async function arbitrateSelection(options: {
   });
 
   try {
-    const parsed = extractJson(result.text) as Partial<SelectionArbitration>;
-    if (typeof parsed?.candidateId !== "string" && parsed?.candidateId !== null) {
-      throw new Error("ARBITRATOR_BAD_SELECTION: candidateId missing");
+    const parsed = extractJson(result.text) as Record<string, unknown>;
+    let ids: string[];
+    if (Array.isArray(parsed.candidateIds)) {
+      ids = parsed.candidateIds.filter((id): id is string => typeof id === "string");
+    } else if (typeof parsed.candidateId === "string") {
+      ids = [parsed.candidateId]; // backward compat: old single-id format
+    } else {
+      ids = [];
     }
     return {
-      candidateId: parsed.candidateId,
+      candidateIds: ids.slice(0, options.maxPicks),
       reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
     };
   } catch {
     // Safe fallback: decline rather than transfer a random candidate.
-    return { candidateId: null, reasoning: "仲裁返回无法解析，安全放弃" };
+    return { candidateIds: [], reasoning: "仲裁返回无法解析，安全放弃" };
   }
 }
 
@@ -200,17 +209,22 @@ export function resolvePromptText(
 
 
 /** Arbitrate which movie candidate to transfer when the grader has no unique
- *  A-grade. Reuses SelectionArbitration (candidateId + reasoning). */
+ *  A-grade. Reuses SelectionArbitration (candidateIds + reasoning). */
 export async function arbitrateMovieSelection(options: {
   model: LanguageModel;
   summary: string;
   title: string;
   year: number;
 
+  /** Maximum number of candidates to pick. Movie defaults to 1. */
+  maxPicks?: number;
+
   /** issue #44: prompt 覆盖表(kind → body)。缺省 = 内置模板。 */
   promptOverrides?: PromptOverrideLookup;}): Promise<SelectionArbitration> {
+  const maxPicks = options.maxPicks ?? 1;
   const prompt = [
     `目标电影：${options.title}${options.year > 0 ? `（发行年：${options.year}）` : ""}`,
+    `最多挑选 ${maxPicks} 个候选（按推荐顺序排列，最佳在前）`,
     "",
     "候选（按分级排序，A>B>C>D）：",
     options.summary,
@@ -224,16 +238,21 @@ export async function arbitrateMovieSelection(options: {
   });
 
   try {
-    const parsed = extractJson(result.text) as Partial<SelectionArbitration>;
-    if (typeof parsed?.candidateId !== "string" && parsed?.candidateId !== null) {
-      throw new Error("ARBITRATOR_BAD_SELECTION: candidateId missing");
+    const parsed = extractJson(result.text) as Record<string, unknown>;
+    let ids: string[];
+    if (Array.isArray(parsed.candidateIds)) {
+      ids = parsed.candidateIds.filter((id): id is string => typeof id === "string");
+    } else if (typeof parsed.candidateId === "string") {
+      ids = [parsed.candidateId]; // backward compat: old single-id format
+    } else {
+      ids = [];
     }
     return {
-      candidateId: parsed.candidateId,
+      candidateIds: ids.slice(0, maxPicks),
       reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
     };
   } catch {
-    return { candidateId: null, reasoning: "仲裁返回无法解析，安全放弃" };
+    return { candidateIds: [], reasoning: "仲裁返回无法解析，安全放弃" };
   }
 }
 

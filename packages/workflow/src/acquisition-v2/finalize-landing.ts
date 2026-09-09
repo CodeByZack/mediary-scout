@@ -222,6 +222,25 @@ export async function finalizeLanding(
         stepLog(sandbox, canonicalTitle, "改名失败", `${source} → ${newName} (${err})`);
       }
     }
+    // ★ 夸克 renameFile 后 file ID 会变,归位必须用 rename 后的当前 ID。
+    //   重读 staging,按新名建 name→currentId 映射,回填 digest 视频的 ID。
+    const stagingNow = await sandbox.inspectStaging();
+    const idByNewName = new Map(stagingNow.map((f) => [basenameOf(f.path), f.id]));
+    for (const { newName } of renames) {
+      const currentId = idByNewName.get(newName);
+      if (currentId) {
+        // 在 digest.videos 里找匹配旧 ID 的项,更新其 ID。
+        for (const video of digest.videos) {
+          // 通过原名→新名映射找对应的 video 项
+          const origBase = baseById.get(video.id);
+          const expectedRename = renames.find((r) => r.fileId === video.id);
+          if (expectedRename && expectedRename.newName === newName) {
+            video.id = currentId;
+            break;
+          }
+        }
+      }
+    }
   }
 
   // 2. 归位 into season directories (subtitles ride with their videos).

@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "认领成功后 · 消费任务流水线全程",
+    "quality_profile": "showcase",
+    "viewBox": [1620, 1080]
+  },
+  "lanes": [
+    { "id": "queue", "label": "队列与认领(worker)" },
+    { "id": "assemble", "label": "七阶段 ①–③ · 装配与需求" },
+    { "id": "engine", "label": "④ 组合根装配( orchestrator )" },
+    { "id": "tv", "label": "TV / Anime · fast path 业务循环" },
+    { "id": "movie", "label": "Movie · fast path 业务循环" },
+    { "id": "fallback", "label": "别名兜底池 · 两分支共用" },
+    { "id": "tail", "label": "⑤–⑦ 收尾 · 异常收口" }
+  ],
+  "groups": [
+    { "id": "grp_queue", "label": "认领 + 上下文装配", "lane": "queue", "fromCol": 0, "toCol": 3 },
+    { "id": "grp_assemble", "label": "七阶段 ①–③(不烧配额/token)", "lane": "assemble", "fromCol": 0, "toCol": 5 },
+    { "id": "grp_engine", "label": "④ 沙盒装配 + 预搜预热", "lane": "engine", "fromCol": 0, "toCol": 2, "variant": "emphasis" },
+    { "id": "grp_tv", "label": "TV/anime · primary 池(阶段1)", "lane": "tv", "fromCol": 0, "toCol": 5, "variant": "emphasis" },
+    { "id": "grp_movie", "label": "Movie · primary 池(阶段1)", "lane": "movie", "fromCol": 0, "toCol": 5 },
+    { "id": "grp_fb", "label": "兜底池(阶段2 · 独立预算 3)", "lane": "fallback", "fromCol": 0, "toCol": 4, "variant": "dashed" },
+    { "id": "grp_tail", "label": "⑤–⑦ 收尾 · 异常收口", "lane": "tail", "fromCol": 0, "toCol": 5 }
+  ],
+  "mainPath": [
+    "claim", "deps", "ctx", "rules", "recipe", "dirs", "cleanup", "need",
+    "sandbox", "prewarm", "tv_landing", "tv_grade", "tv_pick", "tv_transfer",
+    "tv_digest", "tv_final", "reconcile", "size", "persist_tv"
+  ],
+  "nodes": [
+    { "id": "enqueue", "lane": "queue", "col": 0, "type": "backend", "label": "workflow_runs 队列", "sublabel": "Web UI 获取入队 · SQLite" },
+    { "id": "patrol", "lane": "queue", "col": 0, "type": "external", "label": "type3 巡检", "sublabel": "不入队 · 直接 running", "tag": "播出日已同步", "yOffset": -78 },
+    { "id": "claim", "lane": "queue", "col": 1, "type": "backend", "label": "原子认领", "sublabel": "claimNextQueuedWorkflowRun", "tag": "事务内防双认领" },
+    { "id": "deps", "lane": "queue", "col": 2, "type": "backend", "label": "账号依赖解析", "sublabel": "resolveWorkerDeps · 115凭据/落地CID" },
+    { "id": "ctx", "lane": "queue", "col": 3, "type": "backend", "label": "构建消费上下文", "sublabel": "buildConsumptionContext", "tag": "依赖一次装配" },
+
+    { "id": "rules", "lane": "assemble", "col": 0, "type": "backend", "label": "加载生效规则", "sublabel": "episodeRules + prompt 覆盖", "tag": "issue #44" },
+    { "id": "recipe", "lane": "assemble", "col": 1, "type": "backend", "label": "策略装配", "sublabel": "searchProfile → 关键词配方+画质引导" },
+    { "id": "dirs", "lane": "assemble", "col": 2, "type": "backend", "label": "① prepareDirectories", "sublabel": "verify-or-create Show/Season/staging", "tag": "父目录必填 fail-loud" },
+    { "id": "cleanup", "lane": "assemble", "col": 3, "type": "security", "label": "② withStagingCleanup", "sublabel": "成败必清暂存 · 335文件泄漏兜底" },
+    { "id": "need", "lane": "assemble", "col": 4, "type": "backend", "label": "③ computeNeed", "sublabel": "应有 − 实有 · 不扫网盘" },
+    { "id": "noop", "lane": "assemble", "col": 5, "type": "frontend", "label": "no-op 早退", "sublabel": "缺集为空 → 零搜索/转存/LLM", "tag": "仍照常落库" },
+
+    { "id": "sandbox", "lane": "engine", "col": 0, "type": "backend", "label": "装配 TaskSandbox", "sublabel": "CandidateRegistry + 双真实适配器", "tag": "need/作用域" },
+    { "id": "prewarm", "lane": "engine", "col": 1, "type": "messagebus", "label": "预搜(裸标题)", "sublabel": "primeRawSnapshot · 失败仅软降级" },
+    { "id": "subwarm", "lane": "engine", "col": 2, "type": "cloud", "label": "字幕预热(软)", "sublabel": "assrt 三闸门 · 失败不阻塞" },
+
+    { "id": "tv_landing", "lane": "tv", "col": 0, "type": "backend", "label": "0 落点检查", "sublabel": "在库→markObtained · need 过滤", "tag": "年守卫" },
+    { "id": "tv_grade", "lane": "tv", "col": 1, "type": "backend", "label": "1 预搜快照+评分", "sublabel": "A/B/C/D 纯代码 · 链接透出", "tag": "快照空→终止" },
+    { "id": "tv_pick", "lane": "tv", "col": 2, "type": "backend", "label": "2 选片", "sublabel": "唯一A 代码盲转 · 否则 AI 仲裁", "tag": "升级点①" },
+    { "id": "tv_transfer", "lane": "tv", "col": 3, "type": "backend", "label": "3 转存到暂存区", "sublabel": "transferCandidate · 死链探测 ≤10 不占预算" },
+    { "id": "tv_digest", "lane": "tv", "col": 4, "type": "backend", "label": "4 digest 判定", "sublabel": "代码解析 + 年守卫 + 「第N期」锚定" },
+    { "id": "tv_map", "lane": "tv", "col": 4, "type": "backend", "label": "AI 集数映射", "sublabel": "tryEpisodeMapping · 仅单季", "tag": "升级点②", "yOffset": 92 },
+    { "id": "tv_final", "lane": "tv", "col": 5, "type": "backend", "label": "5 finalize 落地", "sublabel": "规范改名→归位→markObtained", "tag": "零 LLM" },
+    { "id": "tv_uncovered", "lane": "tv", "col": 5, "type": "security", "label": "诚实终止", "sublabel": "reportNoCoverage · 理由落审计", "yOffset": 92 },
+
+    { "id": "mv_landing", "lane": "movie", "col": 0, "type": "backend", "label": "0 落点检查", "sublabel": "目录有影片 → 直接 mark(MOVIE)", "tag": "绝不重转" },
+    { "id": "mv_grade", "lane": "movie", "col": 1, "type": "backend", "label": "1 预搜快照+评分", "sublabel": "身份=标题+年份 · 纯代码" },
+    { "id": "mv_pick", "lane": "movie", "col": 2, "type": "backend", "label": "2 选片", "sublabel": "唯一A 盲转 · 否则 AI 选片仲裁" },
+    { "id": "mv_transfer", "lane": "movie", "col": 3, "type": "backend", "label": "3 转存到暂存区", "sublabel": "transferCandidate · 死链不占预算" },
+    { "id": "mv_digest", "lane": "movie", "col": 4, "type": "backend", "label": "4 movie digest", "sublabel": "一部正片? / 多视频占优? / 脏包?" },
+    { "id": "mv_diag", "lane": "movie", "col": 4, "type": "backend", "label": "AI 诊断仲裁", "sublabel": "arbitrateMovieDiagnosis", "tag": "升级点③", "yOffset": 92 },
+    { "id": "mv_final", "lane": "movie", "col": 5, "type": "backend", "label": "5 flatten+mark", "sublabel": "finalizeMovieLanding · 字幕软目标前置" },
+    { "id": "mv_uncovered", "lane": "movie", "col": 5, "type": "security", "label": "诚实终止", "sublabel": "reportNoCoverage · 清残留", "yOffset": 92 },
+
+    { "id": "fb_research", "lane": "fallback", "col": 0, "type": "backend", "label": "兜底重搜", "sublabel": "aliasesFallbackReSearch ≤3 轮", "tag": "保护 PanSou 配额" },
+    { "id": "fb_grade", "lane": "fallback", "col": 1, "type": "backend", "label": "兜底评分", "sublabel": "唯一A 提前停 · 耗尽合并证据池" },
+    { "id": "fb_pick", "lane": "fallback", "col": 2, "type": "backend", "label": "选片", "sublabel": "唯一A 盲转 · 否则 AI 仲裁" },
+    { "id": "fb_loop", "lane": "fallback", "col": 3, "type": "backend", "label": "转存→digest 循环", "sublabel": "独立预算 3 · 死链探测" },
+    { "id": "fb_final", "lane": "fallback", "col": 4, "type": "backend", "label": "收尾 / 换候选", "sublabel": "finalize · 未对齐换候选 · 耗尽诚实终止" },
+
+    { "id": "reconcile", "lane": "tail", "col": 0, "type": "backend", "label": "⑤ reconcileNeed", "sublabel": "prior ∪ 本次标记 · 不重扫网盘" },
+    { "id": "size", "lane": "tail", "col": 1, "type": "backend", "label": "⑥ readLandedSize", "sublabel": "真实体积 best-effort · 失败仅省略" },
+    { "id": "persist_tv", "lane": "tail", "col": 2, "type": "database", "label": "⑦ 落库(TV)", "sublabel": "persistSingleSeason / 整包逐季+锁run", "tag": "finishedAt 跑后盖章" },
+    { "id": "persist_movie", "lane": "tail", "col": 3, "type": "database", "label": "⑦ 落库(Movie)", "sublabel": "persistMovieRun · 集状态引擎自带" },
+    { "id": "requeue", "lane": "tail", "col": 4, "type": "security", "label": "队列侧失败处理", "sublabel": "handleWorkflowRunFailure", "tag": "瞬态退避重入队" },
+    { "id": "patrol_fail", "lane": "tail", "col": 5, "type": "security", "label": "巡检侧失败处理", "sublabel": "不重试 · 直接 failed", "tag": "保留 episode 态" }
+  ],
+  "edges": [
+    { "id": "e-enq", "from": "enqueue", "to": "claim", "label": "tick 认领(单轮 ≤50)", "role": "main" },
+    { "id": "e-claim", "from": "claim", "to": "deps", "label": "认领成功", "role": "main" },
+    { "id": "e-patrol", "from": "patrol", "to": "deps", "label": "巡检直调 · 不入队", "role": "branch", "variant": "dashed" },
+    { "id": "e-deps", "from": "deps", "to": "ctx", "label": "装配依赖", "role": "main" },
+    { "id": "e-ctx", "from": "ctx", "to": "rules", "label": "consumeClaimedRun", "role": "main" },
+    { "id": "e-rules-tv", "from": "rules", "to": "recipe", "label": "type2/type1/type3", "role": "main" },
+    { "id": "e-rules-mv", "from": "rules", "to": "sandbox", "label": "movie_init 直入电影宿主", "role": "branch", "variant": "dashed" },
+    { "id": "e-recipe", "from": "recipe", "to": "dirs", "label": "runAcquisitionV2Workflow" },
+    { "id": "e-dirs", "from": "dirs", "to": "cleanup", "label": "①目录树就绪" },
+    { "id": "e-cleanup", "from": "cleanup", "to": "need", "label": "②清理已包住" },
+    { "id": "e-need-noop", "from": "need", "to": "noop", "label": "缺集为空", "role": "branch" },
+    { "id": "e-noop", "from": "noop", "to": "persist_tv", "label": "no-op 照常落库", "role": "branch", "variant": "dashed" },
+    { "id": "e-need4", "from": "need", "to": "sandbox", "label": "缺集非空 → ④装配", "role": "main" },
+    { "id": "e-sandbox", "from": "sandbox", "to": "prewarm", "label": "need/目录作用域" },
+    { "id": "e-prewarm", "from": "prewarm", "to": "subwarm", "label": "字幕预热(软)" },
+    { "id": "e-tv-enter", "from": "subwarm", "to": "tv_landing", "label": "TV/anime 分发", "role": "main" },
+    { "id": "e-mv-enter", "from": "subwarm", "to": "mv_landing", "label": "Movie 分发", "role": "branch" },
+
+    { "id": "e-tv-l", "from": "tv_landing", "to": "tv_grade", "label": "有缺集 → 评分" },
+    { "id": "e-tv-l-done", "from": "tv_landing", "to": "reconcile", "label": "已在库 → 收尾", "role": "branch", "variant": "dashed" },
+    { "id": "e-tv-g", "from": "tv_grade", "to": "tv_pick", "label": "A/B/C/D 分布" },
+    { "id": "e-tv-p", "from": "tv_pick", "to": "tv_transfer", "label": "选中候选(code/AI)" },
+    { "id": "e-tv-t", "from": "tv_transfer", "to": "tv_digest", "label": "落盘 → 代码解析" },
+    { "id": "e-tv-d", "from": "tv_digest", "to": "tv_final", "label": "passes 全量对齐", "role": "main" },
+    { "id": "e-tv-map", "from": "tv_digest", "to": "tv_map", "label": "解析不全(单季)", "role": "branch" },
+    { "id": "e-map-ok", "from": "tv_map", "to": "tv_final", "label": "映射通过 → 落地", "role": "branch" },
+    { "id": "e-map-fail", "from": "tv_map", "to": "tv_transfer", "label": "failed → 清暂存换候选", "role": "branch", "variant": "dashed" },
+    { "id": "e-tv-retry", "from": "tv_digest", "to": "tv_transfer", "label": "未对齐 → 换候选循环", "role": "branch", "variant": "dashed" },
+    { "id": "e-tv-pick-fail", "from": "tv_pick", "to": "tv_uncovered", "label": "仲裁放弃/非法id", "role": "branch", "variant": "dashed" },
+    { "id": "e-tv-fb", "from": "tv_transfer", "to": "fb_research", "label": "primary 试尽 & 有别名", "role": "branch" },
+    { "id": "e-tv-exh", "from": "tv_transfer", "to": "tv_uncovered", "label": "无别名/预算耗尽", "role": "branch", "variant": "dashed" },
+    { "id": "e-tv-f", "from": "tv_final", "to": "reconcile", "label": "落地 → ⑤对账", "role": "main" },
+    { "id": "e-tv-u", "from": "tv_uncovered", "to": "reconcile", "label": "未覆盖也走 ⑤⑥⑦", "role": "branch", "variant": "dashed" },
+
+    { "id": "e-mv-l", "from": "mv_landing", "to": "mv_grade", "label": "无影片 → 继续" },
+    { "id": "e-mv-l-done", "from": "mv_landing", "to": "persist_movie", "label": "已在库 → 绝不重转", "role": "branch", "variant": "dashed" },
+    { "id": "e-mv-g", "from": "mv_grade", "to": "mv_pick", "label": "评分分布" },
+    { "id": "e-mv-p", "from": "mv_pick", "to": "mv_transfer", "label": "选中候选(code/AI)" },
+    { "id": "e-mv-t", "from": "mv_transfer", "to": "mv_digest", "label": "落盘 → 判定" },
+    { "id": "e-mv-d", "from": "mv_digest", "to": "mv_final", "label": "一部正片(passes)", "role": "main" },
+    { "id": "e-mv-diag", "from": "mv_digest", "to": "mv_diag", "label": "脏包/判不了", "role": "branch" },
+    { "id": "e-diag-ok", "from": "mv_diag", "to": "mv_final", "label": "accept → 统一收尾", "role": "branch" },
+    { "id": "e-diag-retry", "from": "mv_diag", "to": "mv_transfer", "label": "retry_other → 换候选", "role": "branch", "variant": "dashed" },
+    { "id": "e-diag-abandon", "from": "mv_diag", "to": "mv_uncovered", "label": "abandon", "role": "branch", "variant": "dashed" },
+    { "id": "e-mv-retry", "from": "mv_digest", "to": "mv_transfer", "label": "无视频/残留 → 清空换候选", "role": "branch", "variant": "dashed" },
+    { "id": "e-mv-pick-fail", "from": "mv_pick", "to": "mv_uncovered", "label": "仲裁放弃", "role": "branch", "variant": "dashed" },
+    { "id": "e-mv-fb", "from": "mv_transfer", "to": "fb_research", "label": "primary 试尽 & 有别名", "role": "branch" },
+    { "id": "e-mv-exh", "from": "mv_transfer", "to": "mv_uncovered", "label": "预算耗尽", "role": "branch", "variant": "dashed" },
+    { "id": "e-mv-f", "from": "mv_final", "to": "persist_movie", "label": "flatten+mark → ⑦", "role": "main" },
+    { "id": "e-mv-u", "from": "mv_uncovered", "to": "persist_movie", "label": "诚实未覆盖 → ⑦", "role": "branch", "variant": "dashed" },
+
+    { "id": "e-fb-r", "from": "fb_research", "to": "fb_grade", "label": "逐轮 primeRawSnapshot" },
+    { "id": "e-fb-g", "from": "fb_grade", "to": "fb_pick", "label": "唯一A 提前停/合并池" },
+    { "id": "e-fb-p", "from": "fb_pick", "to": "fb_loop", "label": "兜底转存循环" },
+    { "id": "e-fb-l", "from": "fb_loop", "to": "fb_final", "label": "digest → 收尾" },
+    { "id": "e-fb-retry", "from": "fb_final", "to": "fb_loop", "label": "未对齐 → 换候选", "role": "branch", "variant": "dashed" },
+    { "id": "e-fb-tv", "from": "fb_final", "to": "reconcile", "label": "TV 完成/耗尽 → ⑤", "role": "branch" },
+    { "id": "e-fb-mv", "from": "fb_final", "to": "persist_movie", "label": "Movie 完成/耗尽 → ⑦", "role": "branch" },
+
+    { "id": "e-recon", "from": "reconcile", "to": "size", "label": "对账 → 读体积" },
+    { "id": "e-size", "from": "size", "to": "persist_tv", "label": "结果+证据一次落库" },
+    { "id": "e-ctx-fail", "from": "ctx", "to": "requeue", "label": "管线异常 → 队列侧处理", "role": "error", "variant": "security" },
+    { "id": "e-patrol-fail", "from": "patrol", "to": "patrol_fail", "label": "巡检异常 → 直接 failed", "role": "error", "variant": "security" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "AI 升级点(三个活仲裁 · 单次调用零工具)",
+      "items": [
+        "选片: 无唯一 A 时挑一个或放弃(TV/movie 各一款)",
+        "集数映射: TV 单季解析不出 → fileName→SxxExx,只给映射不定收否",
+        "movie 诊断: 落盘不像一部正片 → accept/abandon/retry_other",
+        "回复解析失败一律保守降级;TV 无落盘诊断仲裁"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "硬预算(budgets.ts)",
+      "items": [
+        "primary 池真实转存 ≤3(MAX_TRANSFER_ATTEMPTS)",
+        "兜底池独立预算 ≤3,互不挤占(MAX_FALLBACK_TRANSFER_ATTEMPTS)",
+        "死链探测 ≤10,不占转存预算(MAX_DEAD_LINK_RETRIES)",
+        "别名兜底重搜 ≤3 轮,保护共享 PanSou 配额(MAX_FALLBACK_SEARCHES)"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "落地判定(LandingVerdict)",
+      "items": [
+        "clean / mapped_clean → finalize 落库(改名+归位+mark)",
+        "dead → 死链探针换候选 · systemic → 立即终止不硬磨",
+        "retry_other → 未全量对齐不落盘:清暂存换候选(§43)",
+        "abandon / 候选或预算耗尽 → reportNoCoverage 诚实未覆盖"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "四 kind 收口与异常语义",
+      "items": [
+        "认领优先级 type2 → series → movie;type3 巡检不入队、直接 running",
+        "kind 差异只在认领/①父级/③need 形状/⑦落库口径(⑦ finishedAt 跑后盖章)",
+        "队列侧:瞬态退避重入队 · 终态清 episode 态",
+        "巡检侧:不重试 · 保留 episode 态 · 直接写 failed"
+      ]
+    }
+  ]
+}

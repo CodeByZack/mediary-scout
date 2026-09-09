@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>领取任务后续消费路径 · MediaTrack (mediary-scout)</title>
+<style>
+  :root{
+    --bg:#0d1218; --bg2:#111820; --surface:#161e27; --surface2:#1c2631;
+    --line:#28333f; --line2:#3a4857;
+    --ink:#e8eff6; --ink2:#a9b6c4; --ink3:#77848f; --ink4:#5d6873;
+    --r-code:#4cc38a; --r-ai:#e0b054; --r-budget:#6fb2ec; --r-persist:#b795f0;
+    --r-term:#ee9a52; --r-fail:#f2788a;
+    --ring:#3d4c5e;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","Segoe UI",sans-serif;
+  }
+  [data-theme="light"]{
+    --bg:#f6f8fa; --bg2:#eef1f5; --surface:#ffffff; --surface2:#f3f6f9;
+    --line:#d8dee5; --line2:#b9c3cd;
+    --ink:#14202c; --ink2:#42525f; --ink3:#6b7885; --ink4:#93a0ac;
+    --r-code:#1a7f4f; --r-ai:#9a6b12; --r-budget:#1f6bb5; --r-persist:#6b3fae;
+    --r-term:#a85a17; --r-fail:#c0394b;
+    --ring:#8d9aa7;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.65 var(--sans);
+    -webkit-font-smoothing:antialiased;
+  }
+  code,.mono{font-family:var(--mono); font-size:.86em; letter-spacing:.01em}
+  a{color:inherit}
+
+  /* ---------- header ---------- */
+  .wrap{max-width:1180px; margin:0 auto; padding:0 20px}
+  header.top{
+    background:linear-gradient(180deg,var(--bg2),var(--bg));
+    border-bottom:1px solid var(--line); padding:30px 0 22px;
+  }
+  .kicker{
+    font:600 11.5px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
+    color:var(--ink3); margin-bottom:12px;
+  }
+  h1{margin:0 0 10px; font-size:27px; line-height:1.28; font-weight:650; letter-spacing:-.01em}
+  .lede{margin:0; color:var(--ink2); max-width:78ch}
+  .lede b{color:var(--ink); font-weight:600}
+  .meta-row{display:flex; flex-wrap:wrap; gap:8px 10px; margin-top:16px; align-items:center}
+  .pill{
+    font:500 12px/1 var(--sans); color:var(--ink2);
+    background:var(--surface); border:1px solid var(--line); border-radius:999px;
+    padding:7px 12px;
+  }
+  .pill code{color:var(--ink2)}
+  button.theme{
+    margin-left:auto; cursor:pointer; font:500 12px/1 var(--sans);
+    color:var(--ink2); background:var(--surface); border:1px solid var(--line);
+    border-radius:999px; padding:7px 13px;
+  }
+  button.theme:hover{border-color:var(--line2); color:var(--ink)}
+  button.theme:focus-visible{outline:2px solid var(--r-budget); outline-offset:2px}
+
+  /* ---------- section nav ---------- */
+  nav.chips{
+    position:sticky; top:0; z-index:20;
+    background:color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--line);
+  }
+  nav.chips .wrap{display:flex; gap:8px; overflow-x:auto; padding:10px 20px; scrollbar-width:none}
+  nav.chips .wrap::-webkit-scrollbar{display:none}
+  nav.chips a{
+    flex:0 0 auto; text-decoration:none; font-size:12.5px; color:var(--ink3);
+    background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:6px 11px;
+    white-space:nowrap;
+  }
+  nav.chips a:hover{color:var(--ink); border-color:var(--line2)}
+  nav.chips a.active{color:var(--ink); border-color:var(--ring); background:var(--surface2)}
+  nav.chips a:focus-visible{outline:2px solid var(--r-budget); outline-offset:2px}
+
+  /* ---------- overview strip ---------- */
+  .strip{
+    background:var(--surface); border:1px solid var(--line); border-radius:12px;
+    padding:16px 18px; margin:22px 0 8px;
+  }
+  .strip h2{
+    margin:0 0 12px; font:600 11.5px/1 var(--mono); letter-spacing:.13em;
+    text-transform:uppercase; color:var(--ink3);
+  }
+  .flow{display:flex; flex-wrap:wrap; align-items:center; gap:6px 0}
+  .flow .stop{
+    font-size:12.5px; color:var(--ink); background:var(--bg2);
+    border:1px solid var(--line2); border-radius:7px; padding:6px 10px;
+  }
+  .flow .stop b{font-weight:650}
+  .flow .sep{color:var(--ink4); padding:0 7px; font-size:13px}
+  .flow-note{
+    margin-top:11px; font-size:12.5px; color:var(--ink3);
+    display:flex; flex-wrap:wrap; gap:6px 16px;
+  }
+  .flow-note span::before{content:"┄ "; color:var(--ink4)}
+
+  /* ---------- legend / filter ---------- */
+  .legend{
+    display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 6px; align-items:center;
+  }
+  .legend .lg-title{font-size:12.5px; color:var(--ink3); margin-right:2px}
+  button.chip{
+    cursor:pointer; font:500 12.5px/1 var(--sans); color:var(--ink2);
+    background:var(--surface); border:1px solid var(--line); border-radius:999px;
+    padding:7px 12px 7px 9px; display:inline-flex; align-items:center; gap:7px;
+  }
+  button.chip .dot{width:9px; height:9px; border-radius:50%; background:var(--c); flex:0 0 auto}
+  button.chip:hover{border-color:var(--line2); color:var(--ink)}
+  button.chip[aria-pressed="true"]{color:var(--ink); border-color:var(--c); background:var(--surface2)}
+  button.chip:focus-visible{outline:2px solid var(--r-budget); outline-offset:2px}
+  .legend .clear{margin-left:auto}
+
+  /* ---------- sections ---------- */
+  main{padding-bottom:70px}
+  section.lane{margin:26px 0; scroll-margin-top:74px}
+  .lane-head{
+    display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;
+    border-bottom:1px solid var(--line); padding-bottom:9px; margin-bottom:16px;
+  }
+  .lane-head .tag{
+    font:650 13px/1 var(--mono); color:var(--bg); background:var(--ink2);
+    border-radius:6px; padding:6px 9px; letter-spacing:.02em;
+  }
+  [data-theme="light"] .lane-head .tag{color:#fff; background:var(--ink)}
+  .lane-head h2{margin:0; font-size:17.5px; font-weight:650; letter-spacing:-.005em}
+  .lane-head .file{font-family:var(--mono); font-size:12px; color:var(--ink3)}
+  .lane-head .file a{text-decoration:none; border-bottom:1px dotted var(--ink4)}
+  .lane-head .file a:hover{color:var(--ink); border-bottom-color:var(--ink2)}
+  .lane-intro{margin:0 0 16px; color:var(--ink2); max-width:92ch}
+
+  /* ---------- nodes ---------- */
+  .row{display:flex; align-items:stretch; gap:0; flex-wrap:nowrap}
+  .row.wrap{flex-wrap:wrap}
+  .arr{
+    flex:0 0 auto; align-self:center; color:var(--ink4);
+    font-size:16px; padding:0 10px; line-height:1; user-select:none;
+  }
+  .n{
+    flex:1 1 0; min-width:0;
+    background:var(--surface); border:1px solid var(--line);
+    border-left:3px solid var(--rc,var(--line2));
+    border-radius:9px; padding:12px 14px;
+    transition:opacity .18s ease, border-color .18s ease;
+  }
+  .n.wide{flex:1.5 1 0}
+  .n > h4{
+    margin:0 0 6px; font-size:13.5px; font-weight:650; line-height:1.4;
+    display:flex; align-items:baseline; gap:8px;
+  }
+  .n > h4 .idx{
+    font:650 11px/1 var(--mono); color:var(--rc);
+    background:color-mix(in srgb, var(--rc) 14%, transparent);
+    border-radius:5px; padding:4px 6px; flex:0 0 auto;
+  }
+  .n > p{margin:0; font-size:12.8px; color:var(--ink2); line-height:1.62}
+  .n .sub{
+    margin-top:8px; padding-top:8px; border-top:1px dashed var(--line);
+    font-size:12px; color:var(--ink3); line-height:1.6;
+  }
+  .n .src{
+    display:block; margin-top:9px; font-family:var(--mono); font-size:11px;
+    color:var(--ink4);
+  }
+  .n .src a{text-decoration:none; border-bottom:1px dotted var(--ink4)}
+  .n .src a:hover{color:var(--ink2); border-bottom-color:var(--ink2)}
+  .r-code{--rc:var(--r-code)} .r-ai{--rc:var(--r-ai)} .r-budget{--rc:var(--r-budget)}
+  .r-persist{--rc:var(--r-persist)} .r-term{--rc:var(--r-term)} .r-fail{--rc:var(--r-fail)}
+
+  .dim{opacity:.18 !important}
+
+  .cols{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px}
+  .cols .n{flex:none}
+
+  /* horizontal stacked list with arrows on its own lines */
+  .stack{display:flex; flex-direction:column; gap:0}
+  .stack .n{margin-bottom:0}
+  .stack .arr{justify-content:center; padding:7px 0}
+
+  /* ---------- stage spine ---------- */
+  .stages{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px}
+  .stage{
+    background:var(--surface); border:1px solid var(--line); border-radius:9px;
+    padding:11px 12px; position:relative;
+    transition:opacity .18s ease;
+  }
+  .stage .num{
+    font:650 15px/1 var(--mono); color:var(--ink3); margin-bottom:5px;
+  }
+  .stage h4{margin:0 0 5px; font-size:13px; font-weight:650}
+  .stage p{margin:0; font-size:12.3px; color:var(--ink2); line-height:1.6}
+  .stage.hot{border-color:color-mix(in srgb, var(--r-ai) 55%, var(--line))}
+  .stage.hot .num{color:var(--r-ai)}
+  .stage .src{
+    display:block; margin-top:8px; font-family:var(--mono); font-size:10.5px; color:var(--ink4);
+  }
+  .stage .src a{text-decoration:none; border-bottom:1px dotted var(--ink4)}
+  .stage .src a:hover{color:var(--ink2)}
+
+  .kindgrid{display:grid; grid-template-columns:repeat(auto-fit,minmax(215px,1fr)); gap:12px; margin-top:16px}
+  .kind{
+    background:var(--surface2); border:1px solid var(--line); border-radius:9px; padding:12px 13px;
+  }
+  .kind h4{margin:0 0 7px; font-size:13px; font-weight:650; font-family:var(--mono)}
+  .kind p{margin:0; font-size:12.3px; color:var(--ink2); line-height:1.62}
+  .kind .arrow{color:var(--ink4); margin:0 5px}
+
+  /* ---------- note callouts ---------- */
+  .note{
+    display:flex; gap:10px; align-items:flex-start;
+    background:var(--surface2); border:1px solid var(--line); border-radius:9px;
+    padding:11px 13px; margin:14px 0 0; font-size:12.8px; color:var(--ink2);
+  }
+  .note .mk{flex:0 0 auto; font:650 11px/1.5 var(--mono); color:var(--ink3); padding-top:1px}
+  .note b{color:var(--ink); font-weight:600}
+  .note.warn{border-left:3px solid var(--r-ai)}
+  .note.term{border-left:3px solid var(--r-term)}
+  .note.fail{border-left:3px solid var(--r-fail)}
+
+  /* ---------- svg ---------- */
+  .svgwrap{
+    background:var(--surface); border:1px solid var(--line); border-radius:12px;
+    padding:14px; overflow-x:auto;
+  }
+  svg.sm{display:block; min-width:760px; width:100%; height:auto}
+  svg.sm .box{fill:var(--surface2); stroke:var(--line2); stroke-width:1.2}
+  svg.sm .gbox{fill:var(--surface2); stroke:var(--line2); stroke-width:1.2}
+  svg.sm .diamond{fill:var(--surface2); stroke:var(--line2); stroke-width:1.2}
+  svg.sm text{fill:var(--ink); font-family:var(--sans); font-size:12.5px}
+  svg.sm .t2{fill:var(--ink2); font-size:11.5px}
+  svg.sm .t3{fill:var(--ink3); font-size:11px}
+  svg.sm .edge{stroke:var(--line2); stroke-width:1.4; fill:none}
+  svg.sm .edge.dash{stroke-dasharray:5 4}
+  svg.sm .edge.ai{stroke:var(--r-ai)}
+  svg.sm .edge.term{stroke:var(--r-term)}
+  svg.sm .edge.fail{stroke:var(--r-fail)}
+  svg.sm .elbl{fill:var(--ink3); font-size:11px; font-family:var(--sans)}
+  svg.sm .elbl.ai{fill:var(--r-ai)}
+  svg.sm .term-rect{fill:var(--bg2); stroke-width:1.2}
+  svg.sm .term-t{font-weight:600}
+  svg.sm g{transition:opacity .18s ease}
+
+  /* ---------- aside tables / lists ---------- */
+  .aside-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:14px}
+  .card{
+    background:var(--surface); border:1px solid var(--line); border-radius:11px; padding:14px 15px;
+  }
+  .card h3{
+    margin:0 0 10px; font-size:13px; font-weight:650;
+    display:flex; align-items:center; gap:8px;
+  }
+  .card h3 .dot{width:8px;height:8px;border-radius:50%;background:var(--c);flex:0 0 auto}
+  .card ul{margin:0; padding:0; list-style:none}
+  .card li{
+    font-size:12.5px; color:var(--ink2); line-height:1.6;
+    padding:5px 0 5px 14px; position:relative;
+    border-bottom:1px dashed var(--line);
+  }
+  .card li:last-child{border-bottom:0}
+  .card li::before{content:"›"; position:absolute; left:2px; color:var(--ink4)}
+  .card li b{color:var(--ink); font-weight:600}
+  .card li code{color:var(--ink)}
+
+  table.matrix{
+    width:100%; border-collapse:collapse; font-size:12.5px;
+  }
+  table.matrix th,table.matrix td{
+    text-align:left; padding:8px 9px; border-bottom:1px solid var(--line);
+    vertical-align:top; line-height:1.55;
+  }
+  table.matrix thead th{
+    font-weight:600; color:var(--ink3); font-size:11.5px;
+    font-family:var(--mono); border-bottom:1px solid var(--line2);
+    white-space:nowrap;
+  }
+  table.matrix tbody th{
+    font-weight:600; color:var(--ink); font-size:12px; white-space:nowrap;
+  }
+  table.matrix td{color:var(--ink2)}
+  table.matrix code{color:var(--ink)}
+  .tbl-scroll{overflow-x:auto}
+
+  footer.foot{
+    border-top:1px solid var(--line); margin-top:34px; padding:18px 0 4px;
+    font-size:12px; color:var(--ink4); line-height:1.7;
+  }
+  footer.foot code{color:var(--ink3)}
+
+  @media (max-width:720px){
+    .row{flex-direction:column}
+    .row .arr{transform:rotate(90deg); padding:6px 0; justify-content:center; width:100%; text-align:center}
+    h1{font-size:22px}
+    .legend .clear{margin-left:0}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none !important}
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="kicker">MediaTrack · mediary-scout · 消费链路</div>
+    <h1>领取任务 → 后续消费路径</h1>
+    <p class="lede">
+      从队列里「有活」到「文件已归位」的全程：<b>worker 原子认领 → 七阶段主干 → fast path 业务循环</b>。
+      设计取向是 <b>代码驱动、AI 降级为单点裁判</b>——干净路径一次 LLM 都不调用，只有真正的歧义才升级一次。
+    </p>
+    <div class="meta-row">
+      <span class="pill">队列 <code>workflow_runs</code></span>
+      <span class="pill">状态全在 <code>SQLite</code></span>
+      <span class="pill">进程内 worker · tick ~3s</span>
+      <span class="pill">TV / Movie 共用 fast path</span>
+      <button class="theme" id="themeBtn" type="button" aria-pressed="false">浅色</button>
+    </div>
+  </div>
+</header>
+
+<nav class="chips" aria-label="分区导航">
+  <div class="wrap">
+    <a href="#s-a">A 调度与认领</a>
+    <a href="#s-b">B 七阶段主干</a>
+    <a href="#s-c">C ④ 装配层</a>
+    <a href="#s-d">D TV fast path</a>
+    <a href="#s-e">E 落地判定</a>
+    <a href="#s-f">F Movie 分支</a>
+    <a href="#s-g">G 失败分派</a>
+    <a href="#s-h">H 预算与差异</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <div class="strip">
+    <h2>全程一览</h2>
+    <div class="flow">
+      <span class="stop"><b>Web UI「获取」</b>入队</span><span class="sep">→</span>
+      <span class="stop">tick 认领<br><b>原子防双认领</b></span><span class="sep">→</span>
+      <span class="stop">装配上下文<br><b>账号级依赖</b></span><span class="sep">→</span>
+      <span class="stop">①–③ 目录·需求<br><b>缺集空则 no-op</b></span><span class="sep">→</span>
+      <span class="stop">④ 装配 + 搜证据<br><b>唯一烧配额/token</b></span><span class="sep">→</span>
+      <span class="stop">fast path<br><b>评分·转存·判定</b></span><span class="sep">→</span>
+      <span class="stop">⑤–⑦ 对账·体积·落库</span>
+    </div>
+    <div class="flow-note">
+      <span><code>type3</code> 巡检<b>不入队</b>，直接 running，合成 claimed 快照后直调同一入口</span>
+      <span>管线抛异常<b>不被吞</b>：队列侧走退避，巡检侧写 failed</span>
+      <span>干净路径<b>零 LLM</b>；AI 最多三次单点裁判</span>
+    </div>
+  </div>
+
+  <div class="legend" role="group" aria-label="按角色筛选">
+    <span class="lg-title">筛选</span>
+    <button class="chip" data-filter="code" style="--c:var(--r-code)" type="button" aria-pressed="false"><span class="dot"></span>代码直判（零 LLM）</button>
+    <button class="chip" data-filter="ai" style="--c:var(--r-ai)" type="button" aria-pressed="false"><span class="dot"></span>AI 单次裁判</button>
+    <button class="chip" data-filter="budget" style="--c:var(--r-budget)" type="button" aria-pressed="false"><span class="dot"></span>预算闸门</button>
+    <button class="chip" data-filter="persist" style="--c:var(--r-persist)" type="button" aria-pressed="false"><span class="dot"></span>SQLite 持久化</button>
+    <button class="chip" data-filter="term" style="--c:var(--r-term)" type="button" aria-pressed="false"><span class="dot"></span>诚实终止</button>
+    <button class="chip" data-filter="fail" style="--c:var(--r-fail)" type="button" aria-pressed="false"><span class="dot"></span>异常收口</button>
+    <button class="chip" data-filter="clean" style="--c:var(--ink2)" type="button" aria-pressed="false"><span class="dot"></span>零 LLM 干净路径</button>
+    <button class="chip clear" id="clearFilters" type="button">清除</button>
+  </div>
+
+  <main>
+
+  <!-- ============ A ============ -->
+  <section class="lane" id="s-a">
+    <div class="lane-head">
+      <span class="tag">A</span>
+      <h2>调度与认领</h2>
+      <span class="file"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/worker.ts">worker.ts</a> · <a href="https://github.com/CodeByZack/mediary-scout/blob/main/apps/web/lib/background-worker.ts">background-worker.ts</a></span>
+    </div>
+    <p class="lane-intro">
+      浏览器「获取」只把 run 写进 <code>workflow_runs</code>；真正执行的是进程内 worker。它每 ~3s 一 tick，
+      先救孤儿再排空队列，然后再看要不要跑每日巡检。
+    </p>
+
+    <div class="stack">
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">1</span>startBackgroundWorker</h4>
+        <p>由 <code>instrumentation.ts</code> 在 server 启动时调用，幂等；<code>MEDIA_TRACK_INPROCESS_WORKER=0</code> 可整体关闭（多实例部署交给独立 worker 进程戳 <code>/api/workflows/run-next</code>）。</p>
+        <div class="sub">启动<b>先</b> <code>recover()</code> 救孤儿：崩溃遗留的 <code>running</code> → 重新入队，上限 <code>ORPHAN_REQUEUE_MAX = 5</code>（毒任务跨重启无限循环的防线）；<b>再</b> 起 3s 轮询 + 立即首 tick（刚点的获取不等一个间隔）。</div>
+        <span class="src">apps/web/lib/background-worker.ts:116</span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">2</span>tick（不重叠）</h4>
+        <p><code>running</code> 守卫：一个长任务占住当前 tick，直到它结束；期间新入队的活由下一个 tick 接着捡。这是「获取后能端到端跑完、无需外部触发」的关键。</p>
+        <span class="src">apps/web/lib/background-worker.ts:129</span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">3</span>drainQueueOnce</h4>
+        <p>循环 <code>runNext()</code> 直到返回 <code>idle</code>，单轮上限 <b>50</b>（永不 idle 的队列不会自旋）。</p>
+        <div class="sub">排队耗尽<b>之后总是</b>尝试 <code>runScheduled()</code>（每日巡检，内核自带 per-slot 限频）——队列抛异常不饿死巡检。<br>未连接任何网盘时<b>静默跳过</b>整轮（不去构建会抛「PAN115_COOKIE is required」的客户端），用户连上后自动恢复。</div>
+        <span class="src">apps/web/lib/background-worker.ts:35</span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">4</span>runNextQueuedConsumption · 优先级认领</h4>
+        <p>单认领循环，按 <code>QUEUE_CONSUMPTION_ORDER</code> 依次问三遍，首个非 <code>idle</code> 即返回：</p>
+        <div class="sub"><code>type2_init</code> 单季 → <code>type1_package_init</code> 整包 → <code>movie_init</code>。</div>
+        <span class="src">packages/workflow/src/worker.ts:287 / :375</span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">5</span>runQueuedConsumption(kind)</h4>
+        <p>三个 <code>runQueued*</code> 入口的唯一实现（原三份同构 clone 合一）：</p>
+        <div class="sub">
+          <code>claimNextQueuedWorkflowRun</code> —— <b>事务内原子认领</b>，防双认领；无可认领 → <code>idle</code>。<br>
+          <code>resolveWorkerDeps</code> —— 按 run 的 owner 解析账号级 115 凭证 + 落地 CID 覆盖全局（多人协作转存到<b>对的人</b>的网盘）；model/provider/语言回落全局。<br>
+          <code>buildConsumptionContext</code> → <code>consumeClaimedRun(ctx)</code>。
+        </div>
+        <span class="src">packages/workflow/src/worker.ts:69 / :310</span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-fail" data-r="fail">
+        <h4><span class="idx">6</span>抛异常 → 转 B 之后的 G 区</h4>
+        <p>pipeline 本身不吞异常、也不调失败处理——由认领侧接住，走 <a href="#s-g">队列侧失败分派</a>。</p>
+        <span class="src">packages/workflow/src/worker.ts:358</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ B ============ -->
+  <section class="lane" id="s-b">
+    <div class="lane-head">
+      <span class="tag">B</span>
+      <h2>消费主干 · 七阶段</h2>
+      <span class="file"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/pipeline.ts">consumption/pipeline.ts</a> · <a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/acquisition-v2/workflow-v2.ts">workflow-v2.ts</a></span>
+    </div>
+    <p class="lane-intro">
+      <code>consumeClaimedRun(ctx)</code> 是唯一消费入口。①–⑥ 在 <code>runTvAcquisitionV2</code> / <code>runMovieAcquisitionV2</code> 内，
+      ⑦ 在 <code>stages/persist.ts</code>。<b>只有 ④ 真正烧配额与 token</b>，其余阶段均可安全重放。
+    </p>
+
+    <div class="stack">
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">0</span>加载生效规则（kind 前置）</h4>
+        <p><code>loadEpisodeRules</code>（<code>movie_init</code> <b>跳过</b>：电影身份判据是标题+年份，不解析集数）+ <code>loadPromptOverrides</code> → <code>compilePromptLookup</code>。</p>
+        <span class="src">pipeline.ts:86 / ruleset.ts:304</span>
+      </div>
+      <div class="arr">↓</div>
+    </div>
+
+    <div class="stages">
+      <div class="stage r-code" data-r="code" data-clean="1">
+        <div class="num">①</div>
+        <h4>prepareDirectories</h4>
+        <p>verify-or-create <code>Show / Season / staging</code> 目录树；staging <b>绝不在 Season 内</b>。父目录缺失 fail-loud。</p>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/stages/directories.ts">stages/directories.ts:29</a></span>
+      </div>
+      <div class="stage" data-r="fail">
+        <div class="num">②</div>
+        <h4>withStagingCleanup</h4>
+        <p>包住 ③–⑥：<b>成败必清 staging</b>——返回或抛错都清。斗破苍穹 335 文件泄漏的确定性兜底。</p>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/stages/directories.ts">directories.ts:40</a></span>
+      </div>
+      <div class="stage r-code" data-r="code" data-clean="1">
+        <div class="num">③</div>
+        <h4>computeNeed</h4>
+        <p>应有（<code>E01..latestAiredEpisode</code>）− 实有（<code>priorObtained</code> 的 DB 标记，<b>不扫网盘</b>）。<code>missing</code> 空 → <b>no-op 早退</b>：零搜索零转存零 LLM，仍照常走 ⑦ 落库。</p>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/stages/need.ts">stages/need.ts:32</a></span>
+      </div>
+      <div class="stage hot" data-r="ai code">
+        <div class="num">④</div>
+        <h4>runAcquisitionCoreStage</h4>
+        <p>★ 唯一烧配额/token 的阶段：装配沙盒 → 搜证据 → 字幕搜证据 → fast path 业务循环。全部 AI 升级点都发生在它内部。</p>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/stages/acquire.ts">stages/acquire.ts:104</a></span>
+      </div>
+      <div class="stage r-code" data-r="code">
+        <div class="num">⑤</div>
+        <h4>reconcileNeed</h4>
+        <p>跑后二次对账 = 认领侧 prior ∪ agent 本轮 <code>markObtained</code>（<b>不重扫网盘</b>），防中途状态漂移。</p>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/stages/need.ts">need.ts:48</a></span>
+      </div>
+      <div class="stage r-code" data-r="code">
+        <div class="num">⑥</div>
+        <h4>readLandedSize</h4>
+        <p>通知用的<b>真实体积</b>，best-effort；失败只省略该项，绝不因读体积搞坏一次好 run。</p>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/stages/directories.ts">directories.ts:58</a></span>
+      </div>
+      <div class="stage r-persist" data-r="persist">
+        <div class="num">⑦</div>
+        <h4>persistOutcome</h4>
+        <p>结果 + 全部证据<b>一次落库</b>；<code>finishedAt</code> 在跑后盖章（不能是认领时刻）。kind 差异只在此处收口。</p>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/stages/persist.ts">stages/persist.ts</a></span>
+      </div>
+    </div>
+
+    <div class="kindgrid">
+      <div class="kind r-code" data-r="code" data-clean="1">
+        <h4>type2_init</h4>
+        <p>队列优先级 1 · <code>mode:"type2"</code>，单季<br><span class="arrow">→</span> <code>persistSingleSeason</code></p>
+      </div>
+      <div class="kind r-code" data-r="code">
+        <h4>type1_package_init</h4>
+        <p>队列优先级 2 · <code>mode:"series"</code>，多季（画质取季表 LEGACY 值）<br><span class="arrow">→</span> <code>persistSeriesSeasons</code>（一季一条 <code>${runId}_s${n}</code>）+ <code>persistSeriesLockRun</code></p>
+      </div>
+      <div class="kind r-code" data-r="code">
+        <h4>type3_monitor</h4>
+        <p><b>不入队</b>，直接 running · <code>mode:"type3"</code><br><span class="arrow">→</span> <code>priorObtained = aired 未 obtained</code>，<code>neededHint</code> 同口径 → <code>persistSingleSeason</code></p>
+      </div>
+      <div class="kind r-code" data-r="code">
+        <h4>movie_init</h4>
+        <p>队列优先级 3 · 走 <code>runMovieAcquisitionV2</code><br><span class="arrow">→</span> <code>persistMovieRun</code>（集状态由引擎自带）</p>
+      </div>
+    </div>
+
+    <div class="note warn">
+      <span class="mk">异常语义</span>
+      <span>pipeline <b>不吞任何阶段异常</b>、也<b>不调</b> <code>handleWorkflowRunFailure</code>。由调用方分派：队列认领侧套既有 failure handler，巡检侧保留自带 catch。与今天逐调用点行为完全一致。</span>
+    </div>
+  </section>
+
+  <!-- ============ C ============ -->
+  <section class="lane" id="s-c">
+    <div class="lane-head">
+      <span class="tag">C</span>
+      <h2>④ 装配层 · 组合根</h2>
+      <span class="file"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/acquisition-v2/orchestrator.ts">acquisition-v2/orchestrator.ts</a></span>
+    </div>
+    <p class="lane-intro">
+      <code>runAcquisitionV2</code> 是唯一烧钱阶段的起点。它把真实 provider/executor 包装成沙盒，搜两份快照，然后按 <code>target.kind</code> 分发。
+      <b>沙盒边界</b>：agent 经 <code>CandidateRegistry</code> 只见候选 id，不见原始分享链接。
+    </p>
+
+    <div class="row wrap">
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">a</span>装配 TaskSandbox</h4>
+        <p><code>CandidateRegistry</code> + <code>RealResourceProviderV2</code> + <code>RealStorageV2</code> + 沙盒。</p>
+        <div class="sub">注入 need、staging 目录（Movie 是 targetMovieDirectoryId）、TV 的 targetSeasonDirectoryIds、<code>titleTerms</code> 关键词闸门（拒绝「2026 电影」这类烧配额词）、canonicalTitle / Year、movie 的 <code>subtitleFallback</code>。</div>
+        <span class="src">orchestrator.ts:98–149</span>
+      </div>
+      <div class="arr">→</div>
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">b</span>搜证据 primeRawSnapshot</h4>
+        <p>裸中文名、一次，不分发前。<b>这就是 primary 池唯一一次搜索</b>。</p>
+        <div class="sub">把快照写进 <code>observedSnapshots</code>，候选 id 从此<b>可被转存</b>（否则 <code>transferCandidate</code> 抛 <code>SANDBOX_SNAPSHOT_NOT_OBSERVED</code>）。fast path 直接给<b>这份快照</b>打分——它不是提示词指针，<b>它就是采集证据</b>。<br>D-1 只是<b>读</b>它，D-6 兜底是拿别名调<b>同一个方法</b>换关键词——两处都不是「预」什么。失败<b>不崩</b>：D-1 报「搜索源未响应」，不是「无资源」。</div>
+        <span class="src">orchestrator.ts:151–161</span>
+      </div>
+      <div class="arr">→</div>
+      <div class="n r-code" data-r="code">
+        <h4><span class="idx">c</span>字幕三闸门（软）</h4>
+        <p><code>assrtToken</code> 非空 ∧ <code>originCountries</code> 明确非 CN ∧ <code>executor.transferSubtitleUrl</code> 能力探测 → <code>primeSubtitleSnapshot</code>。</p>
+        <div class="sub">origin <b>未知 = 不合格</b>：国产短剧最可能缺 origin 元数据，而误判会在<b>每个巡检 tick 重复</b>烧共享 assrt 配额（20/min）。第三闸门是<b>能力探测</b>而非品牌名——哪天光鸭/夸克实现了方法，字幕自动点亮。软失败只置空快照。</div>
+        <span class="src">orchestrator.ts:179–197</span>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:12px">
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">d</span>分发 kind:"tv"</h4>
+        <p><code>runFastPathAcquisition</code> · 传 <code>isChineseNative</code>（= origin 含 CN）与 <code>episodeRules</code> / <code>promptOverrides</code>。</p>
+        <span class="src">orchestrator.ts:211–224</span>
+      </div>
+      <div class="arr">|</div>
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">d</span>分发 kind:"movie"</h4>
+        <p><code>runMovieFastPathAcquisition</code> · 字幕仅在 <code>!isChineseNative && subtitleActive</code> 时挂 <code>{ provider, preferredLanguage </code> }。</p>
+        <span class="src">orchestrator.ts:225–245</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ D ============ -->
+  <section class="lane" id="s-d">
+    <div class="lane-head">
+      <span class="tag">D</span>
+      <h2>TV / Anime · fast path 业务循环</h2>
+      <span class="file"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/fast-path/tv.ts">fast-path/tv.ts</a> · <a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/fast-path/landing.ts">landing.ts</a></span>
+    </div>
+    <p class="lane-intro">
+      两步候选池：primary（按标题搜）永远先试；别名兜底池只在 primary 无 A 或转存预算耗尽时才启动。
+      <b>两个池的转存预算相互独立</b>——primary 一个 A 都没有也试穷了 3 次，兜底池照样有它自己的 3 次。
+    </p>
+
+    <div class="stack">
+      <div class="n r-code" data-r="code budget" data-clean="1">
+        <h4><span class="idx">0</span>落点检查 inspectTargetDir</h4>
+        <p>DB 可能落后于磁盘（上个 run 已放文件、或崩溃中途留下），所以<b>先看目录</b>：解析出 code 且在库的集 → <code>markObtained</code> 并从 need 剔除，<b>绝不重搜重转</b>。</p>
+        <div class="sub">年守卫 <code>episodeDateConflict</code> 同样作用于在库文件——名字像 E11 但自带日期与播出日矛盾的，<b>不据此反标 obtained</b>（防历史错标件把缺集「自我认证」掉）。<br>
+        <code>onDiskCodes</code> 收集<b>全部</b>可解析 code（不只缺的）：整包归位时跳过它们，否则撞网盘同名自动 <code>(1)</code> 复制。<br>
+        <b>need 空 → 收尾</b>：零搜索、零转存、零 LLM。</div>
+        <span class="src">tv.ts:258–312</span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">1</span>读快照 rawSnapshotView</h4>
+        <p><b>零请求</b>——只读 C 里刚搜回来的那份快照（同一个对象），<b>不会再搜一次</b>。</p>
+        <div class="sub">无快照（C 的搜索未落地）→ 诚实报「暂无资源（搜索源未响应）」——源故障，<b>不是</b>「无资源」。<br>候选 0 条<b>且无别名</b> → 零 LLM 诚实终止。<br>候选 0 条<b>但有别名</b> → 不在此终止，阶段 2 会拿别名调<b>同一个方法</b>搜新证据。<br><code>urlById</code> 映射透出分享链接（只展示、不进 prompt）。</div>
+        <span class="src">tv.ts:314–346</span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">2</span>评分 gradeCandidates · A / B / C / D</h4>
+        <p>纯函数、零 LLM：标题规范化匹配 + 季/集数正则 + 中字标记正则 + 死链/同名异作排除。</p>
+        <div class="sub">
+          <b>A</b> = 标题精确命中 + 季对 + 中字 OK · <b>B</b> = 命中但缺季号/没标中字 · <b>C</b> = 部分命中疑似同名异作 · <b>D</b> = 不相关或已知死链，直接剔除。<br>
+          <b>隐形季号闸门</b>：<code>3.全集</code> 点号形态、裸 <code>N季</code> 也算「标题自带季」，与任务季不符直接降 C；<code>1-10季</code> 范围只作降级证据（范围外 C、范围内维持 B，<b>绝不作 A 证据</b>）；<code>2019.合集</code> / <code>全20集</code> 不误伤。
+        </div>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/acquisition-v2/candidate-grader.ts">candidate-grader.ts</a></span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-budget" data-r="budget">
+        <h4><span class="idx">3</span>阶段 1 · primary 池</h4>
+        <p>只要 primary 有 A 候选（或根本没有别名可兜底）就<b>先转 primary</b>——绝不在有 A 时提前跳兜底（PR #25：反「primary 14 个 A 被兜底池替换」）。</p>
+        <div class="sub">转存预算 <code>MAX_TRANSFER_ATTEMPTS = 3</code>，按「本池增量」独立记账。<br><code>tried</code> / <code>deadRetries</code> / <code>escalated</code> 跨池共享。</div>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/fast-path/budgets.ts">fast-path/budgets.ts</a> · tv.ts:431–458</span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-code r-ai" data-r="code ai" data-clean="1">
+        <h4><span class="idx">4</span>选片（升级点 ①）</h4>
+        <p>唯一 A → <b>代码直选、盲转</b>（score 挑赢家，零 LLM）。否则 <code>arbitrateSelection</code>：AI 单次调用、无工具，挑一个或放弃。</p>
+        <div class="sub">
+          发起前先发「AI 正在挑资源…」心跳——仲裁耗时数十秒且期间零推送，活动页不该像卡死。<br>
+          放弃 → <code>concludeUncovered</code> 诚实终止。<br>
+          <b>幻觉防御</b>：模型可能返回标题或编造的 id；非法 id 不得触 <code>SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT</code> 抛错炸掉整个 run，按放弃处理（安全未覆盖）。
+        </div>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/acquisition-v2/arbitrator.ts">arbitrator.ts:145</a> · tv.ts:110–191</span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-budget" data-r="budget code" data-clean="1">
+        <h4><span class="idx">5</span>转存循环</h4>
+        <p><code>while</code> <code>current ≠ null</code> ∧ 本池转存数 < <code>attemptBudget</code> ∧ <code>deadRetries &lt; 10</code>：</p>
+        <div class="sub"><code>tried.add</code> → <code>transferCandidate</code>（快照寻址走 <code>candidateSnapshotId</code>，合并证据池里每个候选回到自己的来源快照）→ <a href="#s-e">closeOutTvLanding</a> 收口。<br><b>死链是廉价探针，不占转存预算</b>；只有真实落盘的转存计入本池 <code>attempted</code>。</div>
+        <span class="src">tv.ts:198–249</span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-code" data-r="code budget">
+        <h4><span class="idx">6</span>阶段 2 · 兜底池 aliasesFallbackReSearch</h4>
+        <p>仅当 primary 无 A 候选、或 primary 预算耗尽仍未覆盖时启动。</p>
+        <div class="sub">
+          每个别名一次 <code>primeRawSnapshot</code>，按 target 携带顺序（英文原名 → zh-TW / zh-HK 译名），<b>命中 A 提前停</b>，上限 <code>MAX_FALLBACK_SEARCHES = 3</code> 轮；关键词去重（标题算已用）；单轮 provider 失败<b>保上一快照</b>继续下一别名。<br>
+          <b>§E 证据恢复</b>：兜底耗尽仍无 A，且 primary 有候选 → <b>合并 primary + 各轮兜底的证据池</b>继续仲裁/放弃。纯内存、按 id 去重（<b>不按标题</b>去重——同名异链是网盘常态）、primary 优先入池、<code>candidateSnapshots</code> 记归属。<b>零额外 PanSou 请求</b>，预算语义原样。<br>
+          修掉两个事故：狂飙 primary 45 候选被「最后一个兜底快照为空」覆盖丢掉；母狮案「只看最后一轮」吞掉 primary 的好候选。<br>
+          转存预算 <b>独立</b>：<code>MAX_FALLBACK_TRANSFER_ATTEMPTS = 3</code>。
+        </div>
+        <span class="src">landing.ts:258–362 · tv.ts:460–556</span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-term" data-r="term code">
+        <h4><span class="idx">7</span>耗尽尾段 · 诚实终止</h4>
+        <p>候选/预算耗尽 → 清暂存 → <code>reportNoCoverage</code>。诚实报告未覆盖，<b>下次巡检再来</b>——绝不伪造已获得。</p>
+        <span class="src">tv.ts:558–581</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ E ============ -->
+  <section class="lane" id="s-e">
+    <div class="lane-head">
+      <span class="tag">E</span>
+      <h2>落地收口 · LandingVerdict 状态机</h2>
+      <span class="file"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/fast-path/landing.ts">fast-path/landing.ts</a> · <code>closeOutTvLanding</code></span>
+    </div>
+    <p class="lane-intro">
+      一个候选的落地回合收敛为六种判定。<code>done</code> 非空 = 本轮终局，调用方直接 return；<code>done = null</code> 用 <code>next</code> 继续循环。
+      <b>TV 没有落盘诊断仲裁</b>——未全量对齐即清暂存换下一个候选（§43 全量对齐才落盘）。
+    </p>
+
+    <div class="svgwrap">
+      <svg class="sm" viewBox="0 0 960 740" role="img" aria-labelledby="smTitle smDesc">
+        <title id="smTitle">TV 落地收口状态机</title>
+        <desc id="smDesc">transferCandidate 返回后依次判定 systemicBlock、staging 是否为空、digest 是否通过、AI 集数映射校验是否通过，最终收敛到 clean / mapped_clean / dead / retry_other / systemic / abandon 六种判定。</desc>
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--line2)"/>
+          </marker>
+          <marker id="ah-ai" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--r-ai)"/>
+          </marker>
+          <marker id="ah-term" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--r-term)"/>
+          </marker>
+          <marker id="ah-fail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="var(--r-fail)"/>
+          </marker>
+        </defs>
+
+        <!-- entry -->
+        <g data-r="code">
+          <rect class="box" x="40" y="16" width="300" height="46" rx="8"/>
+          <text x="190" y="40" text-anchor="middle" font-weight="600">transferCandidate 返回</text>
+          <text class="t3" x="190" y="55" text-anchor="middle">sandbox 转存结果（暂存区落盘清单）</text>
+        </g>
+
+        <!-- gate 1 systemic -->
+        <g data-r="code">
+          <path class="edge" d="M190 62 L190 86" marker-end="url(#ah)"/>
+          <path class="diamond" d="M190 86 L296 120 L190 154 L84 120 Z"/>
+          <text x="190" y="118" text-anchor="middle">transfer.systemicBlock?</text>
+          <text class="t3" x="190" y="133" text-anchor="middle">配额 / 认证 / VIP</text>
+        </g>
+        <g data-r="fail">
+          <path class="edge fail" d="M296 120 L592 120" marker-end="url(#ah-fail)"/>
+          <text class="elbl" x="330" y="112">是 → 终局</text>
+          <rect class="term-rect" x="592" y="94" width="330" height="52" rx="8" stroke="var(--r-fail)"/>
+          <text class="term-t" x="606" y="118" fill="var(--r-fail)">■ systemic</text>
+          <text class="t2" x="606" y="136">停止硬磨：剩余候选同样失败 → 立即终止并写失败</text>
+        </g>
+
+        <!-- gate 2 dead -->
+        <g data-r="code">
+          <path class="edge" d="M190 154 L190 184" marker-end="url(#ah)"/>
+          <text class="elbl" x="200" y="176">否</text>
+          <path class="diamond" d="M190 184 L296 218 L190 252 L84 218 Z"/>
+          <text x="190" y="216" text-anchor="middle">staging 为空?</text>
+          <text class="t3" x="190" y="231" text-anchor="middle">落盘 0 个文件</text>
+        </g>
+        <g data-r="budget">
+          <path class="edge" d="M296 218 L592 218" marker-end="url(#ah)"/>
+          <text class="elbl" x="330" y="210">是 → 死链探针</text>
+          <rect class="term-rect" x="592" y="188" width="330" height="60" rx="8" stroke="var(--r-budget)"/>
+          <text class="term-t" x="606" y="212" fill="var(--r-budget)">■ dead · 换候选</text>
+          <text class="t2" x="606" y="230">deadRetries + 1，<tspan font-weight="600">不占转存预算</tspan>；推进 next 候选</text>
+          <text class="t2" x="606" y="244">上限 MAX_DEAD_LINK_RETRIES = 10</text>
+        </g>
+
+        <!-- real transfer -->
+        <g data-r="code">
+          <path class="edge" d="M190 252 L190 288" marker-end="url(#ah)"/>
+          <text class="elbl" x="200" y="274">否 → 真实落盘</text>
+          <rect class="box" x="40" y="288" width="300" height="40" rx="8"/>
+          <text x="190" y="312" text-anchor="middle" font-weight="600">attempted.add(current)</text>
+          <path class="edge" d="M190 328 L190 350" marker-end="url(#ah)"/>
+          <rect class="box" x="40" y="350" width="300" height="54" rx="8"/>
+          <text x="190" y="374" text-anchor="middle" font-weight="600">digestStaging</text>
+          <text class="t3" x="190" y="391" text-anchor="middle">集数解析 + 年守卫 + 「第N期」Part 锚定</text>
+        </g>
+
+        <!-- gate 3 digest passes -->
+        <g data-r="code">
+          <path class="edge" d="M190 404 L190 426" marker-end="url(#ah)"/>
+          <path class="diamond" d="M190 426 L300 462 L190 498 L80 462 Z"/>
+          <text x="190" y="460" text-anchor="middle">digest.passes?</text>
+          <text class="t3" x="190" y="476" text-anchor="middle">全量对齐 need</text>
+        </g>
+        <g data-r="code">
+          <path class="edge" d="M300 462 L368 462" marker-end="url(#ah)"/>
+          <text class="elbl" x="316" y="454">是</text>
+          <rect class="box" x="368" y="432" width="200" height="60" rx="8"/>
+          <text x="468" y="456" text-anchor="middle" font-weight="600">finalizeLanding</text>
+          <text class="t3" x="468" y="473" text-anchor="middle">rename → 归位 → mark</text>
+          <text class="t3" x="468" y="486" text-anchor="middle">skipCodes=已在库 · onlyCodes=need</text>
+          <path class="edge" d="M568 462 L592 462" marker-end="url(#ah)"/>
+          <rect class="term-rect" x="592" y="432" width="330" height="60" rx="8" stroke="var(--r-code)" fill="var(--surface2)"/>
+          <text class="term-t" x="606" y="456" fill="var(--r-code)">■ clean · 终局</text>
+          <text class="t2" x="606" y="474">改名 + 归位到 Season + markObtained</text>
+          <text class="t2" x="606" y="488">零 LLM；非缺集随 wipe 丢弃</text>
+        </g>
+        <g data-r="fail">
+          <text class="elbl" x="380" y="512" fill="var(--r-fail)">finalize 抛错 → wipe staging + ■ abandon（终局，绝不伪造已获得）</text>
+        </g>
+
+        <!-- mapping -->
+        <g data-r="ai code">
+          <path class="edge" d="M190 498 L190 534" marker-end="url(#ah)"/>
+          <text class="elbl" x="200" y="520">否</text>
+          <rect class="box" x="40" y="534" width="300" height="62" rx="8" stroke="var(--r-ai)"/>
+          <text x="190" y="558" text-anchor="middle" font-weight="600" fill="var(--r-ai)">tryEpisodeMapping</text>
+          <text class="t3" x="190" y="575" text-anchor="middle">AI 集数映射 · 仅 TV 单季（升级点 ②）</text>
+          <text class="t3" x="190" y="589" text-anchor="middle">多季 / 代码已全覆盖 / 全衍生文件 → "no"</text>
+        </g>
+        <g data-r="ai code">
+          <path class="edge" d="M190 596 L190 622" marker-end="url(#ah)"/>
+          <path class="diamond" d="M190 622 L302 658 L190 694 L78 658 Z"/>
+          <text x="190" y="656" text-anchor="middle">映射校验通过?</text>
+          <text class="t3" x="190" y="672" text-anchor="middle">三重校验（见下）</text>
+        </g>
+        <g data-r="code">
+          <path class="edge ai" d="M302 658 L592 658" marker-end="url(#ah-ai)"/>
+          <text class="elbl ai" x="360" y="650">"passed"</text>
+          <rect class="term-rect" x="592" y="626" width="330" height="64" rx="8" stroke="var(--r-ai)"/>
+          <text class="term-t" x="606" y="650" fill="var(--r-ai)">■ mapped_clean · 终局</text>
+          <text class="t2" x="606" y="668">finalizeLanding(overrides) 后与 clean 同收尾</text>
+          <text class="t2" x="606" y="682">escalated = true（AI 补认参与过）</text>
+        </g>
+        <g data-r="term code">
+          <path class="edge" d="M190 694 L190 722 L592 722" marker-end="url(#ah)"/>
+          <text class="elbl" x="200" y="710">"failed" / "no"</text>
+          <rect class="term-rect" x="592" y="706" width="330" height="32" rx="8" stroke="var(--r-term)"/>
+          <text class="term-t" x="606" y="727" fill="var(--r-term)">■ retry_other → wipe staging</text>
+        </g>
+      </svg>
+    </div>
+
+    <div class="note" style="margin-top:12px">
+      <span class="mk">回环</span>
+      <span><code>retry_other</code> / <code>dead</code> 都不产生 <code>done</code>：循环取 <code>nextCandidate(grading, tried)</code> 继续；池内无下一候选则退出本池 → primary 试尽后落阶段 2 兜底 → 两池都耗尽才走 <a href="#s-d">诚实终止</a>。</span>
+    </div>
+
+    <div class="cols" style="margin-top:14px">
+      <div class="n r-ai" data-r="ai">
+        <h4>映射三重校验（代码，不信任 AI）</h4>
+        <p>① 文件名必须在<b>本次落盘</b>的全部视频清单里（防幻觉文件名）；</p>
+        <div class="sub">② 一个集数<b>最多被映射一次</b>（重复 code → 整表作废）；<br>③ <b>期号一致性</b>：文件名里的「第M期」与该集 TMDB 集名里的 <code>Episode N</code> 不符 → 整表作废（防 AI 把不存在的期硬安上最新集号迎合 need）。<br>无 <code>episodeNames</code> 时第 ③ 条惰性。</div>
+        <span class="src">landing.ts:52–205</span>
+      </div>
+      <div class="n r-code" data-r="code">
+        <h4>两个不校验的东西（有意为之）</h4>
+        <p>映射校验<b>不看</b> code 形状（SxxExx）、也<b>不看</b>季与任务是否匹配。</p>
+        <div class="sub">单季任务下越季 code 会被 digest 的 need 集合运算自然排除（need 只含目标季的 <code>SxxExx</code>），不会误入库——但没有显式闸门。<br>多季任务整段不调用本函数（入口的单季判定直接返回 <code>"no"</code>）。</div>
+      </div>
+      <div class="n r-fail" data-r="fail">
+        <h4>「no」不冒领 AI 归因</h4>
+        <p><code>"no"</code>（多季 / 代码已全覆盖 / 全衍生文件）一次 AI 都没跑：</p>
+        <div class="sub"><code>escalated</code> 不得虚增，结账行不得写「AI 介入」。<br>反之也<b>绝不能</b>在这里赋 false——它可能已带选片仲裁置的 true，覆盖会让 <code>runCheckout</code> 谎报零 AI。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ F ============ -->
+  <section class="lane" id="s-f">
+    <div class="lane-head">
+      <span class="tag">F</span>
+      <h2>Movie · 分支差异</h2>
+      <span class="file"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/fast-path/movie.ts">fast-path/movie.ts</a></span>
+    </div>
+    <p class="lane-intro">
+      同一条主干、同两个候选池、同一套预算，但身份判据与落地判定都不同：<b>不解析集数、绝不重转、多一档代码直收</b>。
+    </p>
+
+    <div class="cols">
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">0</span>落点检查：绝不重转</h4>
+        <p>目录里已有视频 → 直接 <code>markObtained(["MOVIE"])</code> 并结束。</p>
+        <div class="sub">一个先前 run 放了文件、或崩溃中途留下的残件，都<b>不重搜重转</b>（电影没有集码可判断部分覆盖）。</div>
+        <span class="src">movie.ts:618–640</span>
+      </div>
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">1</span>身份判据 = 标题 + 年份</h4>
+        <p><code>gradeCandidates</code> 传 <code>seasons: []</code> + <code>year</code>，评分器走年份判据而非季/集正则。</p>
+        <span class="src">movie.ts:668–673</span>
+      </div>
+      <div class="n r-code" data-r="code">
+        <h4><span class="idx">2</span>digest 三支</h4>
+        <p><code>digestMovieStaging</code> 判定「是不是<b>一部正片</b>」：</p>
+        <div class="sub"><b>passes</b>（一部正片）→ 字幕软阶段 → <code>finalizeMovieLanding</code><br><b>dominant</b>（多视频但正片明显占优）→ <b>代码直收，零 LLM</b><br>都不是（脏包）→ <code>arbitrateMovieDiagnosis</code>（AI，升级点 ③）</div>
+        <span class="src">movie.ts:419–466</span>
+      </div>
+      <div class="n r-code" data-r="code" data-clean="1">
+        <h4><span class="idx">3</span>代码直收判据</h4>
+        <p>主片体积 &gt; 其余之和 × <code>ratio</code>，且附件 ≤ <code>junkMaxBytes</code> → 保留正片、丢弃其余（花絮 / trailer）。</p>
+        <div class="sub">不新增 AI 升级，但<b>绝不抹掉</b>前面选片仲裁已置的 <code>escalated</code>。判据数字与被删名单 + 体积都写进日志。</div>
+        <span class="src">movie.ts:526–551</span>
+      </div>
+      <div class="n r-ai" data-r="ai">
+        <h4><span class="idx">4</span>诊断仲裁（活的）</h4>
+        <p><code>arbitrateMovieDiagnosis</code> → <code>accept</code> / <code>retry_other</code> / <code>abandon</code>，三支都走统一收尾。</p>
+        <div class="sub">与 TV 的 <code>arbitrateDiagnosis</code> 是<b>不同函数</b>：TV 那个已死（零调用方，issue #43 待清，代码还留在 <code>arbitrator.ts</code>）。</div>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/acquisition-v2/arbitrator.ts">arbitrator.ts:242</a></span>
+      </div>
+      <div class="n r-code" data-r="code">
+        <h4><span class="idx">5</span>字幕软目标</h4>
+        <p>视频干净落地后，<code>pickSubtitle</code> 确定性选包（语言 → ★ 数 → 字幕组 → 新鲜度），<code>transferSubtitle</code> 落盘，再由 <code>finalizeMovieLanding</code> 把视频 + 字幕一起改名为 <code>Title (Year).ext</code>。</p>
+        <div class="sub"><b>任何失败只记 warning，绝不阻塞电影入库</b>。assrt 抖动 / 无候选 / 无可用文件都一样。<br>这是 <code>subtitleActive</code> 三闸门通过才会被 orchestrator 挂进来的阶段。</div>
+        <span class="src">movie.ts:105–162 · subtitle-picker.ts</span>
+      </div>
+      <div class="n r-term" data-r="term code">
+        <h4><span class="idx">6</span>retry / abandon：清残留</h4>
+        <p><code>clearMovieLanding</code>——staging <b>===</b> 电影目录，所以 <code>discardStaging</code> 会被拒。</p>
+        <div class="sub">只删文件、不 wipe 目录本体；残留的空包装目录由下一次成功的 <code>flattenMovie</code> 顺手剥掉。<br>归位失败一律 wipe + <code>reportNoCoverage</code>（诚实终止）。</div>
+        <span class="src">movie.ts:83–88 / :835–847</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ G ============ -->
+  <section class="lane" id="s-g">
+    <div class="lane-head">
+      <span class="tag">G</span>
+      <h2>失败分派 · 两条不同语义</h2>
+      <span class="file"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/worker.ts">worker.ts</a> · <a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/repository.ts">repository.ts</a></span>
+    </div>
+    <p class="lane-intro">
+      同一条 pipeline，两条不同的失败出口。区别在<b>要不要重试</b>、<b>保不保留 episode 态</b>。
+    </p>
+
+    <div class="cols">
+      <div class="n r-fail" data-r="fail">
+        <h4>队列侧 · handleWorkflowRunFailure</h4>
+        <p>type2 / series / movie 三个认领入口共用。</p>
+        <div class="sub">
+          <b>瞬态错误</b>（网络 / TLS / socket，见 <code>isTransientAcquisitionError</code>）且次数 &lt; <code>AUTO_REQUEUE_MAX = 3</code> → 退避重入队：<code>[1min, 5min, 15min]</code>，run 回到 <code>queued</code> 等 worker 下个 <code>nextAttemptAt</code> 后重新认领，并发 <code>retrying</code> 通知。<br>
+          <b>否则</b> → 终态 <code>failed</code> + <code>failed</code> 通知（不再是旧的空 <code>notifications:[]</code> 静默失败）。<br>
+          <b>分支差异（承重）</b>：<code>saveWorkflowRunSnapshot</code> 会先删季的视频桶再插回来的。<br>
+          · 重入队：run 还在飞行中 → <b>保留</b> claimed 的子记录，否则 TV/series run 会在重试中途丢掉预留的 episode 桶。<br>
+          · 终态失败：清掉 episode 态——首次获取失败的季不该残留为「已追踪」。<br>
+          <b>冻结</b>：品牌网盘 <code>AuthError</code>（cookie/token 死）→ <code>onAuthErrorFreeze</code> 冻结该网盘，队列拒绝更多任务直到重新绑定。<b>LLM 401 不算</b>品牌 AuthError（只有五个 <code>*AuthError</code> 类触发）。冻结钩子自身失败仅记日志。
+        </div>
+        <span class="src">worker.ts:198–280 · repository.ts:1279</span>
+      </div>
+      <div class="n r-fail" data-r="fail">
+        <h4>巡检侧 · 自带 catch</h4>
+        <p>type3 巡检 + <code>patrolMovie</code> 各自包 catch，<b>语义刻意不同</b>。</p>
+        <div class="sub">
+          <b>不重试</b>——无人值守的定时巡检不该自动重跑。<br>
+          <b>保留 episode 态</b>——这是已有追踪记录的季，失败不能让它「消失」。<br>
+          直接写 <code>failed</code>（<code>finishedAt</code> 盖现在）。<br>
+          一季失败<b>不阻塞</b>其它季：<code>runScheduledType3Monitoring</code> 遍历所有账号所有追踪季，逐个 reserve + 跑。<br>
+          品牌 AuthError 同样触发冻结（<code>maybeFreezeOnBrandAuthError</code>）。
+        </div>
+        <span class="src">worker.ts:430–629 / :636–815</span>
+      </div>
+    </div>
+
+    <div class="note fail">
+      <span class="mk">巡检入口</span>
+      <span>type3 与电影巡检都<b>不入队</b>：<code>reserveWorkflowRun</code> 直接造一个 <code>status:"running"</code> 的 run（reservation 防止并发重复跑同一季），再把 run 状态合成一份 <code>PersistedWorkflowRunSnapshot</code> 喂给同一个 <code>consumeClaimedRun</code>。电影侧先过三道闸：<code>moviesParentDirectoryId</code> 已配、anchor 集<b>未</b> obtained、<code>isMovieUnreleased</code>（预定但未上映的片保持 reserved，<b>上映前绝不跑</b>）。</span>
+    </div>
+  </section>
+
+  <!-- ============ H ============ -->
+  <section class="lane" id="s-h">
+    <div class="lane-head">
+      <span class="tag">H</span>
+      <h2>预算 · AI 升级点 · kind 差异矩阵</h2>
+    </div>
+
+    <div class="aside-grid">
+      <div class="card" style="--c:var(--r-budget)">
+        <h3><span class="dot"></span>硬预算 <code>fast-path/budgets.ts</code></h3>
+        <ul>
+          <li><b>primary 池</b>真实转存 ≤ <code>3</code>（<code>MAX_TRANSFER_ATTEMPTS</code>）</li>
+          <li><b>兜底池独立</b>转存 ≤ <code>3</code>（<code>MAX_FALLBACK_TRANSFER_ATTEMPTS</code>）——primary 全废兜底照样有配额</li>
+          <li>死链探测 ≤ <code>10</code>（<code>MAX_DEAD_LINK_RETRIES</code>）——<b>不占</b>转存预算，跨两阶段共享（狂飙 45 候选的教训）</li>
+          <li>别名兜底重搜 ≤ <code>3</code> 轮（<code>MAX_FALLBACK_SEARCHES</code>）——保护共享 PanSou 配额</li>
+          <li>队列侧退避重入队 ≤ <code>3</code> 次，<code>1min / 5min / 15min</code></li>
+          <li>孤儿恢复重入队 ≤ <code>5</code> 次（防毒任务跨重启无限循环）</li>
+          <li>单 tick 排空 ≤ <code>50</code> 个 run</li>
+        </ul>
+      </div>
+
+      <div class="card" style="--c:var(--r-ai)">
+        <h3><span class="dot"></span>AI 升级点（单次调用、无工具）</h3>
+        <ul>
+          <li><b>选片</b> <code>arbitrateSelection</code>：无唯一 A → 挑一个或放弃（TV / movie 各一款）</li>
+          <li><b>集数映射</b> <code>arbitrateEpisodeMapping</code>：TV 单季代码解析不出集数 → 给 fileName→SxxExx 映射，<b>只给映射不定收否</b>（收否仍由 digest 客观判定）</li>
+          <li><b>movie 诊断</b> <code>arbitrateMovieDiagnosis</code>：落盘不像一部正片 → accept / retry_other / abandon</li>
+          <li>回复解析失败一律<b>保守降级</b>；TV <b>没有</b>落盘诊断仲裁（§43）</li>
+          <li>已知 gap：<code>arbitrateDiagnosis</code>（TV 版）零调用方，issue #43 待清</li>
+        </ul>
+      </div>
+
+      <div class="card" style="--c:var(--r-term)">
+        <h3><span class="dot"></span>落地判定（六种 verdict）</h3>
+        <ul>
+          <li><code>clean</code> / <code>mapped_clean</code> → finalize 落库（改名 + 归位 + mark）</li>
+          <li><code>dead</code> → 死链探针换候选；<code>systemic</code> → 立即终止，不硬磨</li>
+          <li><code>retry_other</code> → <b>未全量对齐就不落盘</b>：清暂存换候选（§43）</li>
+          <li><code>abandon</code> → 归位异常，wipe 后诚实未覆盖</li>
+          <li>候选/预算耗尽 → <code>reportNoCoverage</code>：诚实未覆盖，下次巡检再来</li>
+        </ul>
+      </div>
+
+      <div class="card" style="--c:var(--r-code)">
+        <h3><span class="dot"></span>为什么是这条路径</h3>
+        <ul>
+          <li>旧 agent 每步重发完整 system prompt（4–6k）+ 工具定义（4–8k）≈ <b>固定 ~10k tokens/请求</b>，60 步 × 每天巡逻 N 部剧 → 月度账单线性放大</li>
+          <li>LLM 从「60 步工具循环的司机」降级为「最多三次单点裁判」，<b>干净路径零 LLM</b>（P1 / P3 已落地）</li>
+          <li>已知 gap：<b>搜索配方序列</b>（裸标题 → 繁体 → 英文换词）未接进快路径——裸标题搜不到就直接放弃；<code>qualityPreference</code> 被快路径忽略，只看候选标题里的画质 token</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3 style="margin:22px 0 10px; font-size:14px; font-weight:650">kind 差异矩阵</h3>
+    <div class="tbl-scroll">
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th></th>
+            <th>type2_init</th>
+            <th>type1_package_init</th>
+            <th>type3_monitor</th>
+            <th>movie_init</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>认领方式</th>
+            <td>队列，优先级 1</td>
+            <td>队列，优先级 2</td>
+            <td><b>不入队</b>，reservation 直接 running</td>
+            <td>队列，优先级 3</td>
+          </tr>
+          <tr>
+            <th>实有来源（③）</th>
+            <td>空</td>
+            <td>空</td>
+            <td>DB obtained 标记（<b>不扫网盘</b>）</td>
+            <td>目录内是否已有视频</td>
+          </tr>
+          <tr>
+            <th>身份判据</th>
+            <td>标题 + 季/集</td>
+            <td>标题 + 多季</td>
+            <td>标题 + 单季</td>
+            <td>标题 + <b>年份</b></td>
+          </tr>
+          <tr>
+            <th>集数解析</th>
+            <td>加载规则</td>
+            <td>加载规则</td>
+            <td>加载规则</td>
+            <td><b>不加载</b></td>
+          </tr>
+          <tr>
+            <th>AI 集数映射</th>
+            <td>仅单季可用</td>
+            <td><b>禁用</b>（多季入口直接 no）</td>
+            <td>仅单季可用</td>
+            <td><b>无此阶段</b></td>
+          </tr>
+          <tr>
+            <th>落库（⑦）</th>
+            <td><code>persistSingleSeason</code></td>
+            <td>一季一条 + <code>persistSeriesLockRun</code></td>
+            <td><code>persistSingleSeason</code></td>
+            <td><code>persistMovieRun</code></td>
+          </tr>
+          <tr>
+            <th>失败语义</th>
+            <td>瞬态退避重入队；终态清 episode 态</td>
+            <td>同上</td>
+            <td><b>不重试</b>，保留 episode 态，直接 failed</td>
+            <td>同 type2</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note term">
+      <span class="mk">挂着的待办</span>
+      <span>① 部分覆盖到底怎么处置（用户 2026-09-06 明确搁置，§43）——当前行为是「AI 补不全就不落盘，清包换候选，预算耗尽才诚实报未覆盖」；② 字幕问题（assrtToken 未配置 + 夸克不支持字幕转存 → 夸克上的外语片没有中字，三选一未拍板）；③ 多季整包流程需重新规划（现状硬门槛是 <code>seasons.length !== 1 → no</code>，放开 AI 补认需同时补提示词按季给集号表、加季归属校验、给 <code>type1</code> 分支接上 <code>episodeAirDates</code> + <code>episodeNames</code>）。</span>
+    </div>
+  </section>
+
+  </main>
+
+  <footer class="foot">
+    依据 <code>main</code> 工作树实读源码绘制 · 关键源文件：<code>worker.ts</code> · <code>consumption/pipeline.ts</code> · <code>acquisition-v2/workflow-v2.ts</code> · <code>acquisition-v2/orchestrator.ts</code> · <code>consumption/fast-path/{tv,landing,movie,budgets}.ts</code> · <code>acquisition-v2/arbitrator.ts</code> · <code>consumption/stages/*</code><br>
+    与仓库既有 <code>docs/consumption-after-claim-flow.{architecture,workflow}.json</code> 及 <code>/vol1/1000/docs/mediary-scout-consumption-refactor-design.md</code> 同一模型，未引入新术语。
+  </footer>
+</div>
+
+<script>
+(function(){
+  var root=document.documentElement;
+  var btn=document.getElementById('themeBtn');
+  var saved=null;
+  try{saved=localStorage.getItem('mc-theme');}catch(e){}
+  function apply(t){
+    root.setAttribute('data-theme',t);
+    btn.textContent=t==='dark'?'浅色':'深色';
+    btn.setAttribute('aria-pressed',String(t==='light'));
+  }
+  apply(saved==='light'?'light':(saved==='dark'?'dark':'dark'));
+  btn.addEventListener('click',function(){
+    var next=root.getAttribute('data-theme')==='dark'?'light':'dark';
+    apply(next);
+    try{localStorage.setItem('mc-theme',next);}catch(e){}
+  });
+
+  /* ---- legend filters ---- */
+  var targets=Array.prototype.slice.call(document.querySelectorAll('[data-r],[data-clean]'));
+  var chips=Array.prototype.slice.call(document.querySelectorAll('button.chip[data-filter]'));
+  var active={};
+  function applyFilter(){
+    var keys=Object.keys(active).filter(function(k){return active[k];});
+    var has=keys.length>0;
+    targets.forEach(function(n){
+      var on;
+      if(!has){on=true;}
+      else{
+        on=false;
+        var r=(n.getAttribute('data-r')||'').split(/\s+/);
+        for(var i=0;i<keys.length;i++){
+          var f=keys[i];
+          if(f==='clean'){ if(n.getAttribute('data-clean')!==null){on=true;break;} }
+          else{ if(r.indexOf(f)!==-1){on=true;break;} }
+        }
+      }
+      n.classList.toggle('dim',!on);
+    });
+    document.getElementById('clearFilters').style.visibility=has?'visible':'hidden';
+  }
+  chips.forEach(function(c){
+    c.addEventListener('click',function(){
+      var f=c.getAttribute('data-filter');
+      active[f]=!active[f];
+      c.setAttribute('aria-pressed',String(!!active[f]));
+      applyFilter();
+    });
+  });
+  document.getElementById('clearFilters').addEventListener('click',function(){
+    Object.keys(active).forEach(function(k){active[k]=false;});
+    chips.forEach(function(c){c.setAttribute('aria-pressed','false');});
+    applyFilter();
+  });
+  applyFilter();
+
+  /* ---- sticky nav highlighting ---- */
+  var links=Array.prototype.slice.call(document.querySelectorAll('nav.chips a'));
+  var secs=links.map(function(a){return document.querySelector(a.getAttribute('href'));});
+  if('IntersectionObserver' in window){
+    var io=new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if(en.isIntersecting){
+          links.forEach(function(a){
+            a.classList.toggle('active',a.getAttribute('href')==='#'+en.target.id);
+          });
+        }
+      });
+    },{rootMargin:'-74px 0px -65% 0px',threshold:0});
+    secs.forEach(function(s){if(s)io.observe(s);});
+  }
+})();
+</script>
+</body>
+</html>
