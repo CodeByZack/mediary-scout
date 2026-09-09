@@ -68,11 +68,11 @@ export interface EpisodeMappingArbitration {
   reasoning: string;
 }
 
-/** Arbitrate how to map unparsed landed files to episode codes (escalation #2a). */
+/** Arbitrate how to map landed files to episode codes (escalation #2a). */
 export async function arbitrateEpisodeMapping(options: {
   model: LanguageModel;
-  /** 落盘文件名列表(代码解析不出的那些)。 */
-  unparsedFiles: string[];
+  /** 全部落盘视频文件名(减衍生内容/杂物)——含代码已解析出的,不限于解析失败的那些。 */
+  allFiles: string[];
   title: string;
   seasons: number[];
   /** 已知集数范围(如 1..39),供模型排除越界数字。 */
@@ -85,10 +85,10 @@ export async function arbitrateEpisodeMapping(options: {
     `已知集数范围:${options.knownEpisodeRange ? `${options.knownEpisodeRange.min} ~ ${options.knownEpisodeRange.max}` : "未知"}`,
     "",
     "需要识别集数的文件:",
-    ...options.unparsedFiles.map((name, i) => `${i + 1}. ${name}`),
+    ...options.allFiles.map((name, i) => `${i + 1}. ${name}`),
   ].join("\n");
 
-  logAiCall(options.model, "集数映射仲裁", options.title, options.unparsedFiles.join(",").length);
+  logAiCall(options.model, "集数映射仲裁", options.title, options.allFiles.join(",").length);
   const result = await generateText({
     model: options.model,
     system: resolvePromptText("episode-mapping", options.promptOverrides),
@@ -101,7 +101,7 @@ export async function arbitrateEpisodeMapping(options: {
       throw new Error("ARBITRATOR_BAD_MAPPING: mapping missing");
     }
     // 只保留合法 code 形状的条目;文件名必须是输入清单里的(防幻觉文件名)。
-    const allowed = new Set(options.unparsedFiles);
+    const allowed = new Set(options.allFiles);
     const cleanMapping: Record<string, string> = {};
     const unmappedList: string[] = [];
     for (const [fileName, code] of Object.entries(parsed.mapping)) {
