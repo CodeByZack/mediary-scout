@@ -156,7 +156,7 @@ You are deploying Mediary Scout, a self-hosted media-acquisition app. Follow the
 - `docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d` (first build takes a few minutes)
 - Multi-user: add `MEDIA_TRACK_MULTI_USER=1` to `.env`, then `docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d web`
 - Open `http://<host>:3000`, walk the user through Settings (drive / LLM / optional extras)
-- Verify it's up, report the URL, and tell them how to upgrade (`git pull && ./scripts/deploy.sh`)
+- Verify it's up, report the URL, and tell them how to upgrade (`git pull && ./deploy/docker/deploy.sh` — it rebuilds, restarts, and self-verifies the running container serves the pulled commit)
 ```
 
 > **Disclaimer.** Mediary Scout is **open-source, self-hosted software**. It is **not** offered, and never will be offered, as a hosted service — you run your own instance and bring your own drive / LLM / metadata credentials. It performs the same kinds of file operations you could do by hand in your own cloud drive. See [docs/distribution-and-legal-positioning.md](docs/distribution-and-legal-positioning.md) for the project's stance.

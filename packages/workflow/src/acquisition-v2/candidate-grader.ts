@@ -9,8 +9,8 @@ import { normalizeForTitleMatch } from "../planning-search-gate.js";
  *
  * The grading rules (§6.3) are all mechanical: normalized title match + a
  * season/episode-code regex + a Chinese-sub marker regex + a dead-link/same-work
- * rejection. The marker regexes live here now (they used to exist only as prompt
- * text in task-agents.ts / skill.ts) so code and prompt share one source of truth.
+ * rejection. The marker regexes live here (not only in prompt text) so code and
+ * prompt share one source of truth.
  */
 
 /** A candidate as the provider hands it to the sandbox — id + title only. */

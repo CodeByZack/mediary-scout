@@ -2,7 +2,7 @@ import type { WorkflowRepository } from "../repository.js";
 import { phaseProgress, type AgentToolEvent } from "./activity.js";
 
 /**
- * Build the per-tool-call progress sink the runner wires into the agent loop. It
+ * Build the per-tool-call progress sink the runner wires into the fast path. It
  * turns each real tool event into a monotonic, phase-weighted progress write on
  * the run (for the activity page). Fire-and-forget + error-swallowing: a progress
  * write must NEVER throw and fail an otherwise-good acquisition.

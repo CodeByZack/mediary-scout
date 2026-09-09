@@ -1,7 +1,5 @@
 /**
- * 任务目标形状 + need 计算 —— 从旧 task-agents.ts 拆出，专供 fast path / orchestrator 消费。
- * 原 task-agents.ts 的 agent loop 入口 + prompt 构建器已退役(2026-09-02 issue #34)，
- * 此文件是唯一消费者引用这些符号的新落脚点。
+ * 任务目标形状 + need 计算 —— 供 fast path / orchestrator 消费。
  */
 
 export function needForTvTarget(target: { missingEpisodes: string[] }): string[] {

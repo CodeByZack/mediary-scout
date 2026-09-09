@@ -96,8 +96,8 @@ export interface RunAcquisitionV2Result {
 }
 
 export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promise<RunAcquisitionV2Result> {
-  // Every task's first log line names the drive it writes to — covers fast-path,
-  // agent loop, and interrogation with ONE marker at the composition root.
+  // Every task's first log line names the drive it writes to — one marker at the
+  // composition root covers every path.
   let providerLabel = request.storageProvider ?? "unknown";
   try {
     providerLabel = getStorageBrand(providerLabel).label;
@@ -198,10 +198,9 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
 
   const isChineseNative = origins.includes("CN");
   // The movie route is FULLY fast-path now (zero-LLM acquisition, including
-  // subtitles). A foreign film with a 中文 subtitle preference USED to escalate
-  // to the LLM movie agent for assrt 选包 + 软兜底; that agent loop is real but
-  // expensive — it burned a full model loop + up to 8+2 searches even when the
-  // drive had NO subtitle capability at all (夸克 executor lacks
+  // subtitles). Escalating a foreign film with a 中文 subtitle preference to an
+  // LLM selection step would burn a full model loop + up to 8+2 searches even
+  // when the drive had NO subtitle capability at all (夸克 executor lacks
   // transferSubtitleUrl — the tools never even registered). The deterministic
   // subtitle picker (subtitle-picker.ts) approximates the selection policy in
   // code: language-preference match > ★ vote > 口碑组 > freshness.
