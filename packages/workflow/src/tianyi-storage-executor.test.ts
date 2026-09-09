@@ -181,7 +181,7 @@ describe("TianyiStorageExecutor.transfer", () => {
   });
 
   it("partial 和谐: status stays failed while materializedFileIds still carries the landed ids", async () => {
-    // failed>0 with SOME files landed — downstream (sandbox/agent-loop guards)
+    // failed>0 with SOME files landed — downstream (sandbox guards)
     // depends on exactly this combination: failed status + non-empty landed ids.
     let landed = false;
     const listFiles = vi.fn<TianyiClient["listFiles"]>(async () =>

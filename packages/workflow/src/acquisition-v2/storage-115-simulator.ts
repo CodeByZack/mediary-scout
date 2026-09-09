@@ -83,7 +83,7 @@ export interface StorageV2 {
   /** Remove a directory and everything nested under it (the flatten peel-off). */
   removeDirectory(input: { directoryId: string }): Promise<{ removed: string[] }>;
   /** Subtitle direct-link landing (test-double): drops a same-named file into the
-   *  target dir so sandbox/agent-loop tests work without a real 115 round-trip.
+   *  target dir so sandbox tests work without a real 115 round-trip.
    *  No workflowRunId here: run identity is the ADAPTER's business (RealStorageV2
    *  scopes attempts to its own run) — callers must not pretend to control it. */
   transferSubtitleUrl(input: {

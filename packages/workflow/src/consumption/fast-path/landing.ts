@@ -607,8 +607,8 @@ export async function closeOutTvLanding(options: {
     // Dirty / off-target landing. TV-only, single-season: if the landing has
     // videos the CODE cannot parse into episode codes (纯数字 `01.mp4` / E01 /
     // 日漫 fansub), the fast path first asks the AI for a 逐集映射 (§2.2) —
-    // the design intent the old agent loop had ("you can read that
-    // [NC-Raws] Lyricis Recoil - 01.mkv is S01E01"). A verified mapping lets the
+    // the 逐集判读 design intent — "you can read that
+    // [NC-Raws] Lycoris Recoil - 01.mkv is S01E01". A verified mapping lets the
     // pack land like a clean digest (zero further LLM decisions); a failed or
     // partial mapping wipes staging and retries the next candidate (TV has no
     // diagnosis arbitration).
@@ -729,7 +729,7 @@ export async function closeOutTvLanding(options: {
     // 「没拿全就不落盘」:清空暂存 → 换下一个候选(primary 试穷后落兜底池别名重搜),直到
     // 候选/预算耗尽才诚实报告未覆盖,交给下次巡检。issue #39 的「附件/junk 不否决整包」
     // 语义不变(附件仍只进 junkSignals、不参与集号覆盖)。部分覆盖到底要不要为少数缺集
-    // 重复转存大包,留待后续讨论,见 FORK-CHANGES §43。
+    // 重复转存大包,留待后续讨论。
     const leftover = await sandbox.inspectStaging();
     if (leftover.length > 0) {
       await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });

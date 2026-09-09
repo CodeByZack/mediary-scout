@@ -3,7 +3,7 @@
  *
  * 生成来源:opencc-js@1.4.2 的 TSCharacters 词典(dist/esm-lib/dict/TSCharacters.js),
  * 仅取「单字→单字」条目(词组条目如 乾/幹→干 依赖上下文,标题匹配用不到,不展开)。
- * 再生成:临时 npm i opencc-js → 取 TSCharacters 双串重组本文件(见 FORK-CHANGES §23 附记)。
+ * 再生成:临时 npm i opencc-js → 取 TSCharacters 双串重组本文件。
  *
  * 用途:normalizeForTitleMatch 把比对两侧都折成简体——繁体别名(龍之家族)由此
  * 能认出简体资源标题(龙之家族 4K 更至10集),修复「搜索命中却全判 D」。搜索词序、

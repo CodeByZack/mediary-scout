@@ -53,9 +53,8 @@ export interface DiagnosisArbitration {
 /**
  * 集数映射仲裁(§2.2, 2026-08-19 调研): 代码解析不出集数的落盘文件(纯数字
  * `01.mp4` / `E01` / 日漫 fansub `[Sub] Title - 01 [1080p].mkv`),由 AI 一次性
- * 做「文件名 → SxxExx」的逐集对应。这是老 agent 时代 `task-agents.ts` 里
- * "you can read that [NC-Raws] Lycoris Recoil - 01.mkv is S01E01" 的设计意图
- * —— fast path 重构时被代码独家解析吃掉,如今补回来。
+ * 做「文件名 → SxxExx」的逐集对应,即 "you can read that [NC-Raws] Lycoris Recoil -
+ * 01.mkv is S01E01" 这个逐集判读意图 —— fast path 重构时被代码解析吃掉,如今补回来。
  *
  * 这个仲裁只负责「给出映射」,不负责决定收不收:映射后代码重建 digest,
  * 覆盖/残缺/冲突全部由 digest 的客观判定决定,AI 猜错映射最多导致
