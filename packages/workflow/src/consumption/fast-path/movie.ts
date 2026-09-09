@@ -723,9 +723,9 @@ export async function runMovieFastPathAcquisition(
     emitStep(onProgress, "gradeCandidates", "search", gradingDetail);
   }
 
-  // ★ 阶段1 —— primary 池:只要 primary 有 A 候选(或根本没有别名可兜底)就先转存 primary,
-  //    绝不在有 A 时提前跳兜底(PR #25:反「primary 候选却被兜底池替换」)。
-  if (primaryHasA || target.aliases.length === 0) {
+  // ★ 阶段1 —— primary 池:有候选就转存(不只是 A——B/C 让 AI 挑 3 个试),
+  //    只有候选池全空才跳过阶段1 直接兜底。绝不在有 A 时提前跳兜底(PR #25)。
+  if (grading.ranked.length > 0) {
     const primaryOutcome = await runMovieCandidatePhase(
       {
         sandbox,
@@ -750,9 +750,11 @@ export async function runMovieFastPathAcquisition(
     if (primaryOutcome.done) return primaryOutcome.done;
   }
 
-  // ★ 阶段2 —— 兜底池:仅当 primary 无 A 候选、或 primary 转存预算耗尽仍未覆盖时启动。
+  // ★ 阶段2 —— 兜底池:仅当 primary 无 A 候选时启动。
+  //    2026-09-10 用户拍板:有 A 转存 5 次都没找到,再兜底搜没有意义——
+  //    说明方向错了(候选质量差),不是关键词问题。只有第一次搜索没 A 才值得换关键词重搜。
   //    独立的转存预算(MAX_FALLBACK_TRANSFER_ATTEMPTS),primary 试穷不影响兜底配额。
-  if (target.aliases.length > 0) {
+  if (target.aliases.length > 0 && !primaryHasA) {
     const fallback = await aliasesFallbackReSearch({
       sandbox,
       title: target.title,

@@ -11,8 +11,10 @@
  * 常量（值同源），注入化收口在认领侧重构完成后按需接入 —— 行为零变化优先。
  */
 /** Hard ceiling on transfer attempts per fast-path run for the PRIMARY pool
- *  code path (grader-ranked candidates walked by nextCandidate). */
-export const MAX_TRANSFER_ATTEMPTS = 10;
+ *  code path (grader-ranked candidates walked by nextCandidate).
+ *  2026-09-10 用户拍板:有 A 候选时 10 次都不够说明方向错了,再兜底搜没意义。
+ *  下调到 5 —— 省下的 PanSou 配额留给真无 A 的别名兜底重搜。 */
+export const MAX_TRANSFER_ATTEMPTS = 5;
 
 /** Hard ceiling on AI-picked candidate transfers for the PRIMARY pool.
  *  Independent sub-budget: AI picks do NOT consume the code-path pool budget. */
