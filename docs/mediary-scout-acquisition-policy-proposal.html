@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>采集策略提案 · 认领后消费路径（地球超新鲜 场景）</title>
+<style>
+  :root{
+    --bg:#0d1218; --bg2:#111820; --surface:#161e27; --surface2:#1c2631;
+    --line:#28333f; --line2:#3a4857;
+    --ink:#e8eff6; --ink2:#a9b6c4; --ink3:#77848f; --ink4:#5d6873;
+    --chg:#e0b054; --same:#6b7885; --code:#4cc38a; --ai:#e0b054; --budget:#6fb2ec;
+    --term:#ee9a52; --fail:#f2788a; --persist:#b795f0;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","Segoe UI",sans-serif;
+  }
+  [data-theme="light"]{
+    --bg:#f6f8fa; --bg2:#eef1f5; --surface:#ffffff; --surface2:#f3f6f9;
+    --line:#d8dee5; --line2:#b9c3cd;
+    --ink:#14202c; --ink2:#42525f; --ink3:#6b7885; --ink4:#93a0ac;
+    --chg:#9a6b12; --same:#6b7885; --code:#1a7f4f; --ai:#9a6b12; --budget:#1f6bb5;
+    --term:#a85a17; --fail:#c0394b; --persist:#6b3fae;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 var(--sans);-webkit-font-smoothing:antialiased}
+  code,.mono{font-family:var(--mono);font-size:.86em}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+
+  header.top{background:linear-gradient(180deg,var(--bg2),var(--bg));border-bottom:1px solid var(--line);padding:30px 0 22px}
+  .kicker{font:600 11.5px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);margin-bottom:12px}
+  h1{margin:0 0 10px;font-size:27px;line-height:1.28;font-weight:650;letter-spacing:-.01em}
+  .lede{margin:0;color:var(--ink2);max-width:82ch}
+  .lede b{color:var(--ink);font-weight:600}
+  .meta-row{display:flex;flex-wrap:wrap;gap:8px 10px;margin-top:16px;align-items:center}
+  .pill{font:500 12px/1 var(--sans);color:var(--ink2);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 12px}
+  .pill b{color:var(--chg);font-weight:650}
+  button.theme{margin-left:auto;cursor:pointer;font:500 12px/1 var(--sans);color:var(--ink2);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 13px}
+  button.theme:hover{border-color:var(--line2);color:var(--ink)}
+  button.theme:focus-visible{outline:2px solid var(--budget);outline-offset:2px}
+
+  .strip{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:22px 0 8px}
+  .strip h2{margin:0 0 12px;font:600 11.5px/1 var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--ink3)}
+  .deltas{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+  .delta{background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:9px 11px}
+  .delta .k{font:600 11px/1 var(--mono);color:var(--ink3);margin-bottom:6px}
+  .delta .v{font-size:12.8px;color:var(--ink2);line-height:1.55}
+  .delta .v b{color:var(--chg);font-weight:650}
+  .delta .v .was{color:var(--ink4);text-decoration:line-through}
+
+  main{padding-bottom:70px}
+  section.lane{margin:28px 0;scroll-margin-top:20px}
+  .lane-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:9px;margin-bottom:16px}
+  .lane-head .tag{font:650 13px/1 var(--mono);color:var(--bg);background:var(--ink2);border-radius:6px;padding:6px 9px}
+  [data-theme="light"] .lane-head .tag{color:#fff;background:var(--ink)}
+  .lane-head h2{margin:0;font-size:17.5px;font-weight:650;letter-spacing:-.005em}
+  .lane-head .hint{font-size:12.5px;color:var(--ink3)}
+  .lane-intro{margin:0 0 16px;color:var(--ink2);max-width:95ch}
+  .lane-intro b{color:var(--ink)}
+
+  /* steps */
+  .stack{display:flex;flex-direction:column;gap:0}
+  .arr{align-self:center;color:var(--ink4);font-size:16px;padding:7px 0;line-height:1;user-select:none}
+  .step{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:9px;padding:12px 14px;transition:opacity .18s ease}
+  .step.chg{border-left-color:var(--chg)}
+  .step > h4{margin:0 0 6px;font-size:13.5px;font-weight:650;line-height:1.4;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .step > h4 .idx{font:650 11px/1 var(--mono);color:var(--ink3);background:var(--surface2);border-radius:5px;padding:4px 6px;flex:0 0 auto}
+  .step.chg > h4 .idx{color:var(--chg);background:color-mix(in srgb,var(--chg) 16%,transparent)}
+  .badge{font:600 10px/1 var(--mono);letter-spacing:.06em;border-radius:5px;padding:4px 6px;flex:0 0 auto}
+  .badge.b-chg{color:var(--chg);background:color-mix(in srgb,var(--chg) 16%,transparent)}
+  .badge.b-same{color:var(--ink3);background:var(--surface2)}
+  .step > p{margin:0;font-size:12.8px;color:var(--ink2);line-height:1.62}
+  .step .sub{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);font-size:12px;color:var(--ink3);line-height:1.6}
+  .step .sub b{color:var(--ink2)}
+  .step .src{display:block;margin-top:9px;font-family:var(--mono);font-size:11px;color:var(--ink4)}
+  .dim{opacity:.22 !important}
+
+  table.delta-t{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.delta-t th,table.delta-t td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.6}
+  table.delta-t thead th{font-weight:600;color:var(--ink3);font-size:11px;font-family:var(--mono);letter-spacing:.04em;border-bottom:1px solid var(--line2)}
+  table.delta-t tbody th{font-weight:650;color:var(--ink);font-size:12.3px;white-space:nowrap}
+  table.delta-t td{color:var(--ink2)}
+  table.delta-t td.new{color:var(--ink)}
+  table.delta-t td.new b{color:var(--chg)}
+  table.delta-t .old{color:var(--ink4)}
+  table.delta-t code{color:var(--ink)}
+  .tbl-scroll{overflow-x:auto}
+
+  .opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:14px}
+  .opt{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:14px 15px}
+  .opt.rec{border-color:color-mix(in srgb,var(--code) 55%,var(--line))}
+  .opt h3{margin:0 0 4px;font-size:13.5px;font-weight:650;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .opt h3 .pick{font:600 10px/1 var(--mono);color:var(--bg);background:var(--code);border-radius:5px;padding:4px 6px}
+  .opt .verdict{font:600 11px/1.5 var(--mono);color:var(--ink3);margin-bottom:9px}
+  .opt ul{margin:0;padding:0;list-style:none}
+  .opt li{font-size:12.3px;color:var(--ink2);line-height:1.6;padding:4px 0 4px 13px;position:relative;border-bottom:1px dashed var(--line)}
+  .opt li:last-child{border-bottom:0}
+  .opt li.pro::before{content:"＋";position:absolute;left:0;color:var(--code)}
+  .opt li.con::before{content:"－";position:absolute;left:0;color:var(--fail)}
+  .opt li.note::before{content:"·";position:absolute;left:0;color:var(--ink4)}
+  .opt li b{color:var(--ink);font-weight:600}
+
+  /* need-shrink illustration */
+  .bar{margin:14px 0 2px;padding:12px 14px;background:var(--surface2);border:1px solid var(--line);border-radius:9px}
+  .bar h4{margin:0 0 10px;font:650 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink3)}
+  .row2{display:grid;grid-template-columns:96px 1fr 130px;gap:10px;align-items:center;padding:5px 0;font-size:12.3px}
+  .row2 .lbl{color:var(--ink2);font-weight:600}
+  .track{height:14px;background:var(--bg);border:1px solid var(--line);border-radius:4px;overflow:hidden;display:flex}
+  .seg{height:100%}
+  .seg.have{background:color-mix(in srgb,var(--code) 65%,transparent)}
+  .seg.want{background:color-mix(in srgb,var(--budget) 45%,transparent)}
+  .seg.gap{background:repeating-linear-gradient(45deg,var(--surface2),var(--surface2) 4px,var(--bg) 4px,var(--bg) 8px)}
+  .row2 .res{font-size:11.5px;color:var(--ink3);font-family:var(--mono)}
+  .row2 .res b{color:var(--ink2)}
+
+  .note{display:flex;gap:10px;align-items:flex-start;background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin:14px 0 0;font-size:12.8px;color:var(--ink2);line-height:1.62}
+  .note .mk{flex:0 0 auto;font:650 11px/1.5 var(--mono);color:var(--ink3);padding-top:1px}
+  .note b{color:var(--ink)}
+  .note.warn{border-left:3px solid var(--chg)}
+  .note.fail{border-left:3px solid var(--fail)}
+  .note.term{border-left:3px solid var(--term)}
+
+  ol.qs{margin:0;padding:0;list-style:none;counter-reset:q}
+  ol.qs li{counter-increment:q;background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:11px 13px 11px 44px;position:relative;margin-bottom:9px;font-size:12.8px;color:var(--ink2);line-height:1.62}
+  ol.qs li::before{content:counter(q);position:absolute;left:13px;top:11px;font:650 11px/1 var(--mono);color:var(--ink);background:var(--surface2);border:1px solid var(--line2);border-radius:6px;padding:5px 7px}
+  ol.qs li b{color:var(--ink);font-weight:600}
+  ol.qs li .ask{display:block;margin-top:5px;font-size:12px;color:var(--chg)}
+  ol.qs li blockquote{margin:6px 0 0;padding:0 0 0 10px;border-left:2px solid var(--line2);font-size:12.2px;color:var(--ink3)}
+
+  .toggle-row{display:flex;align-items:center;gap:10px;margin:18px 0 6px;flex-wrap:wrap}
+  .toggle-row .lg{font-size:12.5px;color:var(--ink3)}
+  button.tgl{cursor:pointer;font:500 12.5px/1 var(--sans);color:var(--ink2);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 13px;display:inline-flex;align-items:center;gap:7px}
+  button.tgl .sw{width:9px;height:9px;border-radius:50%;background:var(--chg)}
+  button.tgl[aria-pressed="true"]{color:var(--ink);border-color:var(--chg);background:var(--surface2)}
+  button.tgl:focus-visible{outline:2px solid var(--budget);outline-offset:2px}
+
+  footer.foot{border-top:1px solid var(--line);margin-top:34px;padding:18px 0 4px;font-size:12px;color:var(--ink4);line-height:1.7}
+  footer.foot code{color:var(--ink3)}
+
+  @media (max-width:720px){h1{font-size:22px}.row2{grid-template-columns:74px 1fr 88px}}
+  @media (prefers-reduced-motion:reduce){*{transition:none !important}}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="kicker">提案 · 待拍板 · 不含代码改动</div>
+    <h1>领取任务后 · 采集策略提案</h1>
+    <p class="lede">
+      以「地球超新鲜」这类综艺为场景：need 常常<b>被单个候选天然切分</b>（第1-10期 / 第11-20期），
+      而现状的 <b>§43 全量对齐</b>会把每个命中一半的包全部 wipe 掉，两池耗尽后诚实报未覆盖，下次巡检重下整包、永远循环。
+      这份提案把「没拿全就不落盘」换成 <b>「命中多少落多少」</b>，同时放宽预算、放开多 A 直试、AI 一次挑三个。
+    </p>
+    <div class="meta-row">
+      <span class="pill">primary 转存 <b>3 → 10</b></span>
+      <span class="pill">兜底转存 <b>3 → 5</b></span>
+      <span class="pill">多 A <b>不再走 AI</b></span>
+      <span class="pill">无 A 时 AI <b>挑 1 → 挑 3</b></span>
+      <span class="pill"><b>§43 全量对齐 → 增量落库</b></span>
+      <button class="theme" id="themeBtn" type="button" aria-pressed="false">浅色</button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="strip">
+    <h2>改动一览</h2>
+    <div class="deltas">
+      <div class="delta"><div class="k">primary 转存预算</div><div class="v"><span class="was">3</span> → <b>10</b></div></div>
+      <div class="delta"><div class="k">兜底转存预算</div><div class="v"><span class="was">3</span> → <b>5</b></div></div>
+      <div class="delta"><div class="k">有 A 时的选片</div><div class="v">唯一 A 盲转 → <b>全部 A 按序试</b></div></div>
+      <div class="delta"><div class="k">无 A 时的选片</div><div class="v">AI 挑 <span class="was">1</span> → <b>挑 3</b></div></div>
+      <div class="delta"><div class="k">部分命中处置</div><div class="v"><span class="was">wipe</span> → <b>增量落库</b></div></div>
+      <div class="delta"><div class="k">首轮关键词</div><div class="v">不进 UI → <b>透出到 UI</b></div></div>
+    </div>
+  </div>
+
+  <div class="toggle-row">
+    <span class="lg">只高亮改动点：</span>
+    <button class="tgl" id="chgOnly" type="button" aria-pressed="false"><span class="sw"></span>只看改动</button>
+  </div>
+
+  <main>
+
+  <!-- ============ A ============ -->
+  <section class="lane" id="s-a">
+    <div class="lane-head">
+      <span class="tag">A</span>
+      <h2>改动清单</h2>
+      <span class="hint">现状 → 提案，含副作用</span>
+    </div>
+    <div class="tbl-scroll">
+      <table class="delta-t">
+        <thead><tr><th>环节</th><th>现状</th><th>提案</th><th>副作用 / 代价</th></tr></thead>
+        <tbody>
+          <tr>
+            <th>primary 转存预算</th>
+            <td class="old"><code>MAX_TRANSFER_ATTEMPTS = 3</code></td>
+            <td class="new"><b>10</b></td>
+            <td>单个 run 最长转存时长 ↑；网盘流量与秒传配额消耗 ↑。死链探测仍 10 次不占预算，最坏一个 run 能转 15 包</td>
+          </tr>
+          <tr>
+            <th>兜底转存预算</th>
+            <td class="old"><code>MAX_FALLBACK_TRANSFER_ATTEMPTS = 3</code></td>
+            <td class="new"><b>5</b>（两池仍<b>独立</b>互不挤占）</td>
+            <td>同上，幅度较小</td>
+          </tr>
+          <tr>
+            <th>有 A 时的选片</th>
+            <td class="old">仅<b>唯一</b> A 免仲裁直转；多个 A → 走 <code>arbitrateSelection</code> 挑 1</td>
+            <td class="new"><b>有 A 就不调 AI</b>，全部 A 按评分序逐个试</td>
+            <td>AI 调用更少 ✓；但多个 A 之间可能是<b>同一资源的不同分享链</b>，会白试。grader 今天排的是「同名异作」，<b>不去重「同名同作」</b></td>
+          </tr>
+          <tr>
+            <th>无 A 时的选片</th>
+            <td class="old"><code>arbitrateSelection</code> 挑 1 个或放弃</td>
+            <td class="new">AI <b>挑最多 3 个</b>或放弃</td>
+            <td>仲裁契约要改：返回形状从单个 id → 有序列表；三条 id 各自过幻觉防御校验（不在快照内按放弃处理）</td>
+          </tr>
+          <tr>
+            <th>兜底 AI 次数</th>
+            <td class="old">每个池各一次选片仲裁</td>
+            <td class="new">兜底池全程<b> 1 次</b></td>
+            <td><span style="color:var(--term)">我对这条的理解可能不对，见 D-2</span></td>
+          </tr>
+          <tr>
+            <th>部分命中处置</th>
+            <td class="old">§43：<b>全量对齐才落盘</b>，没拿全 → wipe → 换候选</td>
+            <td class="new"><b>增量落库</b>：命中多少落多少，need 逐轮缩小</td>
+            <td><b>关键分歧</b>，见 B / C</td>
+          </tr>
+          <tr>
+            <th>首轮关键词</th>
+            <td class="old">不进 UI（只写进 step 日志）</td>
+            <td class="new"><b>透出到 activity 证据</b></td>
+            <td>只改前端渲染，后端不动</td>
+          </tr>
+          <tr>
+            <th>结尾口径</th>
+            <td class="old">完成 / 未覆盖（二值）</td>
+            <td class="new"><b>已入库 N 集，还缺 M 集</b></td>
+            <td>通知文案 + workflow <code>status</code> 枚举要不要加「部分覆盖」，见 D-4</td>
+          </tr>
+          <tr>
+            <th>死链探测 / 兜底重搜</th>
+            <td class="old">10 次不占预算 / 3 轮</td>
+            <td class="new"><b>不变</b></td>
+            <td>你没提，我按原值保留</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ B ============ -->
+  <section class="lane" id="s-b">
+    <div class="lane-head">
+      <span class="tag">B</span>
+      <h2>新流程</h2>
+      <span class="hint">带「改」标记的是与现状不同的步骤</span>
+    </div>
+    <p class="lane-intro">
+      以「地球超新鲜」领任务为例，need = <code>S01E01..S01E20</code>。结构上仍是<b>两个候选池</b>（primary / 兜底），
+      变化集中在<b>选片口径</b>、<b>预算</b>和<b>落盘时机</b>三处。
+    </p>
+
+    <div class="stack">
+      <div class="step same">
+        <h4><span class="idx">0</span>认领 → 分发 TV<span class="badge b-same">不变</span></h4>
+        <p>队列原子认领 → <code>resolveWorkerDeps</code> → <code>consumeClaimedRun</code> → 七阶段主干 → <code>orchestrator</code> 装配沙盒。<b>落点检查提前到第 1 步</b>。</p>
+      </div>
+      <div class="arr">↓</div>
+      <div class="step same">
+        <h4><span class="idx">1</span>inspectTargetDir · 落点检查<span class="badge b-same">不变</span></h4>
+        <p>已在库且解析出 code 的集 → <code>markObtained</code> 并从 need 剔除。need 空 → 收尾，零搜索。</p>
+      </div>
+      <div class="arr">↓</div>
+      <div class="step chg">
+        <h4><span class="idx">2</span>搜索「地球超新鲜」<span class="badge b-chg">改 · 关键词透出</span></h4>
+        <p>裸中文名一次，快照写进 <code>observedSnapshots</code>。</p>
+        <div class="sub">改动只在<b>展示层</b>：把这次的关键词带进 activity 证据（今天 <code>viewResourceSnapshot</code> 的 emit 不带 keyword 字段），UI 可见「本次搜的是哪个词」。后端不动。</div>
+      </div>
+      <div class="arr">↓</div>
+      <div class="step same">
+        <h4><span class="idx">3</span>评分 A / B / C / D<span class="badge b-same">不变</span></h4>
+        <p>纯函数零 LLM。综艺额外走「第N期」解析 + 衍生内容黑名单 + 年守卫。</p>
+      </div>
+      <div class="arr">↓</div>
+      <div class="step chg">
+        <h4><span class="idx">4</span>选片<span class="badge b-chg">改 · 两处</span></h4>
+        <p><b>有 A（任意数量）</b> → 全部 A 按评分序入队，<b>不调 AI</b>，逐个试。</p>
+        <div class="sub"><b>无 A</b> → <code>arbitrateSelection</code> 挑<b>最多 3 个</b>（有序，最佳在前）或放弃。<br>返回的每个 id 各自过幻觉防御：不在快照内 → 按放弃处理（绝不触 <code>SANDBOX_CANDIDATE_NOT_IN_SNAPSHOT</code> 炸掉 run）。<br>挑完的起点之后，循环仍按 <code>nextCandidate(grading, tried)</code> 顺着 ranked 列表往下走（B/C 候选也会试）。</div>
+      </div>
+      <div class="arr">↓</div>
+      <div class="step chg">
+        <h4><span class="idx">5</span>转存循环 · 预算 10<span class="badge b-chg">改 · 核心</span></h4>
+        <p><code>while</code> need 非空 ∧ 本池转存数 &lt; 10 ∧ <code>deadRetries &lt; 10</code> ∧ 还有下一候选：</p>
+        <div class="sub">
+          <code>transferCandidate</code> → <code>digestStaging</code>（对照<b>当前</b> need）→<br>
+          · 命中 <b>≥ 1 个</b> need code → <b>增量落库</b>：<code>finalizeLanding(onlyCodes=命中的码)</code>（改名 + 归位 + <code>markObtained</code>）→ <b>need 缩减</b> → 下一个候选<br>
+          · 命中 <b>0 个</b> → wipe staging → 下一个候选<br>
+          · need 空 → 完成<br>
+          <b>关键机械点</b>：need 集合在循环内可变，digest 的 <code>needCodes</code> 参数要跟着更新，否则后面候选的覆盖判定永远对照原始 need、永远判「未全量对齐」。
+        </div>
+      </div>
+      <div class="arr">↓</div>
+      <div class="step chg">
+        <h4><span class="idx">6</span>兜底池 · 预算 5 · AI 1 次<span class="badge b-chg">改 · 预算与次数</span></h4>
+        <p>primary 无 A 或试穷未覆盖 → <code>aliasesFallbackReSearch</code>（≤3 轮别名重搜，命中 A 提前停，耗尽合并证据池，原样保留）。</p>
+        <div class="sub">之后重复 4 → 5 的全过程，但转存预算是 <b>5</b>（独立，不挤占 primary），AI 仲裁<b>最多 1 次</b>。<br>两池都耗尽 → 诚实终止。</div>
+      </div>
+      <div class="arr">↓</div>
+      <div class="step chg">
+        <h4><span class="idx">7</span>收尾口径<span class="badge b-chg">改</span></h4>
+        <p>不再只有「完成 / 未覆盖」二值。</p>
+        <div class="sub">· 全部 need 落库 → 完成<br>· 落了部分 → <b>「已入库 N 集，还缺 M 集」</b>，剩下的交给下一次巡检（③ <code>computeNeed</code> 自动只算剩余）<br>· 一个都没落 → 未覆盖（同现状）</div>
+      </div>
+    </div>
+
+    <div class="bar">
+      <h4>增量落库：need 在循环里逐轮缩小（E01..E20 示意）</h4>
+      <div class="row2"><span class="lbl">原始 need</span>
+        <div class="track"><div class="seg gap" style="width:50%"></div><div class="seg gap" style="width:50%"></div></div>
+        <span class="res">缺 <b>20</b> 集</span></div>
+      <div class="row2"><span class="lbl">候选 A 命中</span>
+        <div class="track"><div class="seg have" style="width:50%"></div><div class="seg gap" style="width:50%"></div></div>
+        <span class="res">落 E01..E10 · 缺 <b>10</b></span></div>
+      <div class="row2"><span class="lbl">候选 B 命中</span>
+        <div class="track"><div class="seg have" style="width:100%"></div></div>
+        <span class="res">落 E11..E20 · 缺 <b>0</b> ✓</span></div>
+      <div class="row2"><span class="lbl">对照 · 现状</span>
+        <div class="track"><div class="seg gap" style="width:50%"></div><div class="seg gap" style="width:50%"></div></div>
+        <span class="res">两包全 wipe · 未覆盖</span></div>
+    </div>
+
+    <div class="note warn">
+      <span class="mk">为什么增量落库不需要新概念</span>
+      <span><code>finalizeLanding</code> 今天就带 <code>onlyCodes</code>（只补缺集）与 <code>skipCodes</code>（已在库跳过）——今天只在「digest 全量通过」时调一次。提案只是把调用时机改成「每次 digest 有命中就调」。<code>markObtained</code> 本来就是逐集的，下一次巡检的 ③ <code>computeNeed</code> 自动只算剩下的。<b>不建 hold 区、不碰 <code>withStagingCleanupStage</code></b>。</span>
+    </div>
+  </section>
+
+  <!-- ============ C ============ -->
+  <section class="lane" id="s-c">
+    <div class="lane-head">
+      <span class="tag">C</span>
+      <h2>关键分歧 · 部分命中怎么处理</h2>
+      <span class="hint">你撞到的那个问题：既不能因部分命中放弃后续完整匹配，也不能丢掉已匹配的数据</span>
+    </div>
+    <p class="lane-intro">
+      你说的那句「既不能…也不能…」其实已经把答案指出来了：<b>「放弃后续候选」和「保留已匹配数据」在今天是被绑在一起的</b>，因为落盘动作被强制绑定到「全量通过」这个条件上。
+      解法就是把这两个决定拆开——保留数据（落库）和继续尝试（换候选）本来就不冲突。
+    </p>
+
+    <div class="opts">
+      <div class="opt rec">
+        <h3>方案 1 · 增量落库 <span class="pick">推荐</span></h3>
+        <div class="verdict">命中 ≥1 → 立即落库已命中的码 → need 缩小 → 继续试下一个候选</div>
+        <ul>
+          <li class="pro">两个决定<b>解耦</b>：既保留了已匹配数据，又没放弃后续候选的完整匹配机会——正是你要的</li>
+          <li class="pro"><b>零新概念</b>：<code>onlyCodes</code> / <code>skipCodes</code> / 逐集 <code>markObtained</code> 全是现成机制</li>
+          <li class="pro">下一次巡检的 <code>computeNeed</code> 自动只算剩余 need，<b>不用管跨 run 状态</b></li>
+          <li class="pro">重叠集数被 <code>skipCodes</code> 跳过，<b>不会重复归位</b>（也就不会撞网盘同名 <code>(1)</code> 复制）</li>
+          <li class="con">后一个候选的包<b>仍要整包下载</b>——转存是整包粒度，无法只下剩余集</li>
+          <li class="con">比现状<b>严格更省</b>：今天每次 wipe，下次巡检重下整包；增量落库至少已经有的不重下</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <h3>方案 2 · 暂存区（hold area）</h3>
+        <div class="verdict">部分命中 → 移到 Season 之外的 hold 目录 → 继续试 → run 结束统一 promote</div>
+        <ul>
+          <li class="pro">不重复下载：重叠部分已在 hold 里，不用等 promote 时再搬一次</li>
+          <li class="pro">Season 目录一次性组装完成，不会分多次归位</li>
+          <li class="con"><b>新增存储生命周期概念</b>：hold 目录要在 <code>withStagingCleanupStage</code> 的清理范围<b>之外</b>（否则 run 结束被兜底清掉），失败路径要另写清理逻辑</li>
+          <li class="con">改动面明显更大：目录生命周期、清理钩子、失败回滚三处都要动</li>
+          <li class="note"><b>没有解决分歧</b>，只是把「落不落下」这个决定推迟到 run 结束——而那时你还是要回答同一个问题</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <h3>方案 3 · 保留 §43 全量对齐</h3>
+        <div class="verdict">部分命中 → wipe → 换候选（现状）</div>
+        <ul>
+          <li class="pro">零误标风险：一个都不会把错内容标成 obtained</li>
+          <li class="con"><b>你正在撞的问题不会消失</b>——综艺按「第N期」分候选时，单个候选常常拿不齐全部 need，结果永远 <code>reportNoCoverage</code></li>
+          <li class="con">每次巡检重下整包，流量与时间白费</li>
+          <li class="note">这是 AGENTS.md §9 第 3 条记的「用户 2026-09-06 明确搁置」的那个待办——你现在是在把它重新打开</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="note fail">
+      <span class="mk">必须先确认</span>
+      <span>§43 那条铁律是冲着 <b>PR #24 中餐厅 S10E11 假入库</b>修的。去掉它之后，防「错内容被标成 obtained」还剩三层：<b>隐形季号闸门</b>（标题自带季 → 降 C）、<b>年守卫</b>（文件名日期与播出日差 &gt;45 天 → 不采信）、<b>期号一致性</b>（AI 映射的「第M期」与 TMDB <code>Episode N</code> 不符 → 整表作废）。<br>
+      你经历过那次的具体形态：<b>如果那包的标题里没有自带季号、播出日也对得上，那全量对齐当时就是唯一拦住它的层</b>，方案 1 就不安全。这个只有你能判断——见 D-1。</span>
+    </div>
+  </section>
+
+  <!-- ============ D ============ -->
+  <section class="lane" id="s-d">
+    <div class="lane-head">
+      <span class="tag">D</span>
+      <h2>需要你拍板的问题</h2>
+      <span class="hint">拍完这些我再动代码</span>
+    </div>
+
+    <ol class="qs">
+      <li><b>PR #24 中餐厅那次假入库，去掉全量对齐后剩下三层拦不拦得住？</b> 这是方案 1 是否安全的前提。
+        <blockquote>如果你记不清当时的包长什么样了，我可以翻 PR #24 的 commit 和 issue #21 的记录去核——但那属于查代码，你说了先无关代码。</blockquote>
+        <span class="ask">请确认：剩下三层独立拦得住 / 拦不住 / 记不清了要我去查</span></li>
+      <li><b>「兜底 AI 1 次」的范围。</b> 我按「兜底池全程最多一次仲裁」理解的。
+        <blockquote>另一种读法是「整个 run 全程 AI 最多 1 次」——那 primary 无 A 时的「挑 3」就不成立了。这两种差别很大。</blockquote>
+        <span class="ask">请确认：只限兜底池 / 还是全程一次</span></li>
+      <li><b>多个 A 全部试：要不要在 A 内部按标题归一去重？</b> 今天 grader 排的是「同名异作」，不去重「同名同作」——预算从 3 提到 10 之后，同一资源的不同分享链会连续吃掉几次转存。
+        <span class="ask">请确认：不去重（预算够，多试无妨）/ 要按归一化标题去重</span></li>
+      <li><b>「已入库 N 集，还缺 M 集」算 succeeded 还是新状态？</b> workflow <code>status</code> 今天是 <code>succeeded</code> / <code>no_coverage</code> / <code>failed</code> 三种。部分覆盖是塞进 succeeded 通知里说明，还是新增 <code>partial</code>？
+        <blockquote>新增状态会牵动 UI、通知分类、每日汇总计数三处。</blockquote>
+        <span class="ask">请确认：并入 succeeded / 新增 partial 状态</span></li>
+      <li><b>最坏情况 15 次转存 + 10 次死链探测，这个量级接受吗？</b> primary 10 + 兜底 5，加上死链探测不占预算，一个 run 最多转 15 包。115 的秒传配额和网盘流量在这条最坏路径上都是 5 倍于今天。
+        <span class="ask">请确认：接受 / 降一档（如 primary 8、兜底 4）</span></li>
+      <li><b>首轮关键词透出：只改 activity 证据渲染，后端不动？</b> 我在 B-2 按这个理解的。
+        <span class="ask">请确认：只改前端 / 也要写进数据库的 step 记录</span></li>
+    </ol>
+
+    <div class="note term">
+      <span class="mk">拍板后</span>
+      <span>这六条里有四条（D-1 / D-2 / D-4 / D-6）影响改动边界，拍完我再动手。D-3 和 D-5 是策略选择，可以先定个默认值（不去重 + 接受 15），跑一轮实测再调。</span>
+    </div>
+  </section>
+
+  </main>
+
+  <footer class="foot">
+    提案稿 · 不含代码改动 · 与 <code>docs/mediary-scout-consumption-after-claim.html</code> 同一视觉语言、同一模型<br>
+    涉及常量：<code>fast-path/budgets.ts</code>（<code>MAX_TRANSFER_ATTEMPTS</code> / <code>MAX_FALLBACK_TRANSFER_ATTEMPTS</code>）· 涉及逻辑：<code>fast-path/tv.ts</code> 选片与转存循环 · <code>fast-path/landing.ts</code> <code>closeOutTvLanding</code> 状态机 · <code>acquisition-v2/finalize-landing.ts</code>（<code>onlyCodes</code> / <code>skipCodes</code>）· <code>acquisition-v2/arbitrator.ts</code> <code>arbitrateSelection</code> 契约
+  </footer>
+</div>
+
+<script>
+(function(){
+  var root=document.documentElement;
+  var btn=document.getElementById('themeBtn');
+  var saved=null;try{saved=localStorage.getItem('mc-theme');}catch(e){}
+  function apply(t){root.setAttribute('data-theme',t);btn.textContent=t==='dark'?'浅色':'深色';btn.setAttribute('aria-pressed',String(t==='light'));}
+  apply(saved==='light'?'light':'dark');
+  btn.addEventListener('click',function(){var n=root.getAttribute('data-theme')==='dark'?'light':'dark';apply(n);try{localStorage.setItem('mc-theme',n);}catch(e){}});
+
+  var tgl=document.getElementById('chgOnly');
+  var steps=Array.prototype.slice.call(document.querySelectorAll('.step'));
+  tgl.addEventListener('click',function(){
+    var on=tgl.getAttribute('aria-pressed')==='false';
+    tgl.setAttribute('aria-pressed',String(on));
+    steps.forEach(function(s){s.classList.toggle('dim',on&&!s.classList.contains('chg'));});
+  });
+})();
+</script>
+</body>
+</html>
