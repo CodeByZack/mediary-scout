@@ -194,12 +194,12 @@ describe("arbitrateMovieDiagnosis", () => {
 });
 
 describe("arbitrateEpisodeMapping — 功能2 集数映射仲裁", () => {
-  it("maps unparsed files to episode codes", async () => {
+  it("maps all landed files to episode codes", async () => {
     const result = await arbitrateEpisodeMapping({
       model: textModel(
         '{"mapping":{"01.mp4":"S01E01","02.mp4":"S01E02"},"unmapped":["花絮.mkv"],"reasoning":"纯数字按序"}',
       ),
-      unparsedFiles: ["01.mp4", "02.mp4", "花絮.mkv"],
+      allFiles: ["01.mp4", "02.mp4", "花絮.mkv"],
       title: "狂飙",
       seasons: [1],
       knownEpisodeRange: { min: 1, max: 39 },
@@ -213,7 +213,7 @@ describe("arbitrateEpisodeMapping — 功能2 集数映射仲裁", () => {
       model: textModel(
         '{"mapping":{"01.mp4":"S01E01","不存在.mkv":"S01E99","03.mp4":"3"},"unmapped":[],"reasoning":"x"}',
       ),
-      unparsedFiles: ["01.mp4", "03.mp4"],
+      allFiles: ["01.mp4", "03.mp4"],
       title: "狂飙",
       seasons: [1],
       knownEpisodeRange: { min: 1, max: 39 },
@@ -225,7 +225,7 @@ describe("arbitrateEpisodeMapping — 功能2 集数映射仲裁", () => {
   it("degrades to an empty mapping on unparseable output (safe fallback)", async () => {
     const result = await arbitrateEpisodeMapping({
       model: textModel("not json"),
-      unparsedFiles: ["01.mp4"],
+      allFiles: ["01.mp4"],
       title: "狂飙",
       seasons: [1],
       knownEpisodeRange: { min: 1, max: 39 },

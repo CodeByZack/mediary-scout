@@ -123,7 +123,7 @@ export async function tryEpisodeMapping(options: {
   emitStep(options.onProgress, "arbitrateEpisodeMapping", "verify", "AI 正在识别集数,可能需数十秒…");
   const arbitration = await arbitrateEpisodeMapping({
     model,
-    unparsedFiles: allFiles,
+    allFiles: allFiles,
     title: options.targetTitle,
     seasons: options.seasons,
     knownEpisodeRange: knownRange,
