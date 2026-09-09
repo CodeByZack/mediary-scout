@@ -293,7 +293,15 @@ export async function finalizeLanding(
     : [];
 
   // 4. Wipe staging (leftovers: out-of-scope episodes, dup packs, residue).
-  const discarded = (await sandbox.discardStaging()).removed;
+  //    清理失败不否定已完成的 rename+move+mark——文件已入库,残留只是 housekeeping。
+  //    夸克 code=15000 瞬时故障不应让成功落库的 run 报失败。
+  let discarded: string[] = [];
+  try {
+    discarded = (await sandbox.discardStaging()).removed;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    stepLog(sandbox, canonicalTitle, "暂存清理", `跳过(staging 残留,清理失败: ${msg})`);
+  }
 
   return { renamed, renamedPairs, movedSeasons, marked, discarded, skippedOnDisk, skippedNotNeeded, movedCount };
 }
