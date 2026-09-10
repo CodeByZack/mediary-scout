@@ -477,11 +477,16 @@ export class TaskSandbox {
     const outOfScope = resolved.flatMap((m) => m.fileIds).filter((id) => !pendingIds.has(id));
     if (outOfScope.length > 0) {
       // ★ 2026-09-10 地球超新鲜案:报 NOT_IN_PENDING 前把「想要搬的」vs「pending 实况」
-      // 全量留痕,便于对照是残留/反查退化/搬运遗漏。
-      console.error(
-        `[mediary-run][${this.logRunId}] | pending 归位失败: need=${JSON.stringify(resolved.flatMap((m) => m.fileIds))} missing=${JSON.stringify(outOfScope)} pending=${JSON.stringify([...pendingIds])}`,
+      // 全量对照**写进 error message**(而非裸 console.error)——
+      // activity 的 emitStep 只透传 error.message,裸 console.error 不进 agent_steps,
+      // UI/数据库都看不到,排查只能翻服务端日志(踩过坑)。
+      // 对照三份:need=finalize 想搬的 id,missing=不在 pending 的 id,pending=move 前实况。
+      const needIds = JSON.stringify(resolved.flatMap((m) => m.fileIds));
+      const missingIds = JSON.stringify(outOfScope);
+      const pendingNow = JSON.stringify([...pendingIds]);
+      throw new Error(
+        `SANDBOX_FILES_NOT_IN_PENDING: ${outOfScope.join(",")} (need=${needIds} missing=${missingIds} pending=${pendingNow})`,
       );
-      throw new Error("SANDBOX_FILES_NOT_IN_PENDING: " + outOfScope.join(","));
     }
     for (const move of resolved) {
       await this.storage.moveFiles({ fileIds: move.fileIds, targetDirectoryId: move.targetDir });
@@ -784,7 +789,10 @@ export class TaskSandbox {
 
   /** Rename files in the pending directory. Scope guard: every id must
    *  currently be in THIS task's pending directory. After rename, re-read
-   *  because Quark changes file IDs on rename. */
+   *  once (NOT per-rename) because Quark changes file IDs on rename —
+   *  per-rename immediate re-read races Quark's async rename sync and the
+   *  new name isn't visible yet; a single re-read after ALL renames gives
+   *  the provider time to settle (2026-09-10 地球超新鲜案). */
   async renameInPending(input: {
     renames: Array<{ fileId: string; newName: string }>;
   }): Promise<{ renamed: string[]; errors?: Array<{ fileId: string; error: string }> }> {
@@ -816,19 +824,27 @@ export class TaskSandbox {
           throw new Error("SANDBOX_INVALID_VIDEO_NAME: newName must not contain filename-hostile chars");
         }
         await this.storage.renameFile({ directoryId: this.pendingDirectoryId, fileId, newName });
-        // Re-read to get updated file IDs (Quark changes IDs on rename).
-        const updated = await this.storage.listTree({ directoryId: this.pendingDirectoryId });
-        const found = updated.find((f) => f.path.split("/").pop() === newName);
-        if (found) {
-          renamed.push(found.id);
-        } else {
-          renamed.push(fileId);
-        }
       } catch (err) {
         errors.push({ fileId, error: err instanceof Error ? err.message : String(err) });
       }
     }
-    return { renamed, errors };
+    // After ALL renames, re-read once and map each new name to its (possibly
+    // changed) file id. A name not found is a REAL rename failure — surface it
+    // as an error instead of silently falling back to the stale pre-rename id
+    // (that stale id no longer exists once Quark swaps ids, and the later
+    // move step then fails with SANDBOX_FILES_NOT_IN_PENDING).
+    const after = await this.storage.listTree({ directoryId: this.pendingDirectoryId });
+    const idByNewName = new Map(after.map((f) => [f.path.split("/").pop() ?? f.path, f.id]));
+    for (const { fileId, newName } of input.renames) {
+      if (errors.some((e) => e.fileId === fileId)) continue;
+      const newId = idByNewName.get(newName);
+      if (newId) {
+        renamed.push(newId);
+      } else {
+        errors.push({ fileId, error: `SANDBOX_RENAME_NOT_VISIBLE: 改名后 pending 里查不到新名 ${newName}(换 id 的网盘 rename 可能异步生效)` });
+      }
+    }
+    return { renamed, ...(errors.length > 0 ? { errors } : {}) };
   }
 
   /** Record the episodes the agent declares obtained — the agent's FINAL action,

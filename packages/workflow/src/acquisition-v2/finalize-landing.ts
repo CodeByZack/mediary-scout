@@ -386,7 +386,6 @@ export async function finalizeFromPending(options: {
   const onlySet = onlyCodes ? new Set(onlyCodes) : null;
 
   const renames: Array<{ fileId: string; newName: string }> = [];
-  const renamed: string[] = [];
   const renamedPairs: Array<{ from: string; to: string }> = [];
   const skippedOnDisk: string[] = [];
   const skippedNotNeeded: string[] = [];
@@ -412,19 +411,27 @@ export async function finalizeFromPending(options: {
     const pendingBefore = await sandbox.inspectPending();
     const pendingByIdBefore = new Map(pendingBefore.map((f) => [f.id, f.path.split("/").pop() ?? f.id]));
     const result = await sandbox.renameInPending({ renames });
-    renamed.push(...result.renamed);
-    // ★ 2026-09-10 地球超新鲜案:renameInPending 的 errors 曾被完全忽略 ——
-    // 改名失败的文件 finalize 仍按旧 id 归位 → SANDBOX_FILES_NOT_IN_PENDING。
-    // 这里留痕以便对照。
-    if (result.errors && result.errors.length > 0) {
-      for (const e of result.errors) {
+    // ★ 2026-09-10 地球超新鲜案:renameInPending 失败曾被忽略 → finalize 用旧 id
+    // 归位撞 SANDBOX_FILES_NOT_IN_PENDING。现在两层都显式:errors 全部列出,
+    // 失败条目从 plannedCodes 剔除(不归位、不 mark),绝不用退化 id 进 moves。
+    const failedByFileId = new Set((result.errors ?? []).map((e) => e.fileId));
+    if (failedByFileId.size > 0) {
+      for (const e of result.errors ?? []) {
         console.error(`[mediary-run][${sandbox.logRunId}] ${canonicalTitle} | pending 改名失败: ${e.fileId}: ${e.error}`);
       }
+      const codeByFileId = new Map(entries.map((en) => [en.fileId, en.code]));
+      for (const fid of failedByFileId) {
+        const failedCode = codeByFileId.get(fid);
+        if (failedCode) plannedCodes.delete(failedCode);
+      }
     }
-    const pendingNow = await sandbox.inspectPending();
-    const idByNewName = new Map(pendingNow.map((f) => [f.path.split("/").pop() ?? f.path, f.id]));
+    // renameInPending 已按 renames 顺序返回改名后的新 id(rename 完成后单次反查,
+    // 已对齐 Quark 异步改名) —— 直接消费,不再二次反查(旧版自查同目录读两次,
+    // 且退化旧 id 不报错,是本次僵局的根源)。
+    let renamedIdx = 0;
     for (const { fileId, newName } of renames) {
-      const newId = idByNewName.get(newName) ?? fileId;
+      if (failedByFileId.has(fileId)) continue;
+      const newId = result.renamed[renamedIdx++] ?? fileId;
       codeToNewFileId.set(fileId, newId);
       const from = pendingByIdBefore.get(fileId) ?? fileId;
       renamedPairs.push({ from, to: newName });
@@ -472,7 +479,8 @@ export async function finalizeFromPending(options: {
   }
 
   return {
-    renamed, renamedPairs,
+    renamed: renamedPairs.map((p) => p.to),
+    renamedPairs,
     movedSeasons: Object.fromEntries([...bySeason.entries()].map(([s, ids]) => [s, ids.length])),
     marked, discarded, movedCount, skippedOnDisk, skippedNotNeeded,
   };
