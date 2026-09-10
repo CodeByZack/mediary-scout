@@ -86,6 +86,10 @@ interface SetupOptions {
   onSearch?: () => void;
   /** TMDB 各集原始 name(SxxExx→"Episode N (Part X)")——综艺「第N期」Part 锚定/期号一致性校验数据。 */
   episodeNames?: Record<string, string>;
+  /** 是否创建 pending 目录并挂进 sandbox(2026-09-10 pending 积累场景)。
+   *  缺省不建 = 旧行为(测试 sandbox 无 pending,onPartial 的 moveToPending 抛错
+   *  被吞,covered 文件原地不动)。线上接线有 pending,故复现 stale-快照 bug 必须开。 */
+  pending?: boolean;
 }
 
 async function createSetup(options: SetupOptions) {
@@ -98,6 +102,9 @@ async function createSetup(options: SetupOptions) {
     ...(options.failureMessages ? { failureMessages: options.failureMessages } : {}),
   });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
+  const pendingDirectoryId = options.pending
+    ? await storage.createDirectory({ name: "pending", parentId: "root" })
+    : undefined;
   const seasons = options.seasons ?? [1];
   const seasonDirIds: Record<number, string> = {};
   for (const s of seasons) {
@@ -107,13 +114,14 @@ async function createSetup(options: SetupOptions) {
     provider,
     storage,
     stagingDirectoryId,
+    ...(pendingDirectoryId !== undefined ? { pendingDirectoryId } : {}),
     targetSeasonDirectoryIds: seasonDirIds,
     need: options.need ?? ["S01E01"],
     canonicalTitle: options.title ?? "狂飙",
     titleTerms: options.title ? [options.title] : ["狂飙"],
   });
   await sandbox.primeRawSnapshot("狂飙");
-  return { sandbox, storage, seasonDirIds, s1: seasonDirIds[1]! };
+  return { sandbox, storage, seasonDirIds, s1: seasonDirIds[1]!, stagingId: stagingDirectoryId, ...(pendingDirectoryId !== undefined ? { pendingId: pendingDirectoryId } : {}) };
 }
 
 describe("runFastPathAcquisition — the zero-LLM happy path", () => {
@@ -1345,5 +1353,48 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
     ]);
+  });
+
+  it("2026-09-10 地球超新鲜案:部分覆盖(covered 1 集)换候选时,onPartial 已把文件搬去 pending → staging wipe 用重读快照,不抛 SANDBOX_FILES_NOT_IN_STAGING", async () => {
+    // 复现线上 crash:need 2 集、候选包只覆盖 S01E01(coveredFileMap.size=1>0) →
+    // AI 映射补不上缺集 → retry_other 分支先 onPartial 把已覆盖文件 moveToPending
+    // 搬出 staging,随后 deleteFiles 若仍用搬移前的 leftover 快照,被搬走的文件 id
+    // 会触发 SANDBOX_FILES_NOT_IN_STAGING 守卫、把整个 run 打成 failed。修复 =
+    // 搬移后重读 staging 再删(landing.ts)。断言:run 不抛、S01E01 进 pending 保留、
+    // staging 清空、剩余缺集诚实未覆盖。
+    const { sandbox, storage, pendingId, stagingId, s1 } = await createSetup({
+      candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],
+      need: ["S01E01", "S01E02"],
+      pending: true,
+      packs: {
+        c1: {
+          files: [
+            { path: "狂飙.S01E01.mkv", sizeBytes: 1 }, // 代码可解析 → covered
+            { path: "狂飙.高清修复版.mp4", sizeBytes: 1 }, // 代码解析不出 → unparsed
+          ],
+        },
+      },
+    });
+
+    // AI 集数映射返回空映射(补不上 S01E02)→ 走 retry_other(warn)分支。
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: textModel('{"mapping":{},"unmapped":["狂飙.高清修复版.mp4"],"reasoning":"看不出集数"}'),
+      target: { ...target, missingEpisodes: ["S01E01", "S01E02"] },
+      isChineseNative: false,
+    });
+
+    // 不 crash(修复前这一步会抛 SANDBOX_FILES_NOT_IN_STAGING,run 整个失败)。
+    expect(result.coverage.coverageMet).toBe(false);
+    // S01E01 经 pending 积累归位入库,缺 S01E02 诚实未覆盖。
+    expect(result.coverage.obtained).toContain("S01E01");
+    expect(result.coverage.missing).toEqual(["S01E02"]);
+    // finalizeFromPending 已把 S01E01 从 pending rename+归位到 Season 1。
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+    ]);
+    // pending 已清空,staging 无残留(unparsed 文件被 wipe)。
+    expect((await storage.listTree({ directoryId: pendingId! })).length).toBe(0);
+    expect((await storage.listTree({ directoryId: stagingId })).length).toBe(0);
   });
 });

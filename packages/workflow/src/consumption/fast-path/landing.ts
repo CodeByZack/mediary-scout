@@ -744,8 +744,13 @@ export async function closeOutTvLanding(options: {
     if (leftover.length > 0 && options.onPartial && landingDigest.coveredFileMap && landingDigest.coveredFileMap.size > 0) {
       await options.onPartial(landingDigest.coveredFileMap, leftover);
     }
-    if (leftover.length > 0) {
-      await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
+    // ★ 2026-09-10 地球超新鲜案修复:onPartial 可能已把「代码识别出的已覆盖文件」
+    // 从 staging 搬去 pending,上面 leftover 是搬移前的快照——若照单全删,被搬走的
+    // 文件 id 会触发 deleteFiles 的 SANDBOX_FILES_NOT_IN_STAGING 守卫,把整个 run
+    // 打成 failed(本应优雅换候选)。必须重读 staging,只删此刻仍在暂存区的剩余文件。
+    const remaining = await sandbox.inspectStaging();
+    if (remaining.length > 0) {
+      await sandbox.deleteFiles({ directory: "staging", fileIds: remaining.map((f) => f.id) });
     }
     const next = nextCandidate(grading, tried);
     const coveredCount = landingDigest.coveredCodes.length;
