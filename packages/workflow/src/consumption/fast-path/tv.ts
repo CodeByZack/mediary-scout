@@ -10,7 +10,6 @@ import {
   MAX_TRANSFER_ATTEMPTS,
   MAX_AI_PICKS_PRIMARY,
   MAX_AI_PICKS_FALLBACK,
-  MAX_TAIL_RETRANSFER,
 } from "./budgets.js";
 import {
   aliasesFallbackReSearch,
@@ -588,116 +587,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     }
   }
 
-  // §43 尾部兜底:两池耗尽未全量对齐时,按覆盖数降序重转最优候选落库。
-  // 成功 → partial;三个全失败 → 回落 reportNoCoverage(同现状)。
-  if (ctx.coverageRecords.length > 0 && needCodes.length > 0) {
-    const sorted = [...ctx.coverageRecords].sort(
-      (a, b) => b.coveredCodes.length - a.coveredCodes.length,
-    );
-    const top = sorted.slice(0, MAX_TAIL_RETRANSFER);
-    let tailLanded = false;
-    let tailCovered = 0;
-    let tailCandidateTitle = "";
-    for (const record of top) {
-      const tailTitle =
-        grading.ranked.find((c) => c.id === record.candidateId)?.title ?? "候选";
-      const tailDetail = `尾部重转《${tailTitle}》(上次认出 ${record.coveredCodes.length}/${needCodes.length} 集)`;
-      stepLog(sandbox, target.title, "尾部兜底", tailDetail);
-      emitStep(onProgress, "tailRetransfer", "transfer", tailDetail, {
-        candidateId: record.candidateId,
-        title: tailTitle,
-        covered: record.coveredCodes.length,
-        total: needCodes.length,
-      });
-      try {
-        const transfer = await sandbox.transferCandidate({
-          snapshotId: record.snapshotId,
-          candidateId: record.candidateId,
-          skipDeadLinkRecording: true,
-        });
-        const digest = digestStaging({
-          files: transfer.staging,
-          seasons,
-          needCodes,
-          ...(record.overrides ? { overrides: record.overrides } : {}),
-          ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
-          ...(target.episodeNames !== undefined ? { episodeNames: target.episodeNames } : {}),
-          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
-        });
-        if (digest.coveredCodes.length > 0) {
-          await finalizeLanding({
-            sandbox,
-            digest,
-            canonicalTitle: target.title,
-            seasons,
-            ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
-            skipCodes: [...onDiskCodes],
-            onlyCodes: needCodes,
-            ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
-            ...(record.overrides ? { overrides: record.overrides } : {}),
-          });
-          tailLanded = true;
-          tailCovered = digest.coveredCodes.length;
-          tailCandidateTitle = tailTitle;
-          // 尾部兜底也走 finalizeLanding emit,供 onProgress 捕获。
-          const organizeDetail = `尾部兜底归位 ${digest.coveredCodes.length}/${needCodes.length} 集`;
-          stepLog(sandbox, target.title, "归位", organizeDetail);
-          emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, {
-            covered: digest.coveredCodes.length,
-            total: needCodes.length,
-          });
-          stepLog(sandbox, target.title, "尾部兜底", `已落库 ${digest.coveredCodes.length} 集`);
-          emitStep(onProgress, "tailLanding", "finalize", `尾部落库《${tailTitle}》${digest.coveredCodes.length} 集`, {
-            candidateId: record.candidateId,
-            title: tailTitle,
-            covered: digest.coveredCodes.length,
-            missing: digest.missingCodes.length,
-          });
-          break;
-        } else {
-          const leftover = await sandbox.inspectStaging();
-          if (leftover.length > 0) {
-            await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
-          }
-        }
-      } catch (err) {
-        // 重转失败:不写 dead_links(该链接验证过能用);清残留防污染下一条 digest。
-        stepLog(
-          sandbox,
-          target.title,
-          "尾部兜底",
-          `重转失败: ${err instanceof Error ? err.message : String(err)}`,
-          "warn",
-        );
-        try {
-          const leftover = await sandbox.inspectStaging();
-          if (leftover.length > 0) {
-            await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
-          }
-        } catch {
-          // 清理失败不阻塞下一条。
-        }
-      }
-    }
-    if (tailLanded) {
-      const checkoutDetail = `转存 ${ctx.attempted.size} 次未全量对齐,尾部落库 ${tailCovered} 集`;
-      stepLog(sandbox, target.title, "结账", checkoutDetail);
-      emitStep(onProgress, "runCheckout", "finalize", checkoutDetail, {
-        transfers: ctx.attempted.size,
-        fallbackTransfers: ctx.attempted.size - primaryTransfers,
-        deadLinkRetries: deadRetries,
-        searches: 1 + fallbackRounds,
-        aiEscalated: escalated,
-        tailLanding: { covered: tailCovered, total: needCodes.length, candidateTitle: tailCandidateTitle },
-      });
-      return {
-        text: `fast path 部分覆盖(转存 ${ctx.attempted.size} 次,尾部落库 ${tailCovered}/${needCodes.length} 集)`,
-        steps: ctx.attempted.size,
-        coverage: await sandbox.finish(),
-        escalated,
-      };
-    }
-  }
+  // removed
 
   // Candidates exhausted or attempt cap hit → wipe staging and report unmet.
   if ((await sandbox.inspectStaging()).length > 0) {

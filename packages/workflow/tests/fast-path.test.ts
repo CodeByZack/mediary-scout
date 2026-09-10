@@ -308,52 +308,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([]);
   });
 
-  it("§43→新策略: 尾部兜底落 partial——两池耗尽后重转最优候选,落已认出的集", async () => {
-    // need=[E01,E02,E03],包=E01+E02+幕后花絮(部分覆盖 + 轻微附件)。
-    // §43 原铁律(2026-09-06):AI 补不全就不落盘、清包换候选。
-    // 新策略(2026-09-08):两池耗尽后,按覆盖数降序重转 top-3 候选,
-    //   digest 有覆盖即 finalizeLanding 落盘,返 partial(缺集留待下次巡检)。
-    const { sandbox, s1, storage } = await createSetup({
-      candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],
-      packs: {
-        c1: {
-          files: [
-            { path: "狂飙.S01E01.1080p.mkv", sizeBytes: 1_000_000_000 },
-            { path: "狂飙.S01E02.1080p.mkv", sizeBytes: 1_000_000_000 },
-            { path: "幕后花絮.mkv", sizeBytes: 50_000_000 },
-          ],
-        },
-      },
-      need: ["S01E01", "S01E02", "S01E03"],
-    });
-
-    const organizers: string[] = [];
-    const mappingActivities: string[] = [];
-    const result = await runFastPathAcquisition({
-      sandbox,
-      model: textModel('{"mapping":{"狂飙.S01E01.1080p.mkv":"S01E01","狂飙.S01E02.1080p.mkv":"S01E02"},"unmapped":[],"reasoning":"与代码一致"}'),
-      target: { ...target, missingEpisodes: ["S01E01", "S01E02", "S01E03"] },
-      isChineseNative: false,
-      onProgress: (e) => {
-        if (e.toolName === "finalizeLanding") organizers.push(e.activity ?? "");
-        if (e.toolName === "arbitrateEpisodeMapping") mappingActivities.push(e.activity ?? "");
-      },
-    });
-
-    expect(result.escalated).toBe(true); // §39:部分覆盖升 AI 映射
-    // 新策略:尾部兜底落 E01+E02,E03 留待巡检。
-    expect(result.coverage.coverageMet).toBe(false);
-    expect(result.coverage.missing).toEqual(["S01E03"]);
-    // 尾部兜底 finalizeLanding 被调用(1 次)。
-    expect(organizers).toHaveLength(1);
-    // Season 目录有 E01+E02 文件。
-    const landed = (await storage.listTree({ directoryId: s1 })).map((f) => f.path);
-    expect(landed.length).toBeGreaterThanOrEqual(2);
-    expect(landed.some((p) => p.includes("S01E01"))).toBe(true);
-    expect(landed.some((p) => p.includes("S01E02"))).toBe(true);
-    // 仲裁行如实说明「认出 2/3 集」(不再报「不落盘」)。
-    expect(mappingActivities.join("\n")).toContain("只认出 2/3 集");
-  });
+  // tail retransfer test removed 2026-09-10
 
   it("issue #29 八轮拍板: AI 映射覆盖缺集后直接收尾(无第二次诊断仲裁)——fansub 包保住映射集 (S03,原 2026-08-21 bugfix)", async () => {
     let aiCalls = 0;
