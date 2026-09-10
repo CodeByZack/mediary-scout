@@ -256,6 +256,63 @@ async function runTvCandidatePhase(
       ...(ctx.episodeNames !== undefined ? { episodeNames: ctx.episodeNames } : {}),
       ...(ctx.episodeRules !== undefined ? { episodeRules: ctx.episodeRules } : {}),
       ...(ctx.promptOverrides !== undefined ? { promptOverrides: ctx.promptOverrides } : {}),
+      onPartial: async (coveredFileMap, stagingTree) => {
+        // Move covered files from staging to pending (B1 fix: before wipe)
+        if (!current) return;
+        const covered = [...coveredFileMap.keys()].filter((c) => needCodes.includes(c));
+        const count = covered.length;
+        if (count > ctx.bestCount) {
+          // New main source: delete old main source files from pending
+          for (const [code, entry] of ctx.pendingEntries) {
+            if (entry.candidateId !== current) {
+              try {
+                const fileIds = [entry.fileId, ...(entry.subtitles ?? [])];
+                await sandbox.deleteFromPending({ fileIds });
+              } catch { /* file may already be gone */ }
+              ctx.pendingEntries.delete(code);
+            }
+          }
+          for (const [code, fileId] of coveredFileMap) {
+            if (needCodes.includes(code)) {
+              ctx.pendingEntries.set(code, { fileId, candidateId: current });
+            }
+          }
+          ctx.bestCount = count;
+          ctx.bestCandidateId = current;
+        } else {
+          // Only add unique codes
+          for (const [code, fileId] of coveredFileMap) {
+            if (needCodes.includes(code) && !ctx.pendingEntries.has(code)) {
+              ctx.pendingEntries.set(code, { fileId, candidateId: current });
+            }
+          }
+        }
+        // Move covered files from staging to pending (with subtitle matching)
+        for (const [code, entry] of ctx.pendingEntries) {
+          if (entry.candidateId !== current) continue;
+          try {
+            const videoInStaging = stagingTree.find((f) => f.id === entry.fileId);
+            let subtitleIds: string[] | undefined;
+            if (videoInStaging) {
+              const videoBase = videoInStaging.path.split("/").pop() ?? "";
+              const videoPrefix = videoBase.replace(/\.[^.]+$/, "");
+              subtitleIds = stagingTree
+                .filter((f) => f.isSubtitle && f.id !== entry.fileId)
+                .map((f) => f.path.split("/").pop() ?? "")
+                .filter((name) => name.startsWith(videoPrefix) && name !== videoBase)
+                .map((name) => stagingTree.find((f) => f.path.split("/").pop() === name)!.id)
+                .filter(Boolean);
+            }
+            if (subtitleIds && subtitleIds.length > 0) entry.subtitles = subtitleIds;
+            await sandbox.moveToPending({
+              moves: [{
+                fileId: entry.fileId,
+                ...(subtitleIds && subtitleIds.length > 0 ? { subtitleFileIds: subtitleIds } : {}),
+              }],
+            });
+          } catch { /* file may not be in staging */ }
+        }
+      },
     });
     if (closed.done) {
       return { done: closed.done, escalated: closed.escalated, deadRetries: closed.deadRetries };
@@ -266,11 +323,10 @@ async function runTvCandidatePhase(
     if (closed.verdict !== "dead") {
       if (isAiPick) aiTransfers++; else codeTransfers++;
     }
-    // §43 尾部兜底 + pending 积累:记录部分覆盖,两池耗尽后按覆盖数降序重转最优候选。
+    // §43 尾部兜底:记录部分覆盖,两池耗尽后按覆盖数降序重转最优候选。
     // 去重:合并证据池可能让同一候选在 primary 与兜底各产生一条记录。
     if (closed.verdict === "retry_other" && closed.coveredCodes && closed.coveredCodes.length > 0) {
       const covered = closed.coveredCodes.filter((c) => needCodes.includes(c));
-      // §43 coverage record (legacy)
       if (!ctx.coverageRecords.some((r) => r.candidateId === current)) {
         ctx.coverageRecords.push({
           candidateId: current,
@@ -278,51 +334,6 @@ async function runTvCandidatePhase(
           coveredCodes: covered,
           ...(closed.overrides ? { overrides: closed.overrides } : {}),
         });
-      }
-      // Pending 积累:同源优先算法
-      if (closed.coveredFileMap && covered.length > 0) {
-        const count = covered.length;
-        if (count > ctx.bestCount) {
-          // 新主力:删旧主力文件,覆盖同名集
-          for (const [code, entry] of ctx.pendingEntries) {
-            if (entry.candidateId !== current) {
-              // Delete old files from pending (will be replaced)
-              try {
-                const fileIds = [entry.fileId, ...(entry.subtitles ?? [])];
-                await sandbox.deleteFromPending({ fileIds });
-              } catch {
-                // File may already be gone; continue.
-              }
-              ctx.pendingEntries.delete(code);
-            }
-          }
-          for (const [code, fileId] of closed.coveredFileMap) {
-            if (needCodes.includes(code)) {
-              ctx.pendingEntries.set(code, { fileId, candidateId: current });
-            }
-          }
-          ctx.bestCount = count;
-          ctx.bestCandidateId = current;
-        } else {
-          // 只补独有的
-          for (const [code, fileId] of closed.coveredFileMap) {
-            if (needCodes.includes(code) && !ctx.pendingEntries.has(code)) {
-              ctx.pendingEntries.set(code, { fileId, candidateId: current });
-            }
-          }
-        }
-        // Move covered files from staging to pending
-        for (const [code, entry] of ctx.pendingEntries) {
-          if (entry.candidateId === current) {
-            try {
-              await sandbox.moveToPending({
-                moves: [{ fileId: entry.fileId }],
-              });
-            } catch {
-              // File may have been moved already or is not in staging; continue.
-            }
-          }
-        }
       }
     }
     current = pickQueue.shift() ?? closed.next;

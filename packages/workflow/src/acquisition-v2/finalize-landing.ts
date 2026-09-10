@@ -404,26 +404,31 @@ export async function finalizeFromPending(options: {
     renames.push({ fileId, newName });
   }
 
+  // Build a code->newFileId map after rename (Quark changes IDs on rename)
+  const codeToNewFileId = new Map<string, string>();
   if (renames.length > 0) {
     const result = await sandbox.renameInPending({ renames });
     renamed.push(...result.renamed);
     const pendingNow = await sandbox.inspectPending();
     const idByNewName = new Map(pendingNow.map((f) => [f.path.split("/").pop() ?? f.path, f.id]));
     for (const { fileId, newName } of renames) {
+      const newId = idByNewName.get(newName) ?? fileId;
+      codeToNewFileId.set(fileId, newId);
       renamedPairs.push({ from: fileId, to: newName });
       stepLog(sandbox, canonicalTitle, "改名", fileId + " -> " + newName);
     }
   }
 
-  // Group by season for move
+  // Group by season for move (use updated fileIds from rename)
   const bySeason = new Map<number, string[]>();
   for (const entry of entries) {
     const { code, fileId } = entry;
     if (!plannedCodes.has(code)) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null) continue;
+    const currentFileId = codeToNewFileId.get(fileId) ?? fileId;
     const ids = bySeason.get(season) ?? [];
-    ids.push(fileId);
+    ids.push(currentFileId);
     if (entry.subtitles) ids.push(...entry.subtitles);
     bySeason.set(season, ids);
   }

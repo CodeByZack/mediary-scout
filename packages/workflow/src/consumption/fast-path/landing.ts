@@ -7,6 +7,7 @@ import { finalizeLanding } from "../../acquisition-v2/finalize-landing.js";
 import { digestStaging, digestTitle, type StagingDigest } from "../../acquisition-v2/staging-digest.js";
 import { normalizeSearchKeyword } from "../../planning-search-gate.js";
 import type { AgentToolEvent } from "../../acquisition-v2/activity.js";
+import type { SimTreeFile } from "../../acquisition-v2/storage-115-simulator.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import type { TvAnimeTarget } from "../../acquisition-v2/target-types.js";
 import { MAX_DEAD_LINK_RETRIES, MAX_FALLBACK_SEARCHES } from "./budgets.js";
@@ -405,6 +406,9 @@ export async function closeOutTvLanding(options: {
   seasons: number[];
   needCodes: string[];
   onDiskCodes: Set<string>;
+  /** Callback fired before staging wipe in the retry_other path — lets the caller
+   *  capture covered files to pending before they're deleted. */
+  onPartial?: (coveredFileMap: Map<string, string>, stagingTree: SimTreeFile[]) => Promise<void>;
   /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD",可缺省)—— digest/finalize 共用的年守卫数据。 */
   episodeAirDates?: Record<string, string>;
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")——「第N期」Part 锚定数据。 */
@@ -735,7 +739,11 @@ export async function closeOutTvLanding(options: {
     // 候选/预算耗尽才诚实报告未覆盖,交给下次巡检。issue #39 的「附件/junk 不否决整包」
     // 语义不变(附件仍只进 junkSignals、不参与集号覆盖)。部分覆盖到底要不要为少数缺集
     // 重复转存大包,留待后续讨论。
+    // Capture covered files to pending BEFORE wiping staging (B1 fix).
     const leftover = await sandbox.inspectStaging();
+    if (leftover.length > 0 && options.onPartial && landingDigest.coveredFileMap && landingDigest.coveredFileMap.size > 0) {
+      await options.onPartial(landingDigest.coveredFileMap, leftover);
+    }
     if (leftover.length > 0) {
       await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
     }
