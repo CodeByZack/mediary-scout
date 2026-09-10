@@ -36,6 +36,8 @@ export interface RunAcquisitionV2Request {
   target: AcquisitionV2Target;
   /** The scoped staging dir (under the show dir / storage parent — NEVER inside the Season dir). */
   stagingDirectoryId: string;
+  /** The scoped pending dir (under the show dir / storage parent). */
+  pendingDirectoryId?: string;
   /** TV: season number -> scoped Season directory. A multi-season pack's files are
    *  distributed across these; supply one entry per season the task covers. */
   targetSeasonDirectoryIds?: Record<number, string>;
@@ -129,6 +131,7 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
     // soft floor authorizes it). TV/anime omit it → hard floor + hard 8-budget.
     ...(request.target.kind === "movie" ? { subtitleFallback: true } : {}),
     stagingDirectoryId: request.stagingDirectoryId,
+    ...(request.pendingDirectoryId === undefined ? {} : { pendingDirectoryId: request.pendingDirectoryId }),
     ...(request.targetSeasonDirectoryIds === undefined
       ? {}
       : { targetSeasonDirectoryIds: request.targetSeasonDirectoryIds }),

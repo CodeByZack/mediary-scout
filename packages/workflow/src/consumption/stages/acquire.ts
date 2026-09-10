@@ -123,6 +123,7 @@ export async function runAcquisitionCoreStage(
       qualityPreference: request.qualityPreference,
     },
     stagingDirectoryId: directories.stagingDirectoryId,
+    pendingDirectoryId: directories.pendingDirectoryId,
     targetSeasonDirectoryIds: directories.seasonDirectoryIds,
     ...(request.searchBudget === undefined ? {} : { searchBudget: request.searchBudget }),
     ...(request.maxSteps === undefined ? {} : { maxSteps: request.maxSteps }),
