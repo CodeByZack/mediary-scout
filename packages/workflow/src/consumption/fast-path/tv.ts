@@ -1,4 +1,4 @@
-import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
+import { episodeCodeFromFileName, episodeCodeFromPath, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
 import { arbitrateSelection } from "../../acquisition-v2/arbitrator.js";
 import type { PromptOverrideLookup } from "../../ruleset.js";
 import { gradeCandidates, summarizeGrading } from "../../acquisition-v2/candidate-grader.js";
@@ -259,6 +259,7 @@ async function runTvCandidatePhase(
       onPartial: async (coveredFileMap, stagingTree) => {
         // Move covered files from staging to pending (B1 fix: before wipe)
         if (!current) return;
+        try {
         const covered = [...coveredFileMap.keys()].filter((c) => needCodes.includes(c));
         const count = covered.length;
         if (count > ctx.bestCount) {
@@ -279,38 +280,45 @@ async function runTvCandidatePhase(
           }
           ctx.bestCount = count;
           ctx.bestCandidateId = current;
+          stepLog(sandbox, target.title, "pending 积累", "新主力:" + count + " 集");
         } else {
           // Only add unique codes
+          let added = 0;
           for (const [code, fileId] of coveredFileMap) {
             if (needCodes.includes(code) && !ctx.pendingEntries.has(code)) {
               ctx.pendingEntries.set(code, { fileId, candidateId: current });
+              added++;
             }
+          }
+          if (added > 0) {
+            stepLog(sandbox, target.title, "pending 积累", "补充:" + added + " 集");
           }
         }
         // Move covered files from staging to pending (with subtitle matching)
+        let movedCount = 0;
         for (const [code, entry] of ctx.pendingEntries) {
           if (entry.candidateId !== current) continue;
           try {
-            const videoInStaging = stagingTree.find((f) => f.id === entry.fileId);
-            let subtitleIds: string[] | undefined;
-            if (videoInStaging) {
-              const videoBase = videoInStaging.path.split("/").pop() ?? "";
-              const videoPrefix = videoBase.replace(/\.[^.]+$/, "");
-              subtitleIds = stagingTree
-                .filter((f) => f.isSubtitle && f.id !== entry.fileId)
-                .map((f) => f.path.split("/").pop() ?? "")
-                .filter((name) => name.startsWith(videoPrefix) && name !== videoBase)
-                .map((name) => stagingTree.find((f) => f.path.split("/").pop() === name)!.id)
-                .filter(Boolean);
-            }
-            if (subtitleIds && subtitleIds.length > 0) entry.subtitles = subtitleIds;
+            // Match subtitles by episode code (same as buildSeasonMoves)
+            const subtitleIds = stagingTree
+              .filter((f) => f.isSubtitle && f.id !== entry.fileId)
+              .filter((f) => episodeCodeFromPath(f.path, seasons, ctx.episodeNames, ctx.episodeRules).code === code)
+              .map((f) => f.id);
+            if (subtitleIds.length > 0) entry.subtitles = subtitleIds;
             await sandbox.moveToPending({
               moves: [{
                 fileId: entry.fileId,
-                ...(subtitleIds && subtitleIds.length > 0 ? { subtitleFileIds: subtitleIds } : {}),
+                ...(subtitleIds.length > 0 ? { subtitleFileIds: subtitleIds } : {}),
               }],
             });
           } catch { /* file may not be in staging */ }
+          movedCount++;
+        }
+        if (movedCount > 0) {
+          stepLog(sandbox, target.title, "pending 积累", "搬入 pending:" + movedCount + " 集");
+        }
+        } catch (err) {
+          stepLog(sandbox, target.title, "pending 积累失败", err instanceof Error ? err.message : String(err), "error");
         }
       },
     });
