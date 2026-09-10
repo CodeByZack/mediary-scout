@@ -459,7 +459,7 @@ export class TaskSandbox {
   /** Move files from pending to season directories. Like moveToSeason but
    *  reads from the pending directory instead of staging. */
   async moveToSeasonFromPending(input: {
-    moves: Array<{ season?: number; fileIds: string[] }>;
+    moves: Array<{ season: number; fileIds: string[] }>;
   }): Promise<{ seasons: Record<number, SimTreeFile[]>; pending: SimTreeFile[] }> {
     if (!this.storage || !this.pendingDirectoryId) {
       throw new Error("SANDBOX: no storage/pending handle configured");
