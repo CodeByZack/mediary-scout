@@ -407,6 +407,10 @@ export async function finalizeFromPending(options: {
   // Build a code->newFileId map after rename (Quark changes IDs on rename)
   const codeToNewFileId = new Map<string, string>();
   if (renames.length > 0) {
+    // ★ 2026-09-10:rename【之前】先快照 pending 原名 —— renamedPairs.from 用原名,
+    // 否则 from 取的是 rename 后的新名,日志变成「新名 -> 新名」没法看。
+    const pendingBefore = await sandbox.inspectPending();
+    const pendingByIdBefore = new Map(pendingBefore.map((f) => [f.id, f.path.split("/").pop() ?? f.id]));
     const result = await sandbox.renameInPending({ renames });
     renamed.push(...result.renamed);
     // ★ 2026-09-10 地球超新鲜案:renameInPending 的 errors 曾被完全忽略 ——
@@ -419,12 +423,10 @@ export async function finalizeFromPending(options: {
     }
     const pendingNow = await sandbox.inspectPending();
     const idByNewName = new Map(pendingNow.map((f) => [f.path.split("/").pop() ?? f.path, f.id]));
-    // Resolve basenames for renamedPairs.from (same as finalizeLanding)
-    const pendingById = new Map(pendingNow.map((f) => [f.id, f.path.split("/").pop() ?? f.id]));
     for (const { fileId, newName } of renames) {
       const newId = idByNewName.get(newName) ?? fileId;
       codeToNewFileId.set(fileId, newId);
-      const from = pendingById.get(fileId) ?? fileId;
+      const from = pendingByIdBefore.get(fileId) ?? fileId;
       renamedPairs.push({ from, to: newName });
       stepLog(sandbox, canonicalTitle, "改名", from + " -> " + newName);
     }

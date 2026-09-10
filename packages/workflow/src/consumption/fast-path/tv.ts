@@ -266,9 +266,17 @@ async function runTvCandidatePhase(
           // New main source: delete old main source files from pending
           for (const [code, entry] of ctx.pendingEntries) {
             if (entry.candidateId !== current) {
+              const fileIds = [entry.fileId, ...(entry.subtitles ?? [])];
               try {
-                const fileIds = [entry.fileId, ...(entry.subtitles ?? [])];
-                await sandbox.deleteFromPending({ fileIds });
+                const del = await sandbox.deleteFromPending({ fileIds });
+                // ★ 2026-09-10:删除成功同样留痕——换主力时旧 pending 的清理过程,
+                // 与 finalize 报错对照(残留 vs 已删)。
+                stepLog(
+                  sandbox,
+                  target.title,
+                  "pending 积累",
+                  `删旧主力 ${code} ${del.deleted.length}/${fileIds.length} 个文件`,
+                );
               } catch (err) {
                 // ★ 2026-09-10 地球超新鲜案:删旧主力失败曾被静默吞掉 → 磁盘残留、
                 // map 已删,与 pending 实况脱钩。必须留痕以便对照 finalize 报错。
