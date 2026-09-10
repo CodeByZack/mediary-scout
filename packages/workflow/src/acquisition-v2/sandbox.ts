@@ -91,6 +91,10 @@ export interface TaskSandboxOptions {
   /** Scoped storage + the staging handle this task may transfer into. */
   storage?: StorageV2;
   stagingDirectoryId?: string;
+  /** Pending accumulation directory (TV fast path only). Accumulates recognized
+   *  episodes across candidates before finalization. Same run-scoped pattern as
+   *  staging; created by ensureSeasonAcquisitionDirectories. */
+  pendingDirectoryId?: string;
   /** TV/anime: season number -> scoped Season directory. A multi-season / complete-
    *  series pack's files are distributed across these per season (§2 targetSeasons +
    *  moveToSeason(fileIds, season); architecture §Multi-season; permission-audit 105/209). */
@@ -170,6 +174,8 @@ export class TaskSandbox {
   private readonly searchBudget: number;
   private readonly storage: StorageV2 | undefined;
   private readonly stagingDirectoryId: string | undefined;
+  /** Pending accumulation directory (TV fast path only). */
+  private readonly pendingDirectoryId: string | undefined;
   /** Run-scoped id for stdout step logs (see logRunId). */
   private readonly workflowRunId: string | undefined;
   /** TV: season number -> scoped Season directory (multi-season distribution). */
@@ -220,6 +226,7 @@ export class TaskSandbox {
     this.softThreshold = this.subtitleFallback ? MOVIE_SEARCH_SOFT_THRESHOLD : undefined;
     this.storage = options.storage;
     this.stagingDirectoryId = options.stagingDirectoryId;
+    this.pendingDirectoryId = options.pendingDirectoryId;
     this.profile = options.searchProfile;
     this.seasonDirs = new Map(
       Object.entries(options.targetSeasonDirectoryIds ?? {}).map(([season, id]) => [Number(season), id]),
