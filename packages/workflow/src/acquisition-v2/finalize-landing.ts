@@ -409,6 +409,14 @@ export async function finalizeFromPending(options: {
   if (renames.length > 0) {
     const result = await sandbox.renameInPending({ renames });
     renamed.push(...result.renamed);
+    // ★ 2026-09-10 地球超新鲜案:renameInPending 的 errors 曾被完全忽略 ——
+    // 改名失败的文件 finalize 仍按旧 id 归位 → SANDBOX_FILES_NOT_IN_PENDING。
+    // 这里留痕以便对照。
+    if (result.errors && result.errors.length > 0) {
+      for (const e of result.errors) {
+        console.error(`[mediary-run][${sandbox.logRunId}] ${canonicalTitle} | pending 改名失败: ${e.fileId}: ${e.error}`);
+      }
+    }
     const pendingNow = await sandbox.inspectPending();
     const idByNewName = new Map(pendingNow.map((f) => [f.path.split("/").pop() ?? f.path, f.id]));
     // Resolve basenames for renamedPairs.from (same as finalizeLanding)
@@ -437,6 +445,11 @@ export async function finalizeFromPending(options: {
   }
 
   const moves = [...bySeason.entries()].map(([season, fileIds]) => ({ season, fileIds }));
+  // ★ 2026-09-10 地球超新鲜案:归位前打印 moves 全量,便于和
+  // moveToSeasonFromPending 的 outOfScope 对照(7 个 id 从哪来)。
+  for (const move of moves) {
+    stepLog(sandbox, canonicalTitle, "pending 归位", `S${move.season} 待搬 ${move.fileIds.join(",")}`);
+  }
   let movedCount = 0;
   if (moves.length > 0) {
     await sandbox.moveToSeasonFromPending({ moves });

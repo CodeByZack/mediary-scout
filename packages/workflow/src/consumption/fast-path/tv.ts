@@ -269,7 +269,17 @@ async function runTvCandidatePhase(
               try {
                 const fileIds = [entry.fileId, ...(entry.subtitles ?? [])];
                 await sandbox.deleteFromPending({ fileIds });
-              } catch { /* file may already be gone */ }
+              } catch (err) {
+                // ★ 2026-09-10 地球超新鲜案:删旧主力失败曾被静默吞掉 → 磁盘残留、
+                // map 已删,与 pending 实况脱钩。必须留痕以便对照 finalize 报错。
+                stepLog(
+                  sandbox,
+                  target.title,
+                  "pending 积累",
+                  `删旧主力失败 ${code} ${entry.fileId}${entry.subtitles ? " +字幕" + entry.subtitles.join(",") : ""}: ${err instanceof Error ? err.message : String(err)}`,
+                  "warn",
+                );
+              }
               ctx.pendingEntries.delete(code);
             }
           }
@@ -311,7 +321,17 @@ async function runTvCandidatePhase(
                 ...(subtitleIds.length > 0 ? { subtitleFileIds: subtitleIds } : {}),
               }],
             });
-          } catch { /* file may not be in staging */ }
+          } catch (err) {
+            // ★ 2026-09-10 地球超新鲜案:搬移失败曾被静默吞掉 → entry 留在 map,
+            // 磁盘没进 pending,后续 finalize 撞 SANDBOX_FILES_NOT_IN_PENDING。
+            stepLog(
+              sandbox,
+              target.title,
+              "pending 积累",
+              `搬入失败 ${code} ${entry.fileId}${(entry.subtitles ?? []).length > 0 ? " +字幕" + (entry.subtitles ?? []).join(",") : ""}: ${err instanceof Error ? err.message : String(err)}`,
+              "warn",
+            );
+          }
           movedCount++;
         }
         if (movedCount > 0) {

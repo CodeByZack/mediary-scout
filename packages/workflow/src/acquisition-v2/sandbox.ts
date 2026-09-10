@@ -476,6 +476,11 @@ export class TaskSandbox {
     );
     const outOfScope = resolved.flatMap((m) => m.fileIds).filter((id) => !pendingIds.has(id));
     if (outOfScope.length > 0) {
+      // ★ 2026-09-10 地球超新鲜案:报 NOT_IN_PENDING 前把「想要搬的」vs「pending 实况」
+      // 全量留痕,便于对照是残留/反查退化/搬运遗漏。
+      console.error(
+        `[mediary-run][${this.logRunId}] | pending 归位失败: need=${JSON.stringify(resolved.flatMap((m) => m.fileIds))} missing=${JSON.stringify(outOfScope)} pending=${JSON.stringify([...pendingIds])}`,
+      );
       throw new Error("SANDBOX_FILES_NOT_IN_PENDING: " + outOfScope.join(","));
     }
     for (const move of resolved) {
