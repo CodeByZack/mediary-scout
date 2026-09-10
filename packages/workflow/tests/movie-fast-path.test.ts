@@ -703,7 +703,8 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       target: aliasTarget,
     });
 
-    expect(result.escalated).toBe(true); // 诊断 AI 被调用
+    // 有 B → phase 1 运行 → AI 选片 → 转存成功(不需要兜底)
+    expect(result.escalated).toBe(true); // AI 被调用(无 A → AI 选片)
     expect(result.coverage.coverageMet).toBe(true);
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
@@ -748,8 +749,8 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       target: aliasTarget,
     });
 
-    // 新行为:phase 1 有 B 候选 → AI 选 c1 → 转存成功(不需要兜底)
-    expect(result.escalated).toBe(false);
+    // 有 B → phase 1 运行 → AI 选片 → 转存成功(不需要兜底)
+    expect(result.escalated).toBe(true);
     expect(result.coverage.coverageMet).toBe(true);
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
@@ -799,11 +800,13 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
     const transferArgs: Record<string, unknown>[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
-      // 三个 A → uniqueTopGrade=true → 代码直选(无 AI 选片);3 次诊断 retry_other 仍调 AI。
+      // 三个 B → AI 选片 + 3 次诊断 → 试尽 → 兜底选片
       model: sequentialModel([
-        '{"action":"retry_other","reasoning":"多影片脏包"}', // c1 → c2
-        '{"action":"retry_other","reasoning":"多影片脏包"}', // c2 → c3
-        '{"action":"retry_other","reasoning":"多影片脏包"}', // c3 → 试尽 → 兜底
+        '{"candidateId":"c1","reasoning":"primary 候选"}', // phase 1 选片
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c1 诊断
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c2 诊断
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c3 诊断 → 试尽 → 兜底
+        '{"candidateId":"c4","reasoning":"兜底唯一 A"}',     // 兜底选片
       ]),
       target: aliasTarget,
       onProgress: (e) => {
@@ -819,10 +822,10 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       "流浪地球 (2019).mkv",
     ]);
     expect(searches.length).toBe(2); // primary 预搜 1 + 兜底重搜 1
-    // 无 A → phase 1 跳过 → 只有 1 次兜底转存
-    expect(transferArgs.map((a) => a["round"])).toEqual([1]);
-    expect(transferArgs.map((a) => a["pool"])).toEqual(["fallback"]);
-    expect(transferArgs.map((a) => a["transferIndex"])).toEqual([1]);
+    // 有 B → phase 1 运行(3 次全废) → 兜底启动(1 次成功) = 4 次转存
+    expect(transferArgs.map((a) => a["round"])).toEqual([1, 2, 3, 4]);
+    expect(transferArgs.map((a) => a["pool"])).toEqual(["primary", "primary", "primary", "fallback"]);
+    expect(transferArgs.map((a) => a["transferIndex"])).toEqual([1, 2, 3, 1]);
   });
 });
 

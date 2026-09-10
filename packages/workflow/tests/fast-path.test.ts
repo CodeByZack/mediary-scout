@@ -1047,7 +1047,7 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
       sandbox,
       model: sequentialModel([
         '{"candidateId":"c1","reasoning":"primary 唯一候选"}', // phase 1 选片
-        '{"action":"retry_other","reasoning":"空包"}',          // c1 空包 → 诊断
+        '{"candidateId":"f1","reasoning":"兜底候选"}',          // 兜底选片(合并池)
       ]),
       target: aliasTarget,
       isChineseNative: false,
