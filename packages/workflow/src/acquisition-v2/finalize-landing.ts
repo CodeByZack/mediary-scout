@@ -366,3 +366,90 @@ export async function finalizeMovieLanding(
   return { movie, marked };
 }
 
+
+
+/** Finalize from pending entries (code -> fileId + subtitles). Used by the
+ *  pending accumulation flow when no single candidate covers the full need. */
+export async function finalizeFromPending(options: {
+  sandbox: TaskSandbox;
+  entries: Array<{ code: string; fileId: string; subtitles?: string[] }>;
+  canonicalTitle: string;
+  seasons: number[];
+  skipCodes?: string[];
+  onlyCodes?: string[];
+  episodeAirDates?: Record<string, string>;
+  rules?: EpisodeParseRules;
+}): Promise<FinalizeLandingResult> {
+  const { sandbox, entries, canonicalTitle, seasons, skipCodes, onlyCodes, episodeAirDates, rules } = options;
+  const seasonSet = new Set(seasons);
+  const skipSet = new Set(skipCodes ?? []);
+  const onlySet = onlyCodes ? new Set(onlyCodes) : null;
+
+  const renames: Array<{ fileId: string; newName: string }> = [];
+  const renamed: string[] = [];
+  const renamedPairs: Array<{ from: string; to: string }> = [];
+  const skippedOnDisk: string[] = [];
+  const skippedNotNeeded: string[] = [];
+  const plannedCodes = new Set<string>();
+
+  for (const entry of entries) {
+    const { code, fileId } = entry;
+    const season = seasonFromEpisodeCode(code);
+    if (season === null || !seasonSet.has(season)) continue;
+    if (skipSet.has(code)) { skippedOnDisk.push(code); continue; }
+    if (onlySet && !onlySet.has(code)) { skippedNotNeeded.push(code); continue; }
+    if (plannedCodes.has(code)) { skippedNotNeeded.push(code + "(dup)"); continue; }
+    plannedCodes.add(code);
+    const newName = canonicalEpisodeFileName({ title: canonicalTitle, episodeCode: code, sourceName: code + ".mkv" });
+    renames.push({ fileId, newName });
+  }
+
+  if (renames.length > 0) {
+    const result = await sandbox.renameInPending({ renames });
+    renamed.push(...result.renamed);
+    const pendingNow = await sandbox.inspectPending();
+    const idByNewName = new Map(pendingNow.map((f) => [f.path.split("/").pop() ?? f.path, f.id]));
+    for (const { fileId, newName } of renames) {
+      renamedPairs.push({ from: fileId, to: newName });
+      stepLog(sandbox, canonicalTitle, "改名", fileId + " -> " + newName);
+    }
+  }
+
+  // Group by season for move
+  const bySeason = new Map<number, string[]>();
+  for (const entry of entries) {
+    const { code, fileId } = entry;
+    if (!plannedCodes.has(code)) continue;
+    const season = seasonFromEpisodeCode(code);
+    if (season === null) continue;
+    const ids = bySeason.get(season) ?? [];
+    ids.push(fileId);
+    if (entry.subtitles) ids.push(...entry.subtitles);
+    bySeason.set(season, ids);
+  }
+
+  const moves = [...bySeason.entries()].map(([season, fileIds]) => ({ season, fileIds }));
+  let movedCount = 0;
+  if (moves.length > 0) {
+    await sandbox.moveToSeasonFromPending({ moves });
+    movedCount = moves.reduce((sum, m) => sum + m.fileIds.length, 0);
+  }
+
+  // Mark obtained
+  const marked = [...plannedCodes];
+  if (marked.length > 0) {
+    await sandbox.markObtained({ codes: marked });
+  }
+
+  // Clear pending
+  const pendingLeft = await sandbox.inspectPending();
+  if (pendingLeft.length > 0) {
+    await sandbox.deleteFromPending({ fileIds: pendingLeft.map((f) => f.id) });
+  }
+
+  return {
+    renamed, renamedPairs,
+    movedSeasons: Object.fromEntries([...bySeason.entries()].map(([s, ids]) => [s, ids.length])),
+    marked, discarded: [], movedCount, skippedOnDisk, skippedNotNeeded,
+  };
+}

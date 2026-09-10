@@ -43,6 +43,8 @@ export interface StagingDigest {
   junkSignals: string[];
   /** The task's need codes that the landing actually covers. */
   coveredCodes: string[];
+  /** Map of covered code → the file ID that produced it (TV fast path pending accumulation). */
+  coveredFileMap: Map<string, string>;
   /** The task's need codes still missing after this landing. */
   missingCodes: string[];
   /** Whether the landing cleanly covers ≥1 needed item with no junk — the fast
@@ -91,6 +93,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
   const subtitles = input.files.filter((file) => file.isSubtitle);
 
   const episodeCodes: string[] = [];
+  const codeToFileId = new Map<string, string>();
   const unparsedVideos: string[] = [];
   const junkSignals: string[] = [];
   const dateRejectedVideos: string[] = [];
@@ -118,6 +121,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
         unparsedVideos.push(base);
       } else if (!episodeCodes.includes(parsedCode)) {
         episodeCodes.push(parsedCode);
+        codeToFileId.set(parsedCode, video.id);
       }
     } else {
       // 无集号且无 junk 标记 → 真正的"未知"文件(可能是正片集号藏在文件名里,
@@ -136,6 +140,11 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
 
   const needSet = new Set(input.needCodes);
   const coveredCodes = episodeCodes.filter((code) => needSet.has(code));
+  const coveredFileMap = new Map<string, string>();
+  for (const code of coveredCodes) {
+    const fid = codeToFileId.get(code);
+    if (fid) coveredFileMap.set(code, fid);
+  }
   const missingCodes = input.needCodes.filter((need) => !needSet.has(need) || !episodeCodes.includes(need));
 
   // Coverage pass (issue #44 用户拍板 2026-09-06):TV 必须**全量覆盖**缺集才算 pass——
@@ -156,6 +165,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
     outOfSeasonCodes,
     junkSignals,
     coveredCodes,
+    coveredFileMap,
     missingCodes,
     passes,
     summary: summarizeDigest({
@@ -167,6 +177,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
       outOfSeasonCodes,
       junkSignals,
       coveredCodes,
+      coveredFileMap,
       missingCodes,
       passes,
     }),

@@ -3,7 +3,7 @@ import { arbitrateSelection } from "../../acquisition-v2/arbitrator.js";
 import type { PromptOverrideLookup } from "../../ruleset.js";
 import { gradeCandidates, summarizeGrading } from "../../acquisition-v2/candidate-grader.js";
 import { digestStaging } from "../../acquisition-v2/staging-digest.js";
-import { finalizeLanding } from "../../acquisition-v2/finalize-landing.js";
+import { finalizeLanding, finalizeFromPending } from "../../acquisition-v2/finalize-landing.js";
 import {
   MAX_DEAD_LINK_RETRIES,
   MAX_FALLBACK_TRANSFER_ATTEMPTS,
@@ -88,6 +88,12 @@ interface TvPoolContext {
   promptOverrides?: PromptOverrideLookup;
   /** 跨池累计的部分覆盖记录（§43 尾部兜底用）。 */
   coverageRecords: CoverageRecord[];
+  /** Pending 积累：code → { fileId, candidateId, subtitles }。同源优先算法维护。 */
+  pendingEntries: Map<string, { fileId: string; candidateId: string; subtitles?: string[] }>;
+  /** 当前主力源的候选 ID（覆盖数最多者）。 */
+  bestCandidateId: string | null;
+  /** 当前主力源的覆盖数。 */
+  bestCount: number;
 }
 
 /** 阶段运行结果。done 非空 = 该池已收尾(入库或诚实终止)，直接返回；否则 caller 决定是否
@@ -260,16 +266,63 @@ async function runTvCandidatePhase(
     if (closed.verdict !== "dead") {
       if (isAiPick) aiTransfers++; else codeTransfers++;
     }
-    // §43 尾部兜底:记录部分覆盖,两池耗尽后按覆盖数降序重转最优候选。
+    // §43 尾部兜底 + pending 积累:记录部分覆盖,两池耗尽后按覆盖数降序重转最优候选。
     // 去重:合并证据池可能让同一候选在 primary 与兜底各产生一条记录。
     if (closed.verdict === "retry_other" && closed.coveredCodes && closed.coveredCodes.length > 0) {
+      const covered = closed.coveredCodes.filter((c) => needCodes.includes(c));
+      // §43 coverage record (legacy)
       if (!ctx.coverageRecords.some((r) => r.candidateId === current)) {
         ctx.coverageRecords.push({
           candidateId: current,
           snapshotId,
-          coveredCodes: closed.coveredCodes.filter((c) => needCodes.includes(c)),
+          coveredCodes: covered,
           ...(closed.overrides ? { overrides: closed.overrides } : {}),
         });
+      }
+      // Pending 积累:同源优先算法
+      if (closed.coveredFileMap && covered.length > 0) {
+        const count = covered.length;
+        if (count > ctx.bestCount) {
+          // 新主力:删旧主力文件,覆盖同名集
+          for (const [code, entry] of ctx.pendingEntries) {
+            if (entry.candidateId !== current) {
+              // Delete old files from pending (will be replaced)
+              try {
+                const fileIds = [entry.fileId, ...(entry.subtitles ?? [])];
+                await sandbox.deleteFromPending({ fileIds });
+              } catch {
+                // File may already be gone; continue.
+              }
+              ctx.pendingEntries.delete(code);
+            }
+          }
+          for (const [code, fileId] of closed.coveredFileMap) {
+            if (needCodes.includes(code)) {
+              ctx.pendingEntries.set(code, { fileId, candidateId: current });
+            }
+          }
+          ctx.bestCount = count;
+          ctx.bestCandidateId = current;
+        } else {
+          // 只补独有的
+          for (const [code, fileId] of closed.coveredFileMap) {
+            if (needCodes.includes(code) && !ctx.pendingEntries.has(code)) {
+              ctx.pendingEntries.set(code, { fileId, candidateId: current });
+            }
+          }
+        }
+        // Move covered files from staging to pending
+        for (const [code, entry] of ctx.pendingEntries) {
+          if (entry.candidateId === current) {
+            try {
+              await sandbox.moveToPending({
+                moves: [{ fileId: entry.fileId }],
+              });
+            } catch {
+              // File may have been moved already or is not in staging; continue.
+            }
+          }
+        }
       }
     }
     current = pickQueue.shift() ?? closed.next;
@@ -454,6 +507,9 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     ...(episodeRules !== undefined ? { episodeRules } : {}),
     ...(promptOverrides !== undefined ? { promptOverrides } : {}),
     coverageRecords: [],
+    pendingEntries: new Map(),
+    bestCandidateId: null,
+    bestCount: 0,
   };
 
   // ★ 阶段1 —— primary 池:有候选就转存(不只是 A——B/C 让 AI 挑 3 个试),
@@ -587,7 +643,47 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     }
   }
 
-  // removed
+  // Pending 积累收尾:所有候选试完后,如果 pending 有已识别的集数,从 pending 落库。
+  // 全覆盖走快路径（finalizeLanding from staging）不变；部分覆盖才走 pending。
+  if (ctx.pendingEntries.size > 0) {
+    const pendingCodes = [...ctx.pendingEntries.keys()];
+    const pendingDetail = `pending 积累:从 ${ctx.pendingEntries.size} 个候选拼出 ${pendingCodes.length}/${needCodes.length} 集`;
+    stepLog(sandbox, target.title, "pending 收尾", pendingDetail);
+    emitStep(onProgress, "finalizeFromPending", "organize", pendingDetail, {
+      covered: pendingCodes,
+      total: needCodes.length,
+    });
+    try {
+      await finalizeFromPending({
+        sandbox,
+        entries: [...ctx.pendingEntries.entries()].map(([code, entry]) => ({
+          code,
+          fileId: entry.fileId,
+          ...(entry.subtitles ? { subtitles: entry.subtitles } : {}),
+        })),
+        canonicalTitle: target.title,
+        seasons,
+        skipCodes: [...onDiskCodes],
+        onlyCodes: needCodes,
+        ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
+        ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
+      });
+      const doneDetail = `已完成:${pendingCodes.join(",")} 已入库(pending 积累)`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
+      return {
+        text: `fast path pending 归位标记:${pendingCodes.join(",")}`,
+        steps: ctx.attempted.size,
+        coverage: await sandbox.finish(),
+        escalated,
+      };
+    } catch (error) {
+      // Pending finalization failed — fall through to reportNoCoverage.
+      const failDetail = error instanceof Error ? error.message : String(error);
+      stepLog(sandbox, target.title, "pending 失败", failDetail, "error");
+      emitStep(onProgress, "finalizeFromPending", "organize", failDetail, { ok: false });
+    }
+  }
 
   // Candidates exhausted or attempt cap hit → wipe staging and report unmet.
   if ((await sandbox.inspectStaging()).length > 0) {

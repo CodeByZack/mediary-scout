@@ -392,6 +392,8 @@ export interface TvCloseOut {
   deadRetries: number;
   /** retry_other only: 该候选覆盖的 need 集码 + AI 映射覆盖表（尾部兜底用）。 */
   coveredCodes?: string[];
+  /** retry_other only: 覆盖集码 → 文件 ID 映射（pending 积累用）。 */
+  coveredFileMap?: Map<string, string>;
   overrides?: Record<string, string>;
 }
 
@@ -751,6 +753,7 @@ export async function closeOutTvLanding(options: {
     return {
       verdict: "retry_other", done: null, next, escalated, deadRetries,
       coveredCodes: landingDigest.coveredCodes,
+      coveredFileMap: landingDigest.coveredFileMap,
       ...(mappingTable ? { overrides: mappingTable } : {}),
     };
 

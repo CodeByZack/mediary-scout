@@ -456,6 +456,40 @@ export class TaskSandbox {
     return this.storage.listSubdirectories({ directoryId: this.stagingDirectoryId });
   }
 
+  /** Move files from pending to season directories. Like moveToSeason but
+   *  reads from the pending directory instead of staging. */
+  async moveToSeasonFromPending(input: {
+    moves: Array<{ season?: number; fileIds: string[] }>;
+  }): Promise<{ seasons: Record<number, SimTreeFile[]>; pending: SimTreeFile[] }> {
+    if (!this.storage || !this.pendingDirectoryId) {
+      throw new Error("SANDBOX: no storage/pending handle configured");
+    }
+    const resolved = input.moves.map((move) => {
+      const targetDir = this.resolveTargetDir(move.season);
+      if (!targetDir) {
+        throw new Error("SANDBOX_SEASON_REQUIRED");
+      }
+      return { season: move.season, targetDir, fileIds: move.fileIds };
+    });
+    const pendingIds = new Set(
+      (await this.storage.listTree({ directoryId: this.pendingDirectoryId })).map((f) => f.id),
+    );
+    const outOfScope = resolved.flatMap((m) => m.fileIds).filter((id) => !pendingIds.has(id));
+    if (outOfScope.length > 0) {
+      throw new Error("SANDBOX_FILES_NOT_IN_PENDING: " + outOfScope.join(","));
+    }
+    for (const move of resolved) {
+      await this.storage.moveFiles({ fileIds: move.fileIds, targetDirectoryId: move.targetDir });
+    }
+    const seasons: Record<number, SimTreeFile[]> = {};
+    for (const move of resolved) {
+      if (move.season !== undefined) {
+        seasons[move.season] = await this.storage.listTree({ directoryId: move.targetDir });
+      }
+    }
+    return { seasons, pending: await this.storage.listTree({ directoryId: this.pendingDirectoryId }) };
+  }
+
   /** Read-only full raw tree of THIS task's pending directory. */
   async inspectPending(): Promise<SimTreeFile[]> {
     if (!this.storage || !this.pendingDirectoryId) {
