@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withStagingCleanup } from "../src/index.js";
+import { withStagingCleanup, withPendingCleanup } from "../src/index.js";
 
 function recordingExecutor(behavior?: () => Promise<void>) {
   const removed: string[] = [];
@@ -44,5 +44,35 @@ describe("withStagingCleanup", () => {
     });
     const result = await withStagingCleanup({ executor, stagingDirectoryId: "stg" }, async () => "ok");
     expect(result).toBe("ok"); // cleanup error must not mask the real result
+  });
+});
+
+describe("withPendingCleanup", () => {
+  it("removes the run's pending dir after the body succeeds", async () => {
+    const { executor, removed } = recordingExecutor();
+    const result = await withPendingCleanup(
+      { executor, pendingDirectoryId: "pnd" },
+      async () => "coverage-result",
+    );
+    expect(result).toBe("coverage-result");
+    expect(removed).toEqual(["pnd"]);
+  });
+
+  it("removes pending EVEN WHEN the body throws — the harness-level leak guard", async () => {
+    const { executor, removed } = recordingExecutor();
+    await expect(
+      withPendingCleanup({ executor, pendingDirectoryId: "pnd" }, async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    expect(removed).toEqual(["pnd"]);
+  });
+
+  it("is idempotent — a removeDirectory failure (agent already cleared) is swallowed", async () => {
+    const { executor } = recordingExecutor(async () => {
+      throw new Error("PAN115_DIRECTORY_NOT_FOUND: already gone");
+    });
+    const result = await withPendingCleanup({ executor, pendingDirectoryId: "pnd" }, async () => "ok");
+    expect(result).toBe("ok");
   });
 });

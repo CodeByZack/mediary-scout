@@ -17,6 +17,8 @@ export interface AcquisitionDirectories {
   /** season number -> its scoped Season directory id. */
   seasonDirectoryIds: Record<number, string>;
   stagingDirectoryId: string;
+  /** Pending accumulation directory (TV fast path only; optional). */
+  pendingDirectoryId?: string;
 }
 
 export interface EnsureSeasonDirectoriesRequest {
@@ -58,7 +60,13 @@ export async function ensureSeasonAcquisitionDirectories(
     name: `staging-${request.workflowRunId}`,
     parentId: showDirectoryId,
   });
-  return { showDirectoryId, seasonDirectoryIds, stagingDirectoryId };
+  // Pending accumulation dir (TV fast path only): accumulates recognized episodes
+  // across candidates before finalization. Same run-scoped pattern as staging.
+  const pendingDirectoryId = await request.executor.createDirectory({
+    name: `pending-${request.workflowRunId}`,
+    parentId: showDirectoryId,
+  });
+  return { showDirectoryId, seasonDirectoryIds, stagingDirectoryId, pendingDirectoryId };
 }
 
 /**
@@ -82,6 +90,28 @@ export async function withStagingCleanup<T>(
       await args.executor.removeDirectory(args.stagingDirectoryId);
     } catch {
       // Idempotent: staging may already be gone (agent discarded it). Never let
+      // a cleanup failure throw over the real outcome.
+    }
+  }
+}
+
+/**
+ * Run an acquisition body, then ALWAYS discard the run's pending dir — same
+ * harness-level leak guard as withStagingCleanup. Pending holds accumulated
+ * recognized episodes; if finalizeLanding fails or the process crashes, we
+ * must not leave orphaned files in the library tree.
+ */
+export async function withPendingCleanup<T>(
+  args: { executor: Pick<StorageExecutor, "removeDirectory">; pendingDirectoryId: string },
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } finally {
+    try {
+      await args.executor.removeDirectory(args.pendingDirectoryId);
+    } catch {
+      // Idempotent: pending may already be gone (agent cleared it). Never let
       // a cleanup failure throw over the real outcome.
     }
   }

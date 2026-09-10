@@ -22,8 +22,11 @@ describe("ensureSeasonAcquisitionDirectories — verify-or-create the 115 direct
     }
     // staging under the show dir, NOT inside any season dir
     expect(dirs.stagingDirectoryId).toContain(dirs.showDirectoryId);
+    // pending under the show dir, NOT inside any season dir
+    expect(dirs.pendingDirectoryId).toContain(dirs.showDirectoryId);
     for (const seasonId of Object.values(dirs.seasonDirectoryIds)) {
       expect(dirs.stagingDirectoryId).not.toContain(seasonId);
+      expect(dirs.pendingDirectoryId).not.toContain(seasonId);
     }
   });
 
@@ -37,6 +40,7 @@ describe("ensureSeasonAcquisitionDirectories — verify-or-create the 115 direct
     });
     expect(b.showDirectoryId).toBe(a.showDirectoryId);
     expect(b.seasonDirectoryIds[1]).toBe(a.seasonDirectoryIds[1]);
+    expect(b.pendingDirectoryId).toBe(a.pendingDirectoryId);
   });
 
   it("adds a new season dir under the SAME show dir when later acquiring another season", async () => {
