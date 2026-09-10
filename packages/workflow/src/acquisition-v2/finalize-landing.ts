@@ -397,7 +397,7 @@ export async function finalizeFromPending(options: {
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
     if (skipSet.has(code)) { skippedOnDisk.push(code); continue; }
-    if (onlySet && !onlySet.has(code)) { skippedNotNeeded.push(code); continue; }
+    if (onlySet && !onlySet.has(code)) { skippedNotNeeded.push(code + "(not needed)"); continue; }
     if (plannedCodes.has(code)) { skippedNotNeeded.push(code + "(dup)"); continue; }
     plannedCodes.add(code);
     const newName = canonicalEpisodeFileName({ title: canonicalTitle, episodeCode: code, sourceName: code + ".mkv" });
@@ -411,11 +411,14 @@ export async function finalizeFromPending(options: {
     renamed.push(...result.renamed);
     const pendingNow = await sandbox.inspectPending();
     const idByNewName = new Map(pendingNow.map((f) => [f.path.split("/").pop() ?? f.path, f.id]));
+    // Resolve basenames for renamedPairs.from (same as finalizeLanding)
+    const pendingById = new Map(pendingNow.map((f) => [f.id, f.path.split("/").pop() ?? f.id]));
     for (const { fileId, newName } of renames) {
       const newId = idByNewName.get(newName) ?? fileId;
       codeToNewFileId.set(fileId, newId);
-      renamedPairs.push({ from: fileId, to: newName });
-      stepLog(sandbox, canonicalTitle, "改名", fileId + " -> " + newName);
+      const from = pendingById.get(fileId) ?? fileId;
+      renamedPairs.push({ from, to: newName });
+      stepLog(sandbox, canonicalTitle, "改名", from + " -> " + newName);
     }
   }
 
@@ -448,6 +451,7 @@ export async function finalizeFromPending(options: {
 
   // Clear pending
   const pendingLeft = await sandbox.inspectPending();
+  const discarded = pendingLeft.map((f) => f.path);
   if (pendingLeft.length > 0) {
     await sandbox.deleteFromPending({ fileIds: pendingLeft.map((f) => f.id) });
   }
@@ -455,6 +459,6 @@ export async function finalizeFromPending(options: {
   return {
     renamed, renamedPairs,
     movedSeasons: Object.fromEntries([...bySeason.entries()].map(([s, ids]) => [s, ids.length])),
-    marked, discarded: [], movedCount, skippedOnDisk, skippedNotNeeded,
+    marked, discarded, movedCount, skippedOnDisk, skippedNotNeeded,
   };
 }

@@ -192,7 +192,7 @@ describe("finalizeFromPending", () => {
     });
 
     expect(result.marked).toEqual([]);
-    expect(result.skippedNotNeeded).toContain("S01E01");
+    expect(result.skippedNotNeeded).toContain("S01E01(not needed)");
   });
 
   it("skips codes in skipCodes", async () => {
