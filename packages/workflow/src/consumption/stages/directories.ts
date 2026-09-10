@@ -2,8 +2,9 @@ import type { StorageExecutor } from "../../ports.js";
 import {
   ensureSeasonAcquisitionDirectories,
   type AcquisitionDirectories,
+  withStagingCleanup,
+  withPendingCleanup,
 } from "../../acquisition-v2/directory-lifecycle.js";
-import { withStagingCleanup } from "../../acquisition-v2/directory-lifecycle.js";
 import { readLandedSize } from "../../acquisition-v2/landed-size.js";
 
 /**
@@ -42,6 +43,17 @@ export function withStagingCleanupStage<T>(
   run: () => Promise<T>,
 ): Promise<T> {
   return withStagingCleanup(input, run);
+}
+
+/**
+ * ② 兜底清理（pending 部分）：包住 ③–⑥ —— 无论覆盖/失败/reportNoCoverage，
+ * run 的 pending 目录必删。与 withStagingCleanupStage 对称，幂等，双保险。
+ */
+export function withPendingCleanupStage<T>(
+  input: { executor: StorageExecutor; pendingDirectoryId: string },
+  run: () => Promise<T>,
+): Promise<T> {
+  return withPendingCleanup(input, run);
 }
 
 /**

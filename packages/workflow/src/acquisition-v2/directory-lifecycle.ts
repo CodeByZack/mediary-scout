@@ -17,8 +17,9 @@ export interface AcquisitionDirectories {
   /** season number -> its scoped Season directory id. */
   seasonDirectoryIds: Record<number, string>;
   stagingDirectoryId: string;
-  /** Pending accumulation directory (TV fast path only; optional). */
-  pendingDirectoryId?: string;
+  /** Pending accumulation directory (TV fast path only). Always created by
+   *  ensureSeasonAcquisitionDirectories alongside staging. */
+  pendingDirectoryId: string;
 }
 
 export interface EnsureSeasonDirectoriesRequest {

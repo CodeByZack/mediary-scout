@@ -456,6 +456,47 @@ export class TaskSandbox {
     return this.storage.listSubdirectories({ directoryId: this.stagingDirectoryId });
   }
 
+  /** Read-only full raw tree of THIS task's pending directory. */
+  async inspectPending(): Promise<SimTreeFile[]> {
+    if (!this.storage || !this.pendingDirectoryId) {
+      throw new Error("SANDBOX: no storage/pending handle configured");
+    }
+    return this.storage.listTree({ directoryId: this.pendingDirectoryId });
+  }
+
+  /** Move files from staging to pending, with optional rename. */
+  async moveToPending(input: {
+    moves: Array<{ fileId: string; newName?: string; subtitleFileIds?: string[] }>;
+  }): Promise<{ pending: SimTreeFile[]; staging: SimTreeFile[] }> {
+    if (!this.storage || !this.stagingDirectoryId || !this.pendingDirectoryId) {
+      throw new Error("SANDBOX: no storage/staging/pending handle configured");
+    }
+    const stagingIds = new Set(
+      (await this.storage.listTree({ directoryId: this.stagingDirectoryId })).map((f) => f.id),
+    );
+    const allIds = input.moves.flatMap((m) => [m.fileId, ...(m.subtitleFileIds ?? [])]);
+    const outOfScope = allIds.filter((id) => !stagingIds.has(id));
+    if (outOfScope.length > 0) {
+      throw new Error("SANDBOX_FILES_NOT_IN_STAGING: " + outOfScope.join(","));
+    }
+    for (const { fileId, newName, subtitleFileIds } of input.moves) {
+      const idsToMove = [fileId, ...(subtitleFileIds ?? [])];
+      if (newName) {
+        await this.storage.renameFile({ directoryId: this.stagingDirectoryId, fileId, newName });
+        const updated = await this.storage.listTree({ directoryId: this.stagingDirectoryId });
+        const renamed = updated.find((f) => f.path === newName);
+        if (renamed && renamed.id !== fileId) {
+          idsToMove[0] = renamed.id;
+        }
+      }
+      await this.storage.moveFiles({ fileIds: idsToMove, targetDirectoryId: this.pendingDirectoryId });
+    }
+    return {
+      pending: await this.storage.listTree({ directoryId: this.pendingDirectoryId }),
+      staging: await this.storage.listTree({ directoryId: this.stagingDirectoryId }),
+    };
+  }
+
   /** Read-only full raw tree of a scoped target directory — ground truth for what
    *  has landed. With a season, that season's dir (so the agent sees what season N
    *  already holds before deciding what to move/dedup); without one, the union of
@@ -683,6 +724,66 @@ export class TaskSandbox {
     }
     const { deleted } = await this.storage.deleteFiles({ directoryId, fileIds: input.fileIds });
     return { deleted, directory: await this.storage.listTree({ directoryId }) };
+  }
+
+  /** Delete files from the pending directory. Scope guard: every id must
+   *  currently be in THIS task's pending directory. */
+  async deleteFromPending(input: { fileIds: string[] }): Promise<{ deleted: string[]; pending: SimTreeFile[] }> {
+    if (!this.storage || !this.pendingDirectoryId) {
+      throw new Error("SANDBOX: no storage/pending handle configured");
+    }
+    const present = new Set(
+      (await this.storage.listTree({ directoryId: this.pendingDirectoryId })).map((f) => f.id),
+    );
+    const outOfScope = input.fileIds.filter((id) => !present.has(id));
+    if (outOfScope.length > 0) {
+      throw new Error("SANDBOX_FILES_NOT_IN_PENDING: " + outOfScope.join(","));
+    }
+    const { deleted } = await this.storage.deleteFiles({ directoryId: this.pendingDirectoryId, fileIds: input.fileIds });
+    return { deleted, pending: await this.storage.listTree({ directoryId: this.pendingDirectoryId }) };
+  }
+
+  /** Rename files in the pending directory. Scope guard: every id must
+   *  currently be in THIS task's pending directory. After rename, re-read
+   *  because Quark changes file IDs on rename. */
+  async renameInPending(input: {
+    renames: Array<{ fileId: string; newName: string }>;
+  }): Promise<{ renamed: string[]; errors?: Array<{ fileId: string; error: string }> }> {
+    if (!this.storage || !this.pendingDirectoryId) {
+      throw new Error("SANDBOX: no storage/pending handle configured for rename");
+    }
+    if (input.renames.length === 0) {
+      throw new Error("SANDBOX_EMPTY_RENAMES: renames must not be empty");
+    }
+    const pending = await this.storage.listTree({ directoryId: this.pendingDirectoryId });
+    const renamed: string[] = [];
+    const errors: Array<{ fileId: string; error: string }> = [];
+    for (const { fileId, newName } of input.renames) {
+      try {
+        const target = pending.find((f) => f.id === fileId);
+        if (!target) {
+          throw new Error("SANDBOX_FILE_NOT_IN_PENDING: " + fileId);
+        }
+        if (!target.isVideo) {
+          throw new Error("SANDBOX_NOT_A_VIDEO: " + fileId);
+        }
+        if (/[\/]/.test(newName)) {
+          throw new Error("SANDBOX_INVALID_NAME: newName must not contain path separators");
+        }
+        await this.storage.renameFile({ directoryId: this.pendingDirectoryId, fileId, newName });
+        // Re-read to get updated file IDs (Quark changes IDs on rename).
+        const updated = await this.storage.listTree({ directoryId: this.pendingDirectoryId });
+        const found = updated.find((f) => f.path === newName);
+        if (found) {
+          renamed.push(found.id);
+        } else {
+          renamed.push(fileId);
+        }
+      } catch (err) {
+        errors.push({ fileId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { renamed, errors };
   }
 
   /** Record the episodes the agent declares obtained — the agent's FINAL action,
