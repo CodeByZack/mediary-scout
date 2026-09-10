@@ -484,7 +484,7 @@ export class TaskSandbox {
       if (newName) {
         await this.storage.renameFile({ directoryId: this.stagingDirectoryId, fileId, newName });
         const updated = await this.storage.listTree({ directoryId: this.stagingDirectoryId });
-        const renamed = updated.find((f) => f.path === newName);
+        const renamed = updated.find((f) => f.path.split("/").pop() === newName);
         if (renamed && renamed.id !== fileId) {
           idsToMove[0] = renamed.id;
         }
@@ -768,12 +768,18 @@ export class TaskSandbox {
           throw new Error("SANDBOX_NOT_A_VIDEO: " + fileId);
         }
         if (/[\/]/.test(newName)) {
-          throw new Error("SANDBOX_INVALID_NAME: newName must not contain path separators");
+          throw new Error("SANDBOX_INVALID_VIDEO_NAME: newName must not contain path separators");
+        }
+        if (!/\.(mkv|mp4|avi|ts|m2ts|mov|flv|wmv)$/i.test(newName)) {
+          throw new Error("SANDBOX_INVALID_VIDEO_NAME: newName must keep a video extension");
+        }
+        if (/[\*?"<>|]/.test(newName)) {
+          throw new Error("SANDBOX_INVALID_VIDEO_NAME: newName must not contain filename-hostile chars");
         }
         await this.storage.renameFile({ directoryId: this.pendingDirectoryId, fileId, newName });
         // Re-read to get updated file IDs (Quark changes IDs on rename).
         const updated = await this.storage.listTree({ directoryId: this.pendingDirectoryId });
-        const found = updated.find((f) => f.path === newName);
+        const found = updated.find((f) => f.path.split("/").pop() === newName);
         if (found) {
           renamed.push(found.id);
         } else {

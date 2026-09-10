@@ -14,7 +14,7 @@ const title = {
 
 function v2Result(over: Partial<RunAcquisitionV2WorkflowResult>): RunAcquisitionV2WorkflowResult {
   return {
-    directories: { showDirectoryId: "show_1", seasonDirectoryIds: { 1: "season_1_dir" }, stagingDirectoryId: "staging_1" },
+    directories: { showDirectoryId: "show_1", seasonDirectoryIds: { 1: "season_1_dir" }, stagingDirectoryId: "staging_1", pendingDirectoryId: "pending_1" },
     missingBefore: [],
     outcome: { resourceSnapshots: [], decisions: [], transferAttempts: [] },
     agentText: "",
@@ -254,6 +254,7 @@ describe("bridgeV2WorkflowToResult — V2 facts → per-season WorkflowResult sh
           showDirectoryId: "show_1",
           seasonDirectoryIds: { 1: "s1_dir", 2: "s2_dir" },
           stagingDirectoryId: "staging_1",
+          pendingDirectoryId: "pending_1",
         },
         missingBefore: ["S01E01", "S01E02", "S01E03", "S02E01", "S02E02", "S02E03"],
         outcome: { resourceSnapshots: [], decisions: [], transferAttempts: [] },
