@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MockLanguageModelV3 } from "ai/test";
 import { arbitrateEpisodeMapping, resolvePromptText, PROMPT_TEMPLATES } from "../src/acquisition-v2/arbitrator.js";
-import { EPISODE_MAPPING_BODY_SINGLE, EPISODE_MAPPING_BODY_MULTI } from "../src/prompt-templates.js";
+import { EPISODE_MAPPING_BODY } from "../src/prompt-templates.js";
 import {
   ARBITRATION_KINDS,
   compilePromptLookup,
@@ -60,19 +60,19 @@ describe("compilePromptLookup / validatePromptBody", () => {
   });
 });
 
-describe("issue #53 — 多季/单季 episode-mapping body 变体", () => {
-  it("D1: 单季 body 包含'文件名'措辞", () => {
-    expect(EPISODE_MAPPING_BODY_SINGLE).toContain("文件名");
-    expect(EPISODE_MAPPING_BODY_SINGLE).not.toContain("文件路径");
+describe("episode-mapping body 合并(2026-09-12 用户拍板「合成一个」)", () => {
+  it("D1: 合并正文同时覆盖两种输入——纯文件名与带文件夹的路径", () => {
+    expect(EPISODE_MAPPING_BODY).toContain("纯文件名");
+    expect(EPISODE_MAPPING_BODY).toContain("带文件夹");
   });
 
-  it("D2: 多季 body 包含'文件路径'措辞", () => {
-    expect(EPISODE_MAPPING_BODY_MULTI).toContain("文件路径");
-    expect(EPISODE_MAPPING_BODY_MULTI).not.toContain("文件名与集数");
+  it("D2: 季号来源明确——路径含季信息用它,否则用任务给的目标季", () => {
+    expect(EPISODE_MAPPING_BODY).toContain("定 SxxExx 的季号");
+    expect(EPISODE_MAPPING_BODY).toContain("用任务给的目标季");
   });
 
-  it("D3: PROMPT_TEMPLATES 默认使用单季 body(零回归)", () => {
-    expect(PROMPT_TEMPLATES["episode-mapping"].body).toBe(EPISODE_MAPPING_BODY_SINGLE);
+  it("D3: PROMPT_TEMPLATES 指向合并后的单版 body", () => {
+    expect(PROMPT_TEMPLATES["episode-mapping"].body).toBe(EPISODE_MAPPING_BODY);
   });
 
   it("D4: 覆盖 body 时 head/tail 固定不变", () => {
@@ -111,35 +111,34 @@ function capturingModel(captured: string[]) {
   });
 }
 
-describe("arbitrateEpisodeMapping body 接线(2026-09-12 空覆盖误伤修复)", () => {
+describe("arbitrateEpisodeMapping body 接线(2026-09-12 空覆盖误伤修复 + body 合并)", () => {
   const base = {
     allFiles: ["2025.07.27-第1期上.mp4"],
     title: "地球超新鲜",
     knownEpisodeRange: { min: 1, max: 20 } as const,
   };
+  const HEADER = "需要识别集数的文件(可能是纯文件名,也可能带文件夹):";
 
-  it("E1: 无 overrides + 多季 → system 用 MULTI body", async () => {
+  it("E1: 无 overrides + 多季 → 内置合并 body", async () => {
     const seen: string[] = [];
     await arbitrateEpisodeMapping({ model: capturingModel(seen), seasons: [1, 2], ...base });
-    expect(seen[0]).toContain(EPISODE_MAPPING_BODY_MULTI);
-    expect(seen[0]).not.toContain(EPISODE_MAPPING_BODY_SINGLE);
+    expect(seen[0]).toContain(EPISODE_MAPPING_BODY);
+    expect(seen[0]).toContain(HEADER);
   });
 
-  it("E2: 空对象 {} + 多季 → 仍用 MULTI body(回归:旧 truthy 判断被 {} 误伤)", async () => {
+  it("E2: 空对象 {} + 多季 → 仍用内置合并 body(回归:旧 truthy 判断被 {} 误伤)", async () => {
     const seen: string[] = [];
     await arbitrateEpisodeMapping({ model: capturingModel(seen), seasons: [1, 2], ...base, promptOverrides: {} });
-    expect(seen[0]).toContain(EPISODE_MAPPING_BODY_MULTI);
-    expect(seen[0]).not.toContain(EPISODE_MAPPING_BODY_SINGLE);
+    expect(seen[0]).toContain(EPISODE_MAPPING_BODY);
   });
 
-  it("E3: 空对象 {} + 单季 → 用 SINGLE body(单季零回归)", async () => {
+  it("E3: 空对象 {} + 单季 → 同一版内置 body(单季/多季不再分版)", async () => {
     const seen: string[] = [];
     await arbitrateEpisodeMapping({ model: capturingModel(seen), seasons: [1], ...base, promptOverrides: {} });
-    expect(seen[0]).toContain(EPISODE_MAPPING_BODY_SINGLE);
-    expect(seen[0]).not.toContain(EPISODE_MAPPING_BODY_MULTI);
+    expect(seen[0]).toContain(EPISODE_MAPPING_BODY);
   });
 
-  it("E4: 已覆盖 episode-mapping + 多季 → 自定义正文优先(单季/多季共用)", async () => {
+  it("E4: 已覆盖 episode-mapping + 多季 → 自定义正文优先", async () => {
     const seen: string[] = [];
     await arbitrateEpisodeMapping({
       model: capturingModel(seen),
@@ -148,7 +147,17 @@ describe("arbitrateEpisodeMapping body 接线(2026-09-12 空覆盖误伤修复)"
       promptOverrides: { "episode-mapping": "自定义正文" },
     });
     expect(seen[0]).toContain("自定义正文");
-    expect(seen[0]).not.toContain(EPISODE_MAPPING_BODY_MULTI);
-    expect(seen[0]).not.toContain(EPISODE_MAPPING_BODY_SINGLE);
+    expect(seen[0]).not.toContain(EPISODE_MAPPING_BODY);
+  });
+
+  it("E5: 单季与多季收到同一份 body 与同一份 prompt 抬头", async () => {
+    const single: string[] = [];
+    const multi: string[] = [];
+    await arbitrateEpisodeMapping({ model: capturingModel(single), seasons: [1], ...base });
+    await arbitrateEpisodeMapping({ model: capturingModel(multi), seasons: [1, 2], ...base });
+    for (const seen of [single, multi]) {
+      expect(seen[0]).toContain(EPISODE_MAPPING_BODY);
+      expect(seen[0]).toContain(HEADER);
+    }
   });
 });

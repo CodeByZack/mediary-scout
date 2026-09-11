@@ -7,7 +7,7 @@ import { ChevronDown, ChevronRight, LoaderCircle, RotateCcw, Save } from "lucide
 import { resetPromptOverridesAction, savePromptOverridesAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
 // 子路径导入:ruleset/prompt-templates 零 node 依赖,可安全进客户端 chunk(barrel 含 sqlite→node:module,Turbopack 会炸)。
-import { PROMPT_TEMPLATES, EPISODE_MAPPING_BODY_MULTI } from "@media-track/workflow/prompt-templates";
+import { PROMPT_TEMPLATES } from "@media-track/workflow/prompt-templates";
 import { ARBITRATION_KINDS, validatePromptBody, type ArbitrationKind } from "@media-track/workflow/ruleset";
 
 /** 只读展示段(head / tail)的统一样式。 */
@@ -176,7 +176,7 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
                   <div style={{ color: "#dc2626", fontSize: 12, margin: "8px 0 4px" }}>⚠ {error}</div>
                 ) : null}
                 <div style={{ fontSize: 12, color: "var(--text-secondary, #888)", margin: "10px 0 6px" }}>
-                  {kind === "episode-mapping" ? "单季任务规则指令（已预填内置正文，可直接改；清空 = 恢复内置）：" : "规则指令（已预填内置正文，可直接改；清空 = 恢复内置）："}
+                  规则指令（已预填内置正文，可直接改；清空 = 恢复内置）：
                 </div>
                 <textarea
                   value={draft.promptText}
@@ -199,17 +199,6 @@ export function PromptOverridesForm({ initial }: { initial: PromptDraft[] }) {
                     color: "inherit",
                   }}
                 />
-                {kind === "episode-mapping" ? (
-                  <div style={{ marginTop: 10, padding: "8px 10px", border: "1px dashed rgba(127,127,127,.28)", borderRadius: 6 }}>
-                    <div style={{ fontSize: 12, color: "var(--text-secondary, #888)" }}>
-                      多季任务（一次获取多个季）自动改用下面这套「完整文件路径 + 文件夹归季」默认正文，不走上面那个输入框：
-                    </div>
-                    <pre style={{ ...READONLY_PRE_STYLE, marginTop: 6 }}>{EPISODE_MAPPING_BODY_MULTI}</pre>
-                    <div style={{ fontSize: 12, color: "var(--text-secondary, #888)", marginTop: 6 }}>
-                      若你在上面输入框写了自定义正文，单季/多季任务都会用它（覆盖优先于内置）；上面输入框留空 = 单季/多季各自用内置默认。
-                    </div>
-                  </div>
-                ) : null}
                 <pre style={{ ...READONLY_PRE_STYLE, margin: "8px 0 0", color: "var(--text-secondary, #888)" }}>
                   JSON 契约（固定，环绕在 body 之后）：{"{"}
                   {template.tail}
