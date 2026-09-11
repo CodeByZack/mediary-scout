@@ -474,7 +474,15 @@ export async function runScheduledType3Monitoring(input: {
       continue;
     }
 
-    if (state.season.status !== "active" || state.episodes.length === 0) {
+    if (state.episodes.length === 0) {
+      continue;
+    }
+    // ★ 年守卫数据自愈(run 5721e707):完结季原本被 status 闸门整体跳过,一旦
+    // episode_states.air_date 被抹成 null 就永无回填 → 年守卫永久惰性(2025 的
+    // 第一季文件被整批标成 S02,守卫 0 次触发)。播出日缺失时放行刷元数据补回数据;
+    // 追更判定本身不变,active 季行为零改动。
+    const needsAirDateBackfill = state.episodes.some((episode) => episode.airDate === null);
+    if (state.season.status !== "active" && !needsAirDateBackfill) {
       continue;
     }
 
