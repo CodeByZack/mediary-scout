@@ -264,9 +264,13 @@ async function runTvCandidatePhase(
         const covered = [...coveredFileMap.keys()].filter((c) => needCodes.includes(c));
         const count = covered.length;
         if (count > ctx.bestCount) {
-          // New main source: delete old main source files from pending
+          // New main source: replace ONLY the codes this candidate also covers.
+          // ★ 2026-09-12 多季互补(run fb3c2836 案):旧逻辑无条件清空所有非本候选的 code——
+          // 多季任务里 round4 认 19 集 S01、round5 认 20 集 S02,20>19 换主力就把 S01 的 19 集
+          // 全删掉,40 集任务只落 20。候选之间是互补(各覆盖不同的季),不是竞争(同一批 code
+          // 找更好的源);只有撞码才需要「新主力取代旧主力」。
           for (const [code, entry] of ctx.pendingEntries) {
-            if (entry.candidateId !== current) {
+            if (entry.candidateId !== current && covered.includes(code)) {
               const fileIds = [entry.fileId, ...(entry.subtitles ?? [])];
               try {
                 const del = await sandbox.deleteFromPending({ fileIds });
