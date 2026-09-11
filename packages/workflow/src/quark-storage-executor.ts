@@ -14,7 +14,6 @@ import type { PackageTreeFile, ResourceCandidate, TransferAttempt, TransferStatu
 import { episodeCodeFromFileName } from "./episode-code.js";
 import type { StorageExecutor, UnparsedVideoFile } from "./ports.js";
 import {
-  DIAGNOSTIC_LOGGING,
   isQuarkAuthError,
   type QuarkCookieClient,
   type QuarkItem,
@@ -160,10 +159,6 @@ export class QuarkStorageExecutor implements StorageExecutor {
           // 只留痕不 throw:轮询耗尽也可能只是 status 语义与我们假设不同。
           console.warn(
             `[quark] ⚠ 转存任务未完成 taskId=${taskId.slice(0, 12)}… 轮询 ${result.attempts} 次未到 status=2(最后 status=${result.lastStatus ?? "N/A"})`,
-          );
-        } else if (DIAGNOSTIC_LOGGING) {
-          console.log(
-            `[quark] 转存任务完成 taskId=${taskId.slice(0, 12)}… 第 ${result.attempts} 次轮询到 status=2,本批 ${fidList.slice(offset, offset + SAVE_SHARE_BATCH_SIZE).length} 个文件`,
           );
         }
       }

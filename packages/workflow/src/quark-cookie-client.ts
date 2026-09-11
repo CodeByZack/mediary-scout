@@ -28,16 +28,6 @@ const QUARK_AUTH_CODE = 31001;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 诊断日志开关——与 sandbox 的退避探测同一个旋钮(MEDIA_TRACK_PROBE_DELAY_MS):
- *  >0 = 生产/测试包,打全量诊断;<=0 = 单测,静默。
- *  地球超新鲜案期间加的三处诊断(异步任务轮询结果 / rename 响应是否含 fid /
- *  sandbox 的退避重读)统一由它控制,便于定性完一起摘除。 */
-const DIAGNOSTIC_LOGGING = (() => {
-  const raw = Number(process.env.MEDIA_TRACK_PROBE_DELAY_MS ?? 2000);
-  return Number.isFinite(raw) && raw > 0;
-})();
-export { DIAGNOSTIC_LOGGING };
-
 export interface QuarkHttpInit {
   method: "GET" | "POST";
   headers: Record<string, string>;
@@ -337,21 +327,12 @@ export class QuarkCookieClient {
     const data = unwrap(response, genericPrefix);
     const taskId = stringValue(recordValue(data, "task_id"));
     if (!taskId) {
-      // 无 task_id = 该操作这次是同步的(或夸克没走异步)。必须留痕,
-      // 否则分不清「同步完成」和「响应被截断丢了 task_id」。
-      if (DIAGNOSTIC_LOGGING) {
-        console.log(`[quark] ${genericPrefix}: 响应无 task_id,按同步操作处理,未轮询`);
-      }
+      // 无 task_id = 该操作这次是同步的,或夸克这次没走异步。
       return;
     }
     const t0 = Date.now();
     const result = await this.pollTask(taskId);
     if (result.done) {
-      if (DIAGNOSTIC_LOGGING) {
-        console.log(
-          `[quark] 异步任务完成 ${genericPrefix} task=${taskId.slice(0, 12)}… 第 ${result.attempts}/${this.pollAttempts} 次轮询到 status=2,耗时 ${Date.now() - t0}ms`,
-        );
-      }
       return;
     }
     // ⚠ 任务没到完成态,调用方却照常往下走——「move 假成功」最可能的来源。
@@ -367,19 +348,10 @@ export class QuarkCookieClient {
       fid: input.fid,
       file_name: input.name,
     });
-    const data = unwrap(response, "QUARK_RENAME_FAILED");
-    // ★ 2026-09-11:直接验证 rename 响应体。「夸克 rename 换 fid」曾是未经验证
-    // 的推断;run 53bf287e 的 rename 前/后快照显示 21 个 fid 完全一致,但从未
-    // 看过响应本身。这里把有无 fid 字段、是否换 fid 打出来,一锤定音。
-    if (DIAGNOSTIC_LOGGING) {
-      const respFid = stringValue(recordValue(data, "fid"));
-      const verdict = respFid
-        ? `响应 fid=${respFid.slice(0, 12)}… ${respFid === input.fid ? "(同 fid)" : "(换 fid!)"}`
-        : `无 fid 字段, data=${JSON.stringify(data).slice(0, 140)}`;
-      console.log(
-        `[quark] rename 响应: 入参 fid=${input.fid.slice(0, 12)}… → ${verdict} name=${input.name}`,
-      );
-    }
+    // 返回值只用于判定 code:0。响应体不含 fid(实测 data={})——夸克 rename
+    // 不换 fid(run 82a02640:34 条入参 fid 全部保留,名字全部变更),所以调用方
+    // 无需也不应依赖响应里的新 id。
+    unwrap(response, "QUARK_RENAME_FAILED");
   }
 
   private async getJson(path: string, params: Array<[string, string]>): Promise<unknown> {

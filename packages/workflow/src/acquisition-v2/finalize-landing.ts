@@ -403,7 +403,9 @@ export async function finalizeFromPending(options: {
     renames.push({ fileId, newName });
   }
 
-  // Build a code->newFileId map after rename (Quark changes IDs on rename)
+  // Build a code->fileId map after rename. 夸克 rename 不换 fid(响应体 data={},
+  // 34/34 前后快照对照,run 82a02640),所以这里是恒等映射;保留是为了
+  // failedByFileId 剔除后仍能取回原 id。
   const codeToNewFileId = new Map<string, string>();
   if (renames.length > 0) {
     // ★ 2026-09-10:rename【之前】先快照 pending 原名 —— renamedPairs.from 用原名,
@@ -471,25 +473,27 @@ export async function finalizeFromPending(options: {
     await sandbox.markObtained({ codes: marked });
   }
 
-  // Clear pending
+  // Clear pending — 观测为主,不再显式删除。
+  //
+  // 2026-09-11 地球超新鲜案:这里原先是「inspectPending → deleteFromPending(读到的
+  // 残留)」。归位是异步 move,源目录 list 索引滞后约 2s(run 82a02640 实测:归位后
+  // +0ms 仍看到 14 个已搬走的文件,+2000ms 才归零),所以紧跟归位的这次读会看到
+  // 已搬走的内容,拿它们去删 → 预写守卫读同一个滞后列表放行 → 删不在该目录的
+  // fid → QUARK_DELETE_FAILED → throw → 把已入库成功的 run 记成「缺集」。
+  //
+  // 现在只留观测:pending 由 withPendingCleanup(directory-lifecycle.ts)在 run
+  // 结束时整目录清扫,成败都跑、吞错、不翻转结果。残留只是没被识别成集数的垃圾
+  // (加更/旅行日记),不需要在这里删。
   const pendingLeft = await sandbox.inspectPending();
-  // ★ 2026-09-11:归位后的 pending 残留必须留痕——若 moveToSeasonFromPending
-  // 只搬走了部分文件(残留 = 归位想搬却没搬走的),这里直接看到残了谁;
-  // 也让 deleteFromPending 的入参(id 清单)可对照它的 outOfScope。
-  if (pendingLeft.length > 0) {
-    stepLog(
-      sandbox,
-      canonicalTitle,
-      "pending 清理",
-      `归位后残留 ${pendingLeft.length} 个: ${pendingLeft.map((f) => `${f.id}→${f.path.split("/").pop() ?? f.id}`).join(", ")}`,
-    );
-  } else {
-    stepLog(sandbox, canonicalTitle, "pending 清理", "归位后 pending 已清空");
-  }
+  stepLog(
+    sandbox,
+    canonicalTitle,
+    "pending 清理",
+    pendingLeft.length > 0
+      ? `归位后读到 ${pendingLeft.length} 个残留(读可能滞后,含已搬走的),run 结束由 withPendingCleanup 整目录清扫: ${pendingLeft.map((f) => `${f.id}→${f.path.split("/").pop() ?? f.id}`).join(", ")}`
+      : "归位后 pending 已清空",
+  );
   const discarded = pendingLeft.map((f) => f.path);
-  if (pendingLeft.length > 0) {
-    await sandbox.deleteFromPending({ fileIds: pendingLeft.map((f) => f.id) });
-  }
 
   return {
     renamed: renamedPairs.map((p) => p.to),

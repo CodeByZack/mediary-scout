@@ -491,19 +491,10 @@ export class TaskSandbox {
     for (const move of resolved) {
       await this.storage.moveFiles({ fileIds: move.fileIds, targetDirectoryId: move.targetDir });
     }
-    // ★ 2026-09-11 探测:归位是异步 move,任务 status===2 完成但 list 索引可能
-    // 滞后(run 53bf287e 归位后连读呈 21→15→4 收敛)。source/pending 与
-    // target/季目录**成对**退避重读,两边对照即可定性「到底搬没搬」:
-    // pending 应趋空、季目录应趋满,若两边同时显示中间态才是真滞后。
-    const movedAll = resolved.flatMap((m) => m.fileIds);
-    await this.probeSettle(`归位后 pending(搬走 ${movedAll.length} 个,应趋空)`, () =>
-      this.storage!.listTree({ directoryId: this.pendingDirectoryId! }),
-    );
-    for (const move of resolved) {
-      await this.probeSettle(`归位后 Season ${String(move.season).padStart(2, "0")}(应含 ${move.fileIds.length} 个)`, () =>
-        this.storage!.listTree({ directoryId: move.targetDir }),
-      );
-    }
+    // 归位后的读全部指向**目标**季目录。move 任务 status===2 之后源目录(pending)
+    // 的 list 索引滞后约 2s(run 82a02640 实测:+0ms 仍看到 14 个已搬走的文件,
+    // +2000ms 才归零),目标目录不滞后(+0ms 就是 20/14 个)。所以这里不拿源读
+    // 校验搬没搬——滞后的源读会把已搬走的文件误判成「没搬」。
     const seasons: Record<number, SimTreeFile[]> = {};
     for (const move of resolved) {
       if (move.season !== undefined) {
@@ -519,59 +510,6 @@ export class TaskSandbox {
       throw new Error("SANDBOX: no storage/pending handle configured");
     }
     return this.storage.listTree({ directoryId: this.pendingDirectoryId });
-  }
-
-  /** ★ 探测间隔(ms)。>0 时按 0/+step/+2step 退避重读并全量留痕;
-   *  <=0 时只做一次即时重读、不等待、不打日志(测试用——退避会把 18 个测试
-   *  文件拖到超时)。延迟不改变读取语义:任何情况下都至少做一次重读并返回。 */
-  private static get probeDelayMs(): number {
-    const raw = Number(process.env.MEDIA_TRACK_PROBE_DELAY_MS ?? 2000);
-    return Number.isFinite(raw) && raw >= 0 ? raw : 2000;
-  }
-
-  /** ★ 2026-09-11 探测日志:写操作后按退避重读同一目录,量化
-   *  「任务 status===2 完成 → list 可见」的滞后,把每轮的 id+名字全量打出来。
-   *
-   *  起因(run 53bf287e,同一份日志里的两组对照):
-   *  - rename 是同步接口:前/后快照 21 个 fid 完全一致(0 新增 0 消失),
-   *    20 条名字已正确变更 → 改名立刻可见,且 **fid 不变**。
-   *  - move 是异步任务:归位后连读呈 21→15→4 收敛 → 疑似只有异步 move 的
-   *    list 索引滞后(任务完成 ≠ list 索引已更新)。
-   *  退避耗尽仍看不到/仍可见都如实打出来,下一轮据此定性,再决定重试还是报错。
-   *
-   *  纯观测:不 throw、不改返回值;读失败也留痕。返回最后一次成功读到的
-   *  目录快照(全失败返回 null),调用方可用它做二次确认。 */
-  private async probeSettle(
-    label: string,
-    read: () => Promise<SimTreeFile[]>,
-  ): Promise<SimTreeFile[] | null> {
-    const step = TaskSandbox.probeDelayMs;
-    const delays = step > 0 ? [0, step, step * 2] : [0];
-    let last: SimTreeFile[] | null = null;
-    for (let i = 0; i < delays.length; i++) {
-      const delay = delays[i]!;
-      if (delay > 0) await new Promise((r) => setTimeout(r, delay));
-      let items: SimTreeFile[];
-      try {
-        items = await read();
-      } catch (err) {
-        if (step > 0) {
-          console.log(
-            `[mediary-run][${this.logRunId}] | ${label} 探测#${i + 1}(+${delay}ms): 读失败 ` +
-              (err instanceof Error ? err.message : String(err)),
-          );
-        }
-        continue;
-      }
-      last = items;
-      if (step > 0) {
-        console.log(
-          `[mediary-run][${this.logRunId}] | ${label} 探测#${i + 1}(+${delay}ms): ${items.length} 个: ` +
-            items.map((f) => `${f.id.slice(0, 8)}→${f.path.split("/").pop() ?? f.id}`).join(", "),
-        );
-      }
-    }
-    return last;
   }
 
   /** Move files from staging to pending, with optional rename. */
@@ -603,15 +541,10 @@ export class TaskSandbox {
       }
       await storage.moveFiles({ fileIds: idsToMove, targetDirectoryId: pendingId });
     }
-    // ★ 2026-09-11 地球超新鲜案:搬入后**探测**而非校验。
-    // 旧版在这里对「回读看不到」直接 throw SANDBOX_MOVE_NOT_LANDED,但 run
-    // 53bf287e 证明那是假阳性:第 6 轮报「19/20 不在 pending」,而 rename 时刻
-    // pending 里那 20 个 id 全都在。move 是异步任务,任务 status===2 完成但
-    // list 索引可能还没追上——单次回读看不到 ≠ 搬失败。改成退避重读留痕。
-    const movedIds = input.moves.flatMap((m) => [m.fileId, ...(m.subtitleFileIds ?? [])]);
-    await this.probeSettle(`搬入后 pending(请求搬 ${movedIds.length} 个)`, () =>
-      storage.listTree({ directoryId: pendingId }),
-    );
+    // 不做搬入后的落盘校验:move 任务 status===2 之后源目录(staging)的 list
+    // 索引滞后约 2s,单次回读看不到 ≠ 搬失败。旧版在这里 throw
+    // SANDBOX_MOVE_NOT_LANDED 就是假阳性(run 53bf287e 第 6 轮报「19/20 不在
+    // pending」,而 rename 时刻那 20 个 id 全都在 pending 里)。
     return {
       pending: await storage.listTree({ directoryId: pendingId }),
       staging: await storage.listTree({ directoryId: stagingId }),
@@ -850,11 +783,12 @@ export class TaskSandbox {
   /** Delete files from the pending directory. Scope guard: every id must
    *  currently be in THIS task's pending directory.
    *
-   *  ★ 2026-09-11 二次确认:「不在 pending」有两种可能。run 53bf287e 的误报
-   *  就出在这里——finalize 归位(异步 move)刚完成,紧随其后的 inspectPending
-   *  读到 15 个「残留」,本方法再读一次只剩 4 个,于是 11 个被判 NOT_IN_PENDING
-   *  并 throw,把一个已成功的 run 记成「缺集」。所以守卫失败时先退避重读确认:
-   *  确实不存在的视为已清理(搬走/删掉)并从批量剔除,仍在的才是真残留,原样抛错。
+   *  二次确认:「不在 pending」有两种可能。run 53bf287e 的误报就出在这里——
+   *  finalize 归位(异步 move)刚完成,紧随其后的 inspectPending 读到 15 个
+   *  「残留」,本方法再读一次只剩 4 个,于是 11 个被判 NOT_IN_PENDING 并 throw,
+   *  把一个已成功的 run 记成「缺集」。所以守卫失败时先重读一次确认:确实不
+   *  存在的视为已清理(搬走/删掉)并从批量剔除,仍在的才是真残留,原样抛错。
+   *  只在 missing 非空(错误路径)才多读一次,正常路径零开销。
    *  安全检查不变:要删的 id 仍然逐个核对本任务 pending 的实况。 */
   async deleteFromPending(input: { fileIds: string[] }): Promise<{ deleted: string[]; pending: SimTreeFile[] }> {
     if (!this.storage || !this.pendingDirectoryId) {
@@ -867,11 +801,9 @@ export class TaskSandbox {
     );
     let missing = input.fileIds.filter((id) => !present.has(id));
     if (missing.length > 0) {
-      const recheck = await this.probeSettle(
-        `删除前重读确认(首读缺 ${missing.length} 个)`,
-        () => storage.listTree({ directoryId: pendingId }),
-      );
-      present = new Set((recheck ?? []).map((f) => f.id));
+      // 异步 move/delete 的 list 索引滞后(实测 2~6s):重读一次确认这些 id
+      // 是真的不在,而不是刚搬走/刚删掉还没同步。
+      present = new Set((await storage.listTree({ directoryId: pendingId })).map((f) => f.id));
       missing = input.fileIds.filter((id) => !present.has(id));
     }
     if (missing.length > 0) {
@@ -890,9 +822,6 @@ export class TaskSandbox {
       return { deleted: [], pending: await storage.listTree({ directoryId: pendingId }) };
     }
     await storage.deleteFiles({ directoryId: pendingId, fileIds: toDelete });
-    await this.probeSettle(`删除后 pending(删 ${toDelete.length} 个,应趋空)`, () =>
-      storage.listTree({ directoryId: pendingId }),
-    );
     return { deleted: toDelete, pending: await storage.listTree({ directoryId: pendingId }) };
   }
 
@@ -906,8 +835,8 @@ export class TaskSandbox {
    *
    *  旧注释写「Quark changes file IDs on rename」是 09-10 排查时的推断,
    *  未经验证且已被上述快照推翻;当时「重读后 id 对不上」的真因是 move 之后
-   *  的 list 滞后(见 probeSettle),不是 rename 换 id。rename 是同步接口且
-   *  改动立刻可见,重读仅作探测留痕。 */
+   *  源目录的 list 滞后(实测约 2s),不是 rename 换 id。rename 是同步接口且
+   *  改动立刻可见,不需要重读。 */
   async renameInPending(input: {
     renames: Array<{ fileId: string; newName: string }>;
   }): Promise<{ renamed: string[]; errors?: Array<{ fileId: string; error: string }> }> {
@@ -920,13 +849,6 @@ export class TaskSandbox {
     const storage = this.storage;
     const pendingId = this.pendingDirectoryId;
     const pending = await storage.listTree({ directoryId: pendingId });
-    // ★ 2026-09-11:改名前快照(fid→原名)。与改后的探测对照即可判断 fid 是否稳定。
-    if (TaskSandbox.probeDelayMs > 0) {
-      console.log(
-        `[mediary-run][${this.logRunId}] | rename 前 pending ${pending.length} 个: ` +
-          pending.map((f) => `${f.id.slice(0, 8)}→${f.path.split("/").pop() ?? f.id}`).join(", "),
-      );
-    }
     const renamed: string[] = [];
     const errors: Array<{ fileId: string; error: string }> = [];
     for (const { fileId, newName } of input.renames) {
@@ -954,9 +876,6 @@ export class TaskSandbox {
         errors.push({ fileId, error: err instanceof Error ? err.message : String(err) });
       }
     }
-    await this.probeSettle(`改名后 pending(请求改 ${input.renames.length} 条,fid 应不变)`, () =>
-      storage.listTree({ directoryId: pendingId }),
-    );
     if (errors.length > 0) {
       console.error(
         `[mediary-run][${this.logRunId}] | rename 失败 ${errors.length} 条: ` +
