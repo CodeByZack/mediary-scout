@@ -329,12 +329,13 @@ async function runTvCandidatePhase(
                 ...(subtitleIds.length > 0 ? { subtitleFileIds: subtitleIds } : {}),
               }],
             });
+            movedCount++;
           } catch (err) {
             // ★ 2026-09-10 地球超新鲜案:搬移失败曾被静默吞掉 → entry 留在 map,
             // 磁盘没进 pending,后续 finalize 撞 SANDBOX_FILES_NOT_IN_PENDING。
-            // ★ 2026-09-11:moveToPending 现在对「假成功」(Quark move 返回 200
-            // 但没搬)也会 throw(SANDBOX_MOVE_NOT_LANDED),这里必须把失败 code
-            // 从 map 剔除,否则 finalize 仍拿假 id 归位继续炸。
+            // ★ 2026-09-11:moveToPending 不再对「回读看不到」throw(那是异步
+            // move 的 list 滞后,run 53bf287e 已证伪),这里只会遇到真失败
+            // (作用域不符/鉴权/接口报错)——同样剔除,避免 finalize 拿假 id 归位。
             stepLog(
               sandbox,
               target.title,
@@ -344,7 +345,6 @@ async function runTvCandidatePhase(
             );
             ctx.pendingEntries.delete(code);
           }
-          movedCount++;
         }
         if (movedCount > 0) {
           stepLog(sandbox, target.title, "pending 积累", "搬入 pending:" + movedCount + " 集");
