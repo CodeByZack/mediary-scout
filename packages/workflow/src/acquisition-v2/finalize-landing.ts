@@ -385,6 +385,18 @@ export async function finalizeFromPending(options: {
   const skipSet = new Set(skipCodes ?? []);
   const onlySet = onlyCodes ? new Set(onlyCodes) : null;
 
+  // ★ 2026-09-11:finalize 入口打一份「期望清单」——tv.ts 的 pendingEntries
+  // 记忆里的 code→fileId(faec748e 曾出现 map 与磁盘脱钩:map 有、磁盘没有)。
+  // 与 moveToPending 搬入后回读(moveToPending 日志)对照,判断是记错还是真没搬进。
+  try {
+    console.log(
+      `[mediary-run][${sandbox.logRunId}] ${canonicalTitle} | finalize 期望 ${entries.length} 条: ` +
+        entries.map((e) => `${e.code}→${e.fileId}`).join(", "),
+    );
+  } catch {
+    // observability only
+  }
+
   const renames: Array<{ fileId: string; newName: string }> = [];
   const renamedPairs: Array<{ from: string; to: string }> = [];
   const skippedOnDisk: string[] = [];
@@ -447,6 +459,15 @@ export async function finalizeFromPending(options: {
     const season = seasonFromEpisodeCode(code);
     if (season === null) continue;
     const currentFileId = codeToNewFileId.get(fileId) ?? fileId;
+    // ★ 2026-09-11:分组时打个 code→归位 id 对照(rename 前 fileId vs rename 后新 id),
+    // 归位炸 NOT_IN_PENDING 时能直接看到「哪个 code 用了哪个 id」。
+    try {
+      console.log(
+        `[mediary-run][${sandbox.logRunId}] ${canonicalTitle} | 归位分组: ${code} ${fileId} → ${currentFileId}${currentFileId !== fileId ? "(换 id)" : ""}`,
+      );
+    } catch {
+      // observability only
+    }
     const ids = bySeason.get(season) ?? [];
     ids.push(currentFileId);
     if (entry.subtitles) ids.push(...entry.subtitles);
