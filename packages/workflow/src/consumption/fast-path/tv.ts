@@ -332,6 +332,9 @@ async function runTvCandidatePhase(
           } catch (err) {
             // ★ 2026-09-10 地球超新鲜案:搬移失败曾被静默吞掉 → entry 留在 map,
             // 磁盘没进 pending,后续 finalize 撞 SANDBOX_FILES_NOT_IN_PENDING。
+            // ★ 2026-09-11:moveToPending 现在对「假成功」(Quark move 返回 200
+            // 但没搬)也会 throw(SANDBOX_MOVE_NOT_LANDED),这里必须把失败 code
+            // 从 map 剔除,否则 finalize 仍拿假 id 归位继续炸。
             stepLog(
               sandbox,
               target.title,
@@ -339,6 +342,7 @@ async function runTvCandidatePhase(
               `搬入失败 ${code} ${entry.fileId}${(entry.subtitles ?? []).length > 0 ? " +字幕" + (entry.subtitles ?? []).join(",") : ""}: ${err instanceof Error ? err.message : String(err)}`,
               "warn",
             );
+            ctx.pendingEntries.delete(code);
           }
           movedCount++;
         }

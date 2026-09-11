@@ -535,16 +535,19 @@ export class TaskSandbox {
       }
       await this.storage.moveFiles({ fileIds: idsToMove, targetDirectoryId: this.pendingDirectoryId });
     }
-    // ★ 2026-09-11 地球超新鲜案:搬入后逐一回读 pending,把「请求搬的 id」vs
-    // 「pending 实况」对照打出来——搬入失败被静默吞掉时,这里能看到 id 没进
-    // pending(finalize 归位才炸 SANDBOX_FILES_NOT_IN_PENDING)。
+    // ★ 2026-09-11 地球超新鲜案:搬入后回读校验——Quark 对失效/stale id 的
+    // move 常返回假成功(200 但没动)(对比 deleteFiles 有
+    // assertFilesBelongToDirectory 前置校验,moveFiles 没有),tv.ts 内存 map
+    // 与磁盘脱钩,finalize 归位才炸 SANDBOX_FILES_NOT_IN_PENDING。
+    // 这里主动核对「请求搬的每个 id 是否真的进 pending」,假成功立即 throw,
+    // 让 onPartial 的 catch 留痕「搬入失败」,而不是静默污染 pendingEntries。
     const pendingAfter = await this.storage.listTree({ directoryId: this.pendingDirectoryId });
     const pendingAfterById = new Map(pendingAfter.map((f) => [f.id, f.path.split("/").pop() ?? f.id]));
     const movedIds = input.moves.flatMap((m) => [m.fileId, ...(m.subtitleFileIds ?? [])]);
-    for (const id of movedIds) {
-      const name = pendingAfterById.get(id);
-      console.log(
-        `[mediary-run][${this.logRunId}] | pending 搬入后回读: ${id}${name ? ` → ${name}` : " ❌ 不在 pending(搬入失败/换 id)"}`,
+    const notLanded = movedIds.filter((id) => !pendingAfterById.has(id));
+    if (notLanded.length > 0) {
+      throw new Error(
+        `SANDBOX_MOVE_NOT_LANDED: ${notLanded.join(",")} (need=${JSON.stringify(movedIds)} pending=${JSON.stringify([...pendingAfterById.keys()])})`,
       );
     }
     return {
@@ -824,12 +827,6 @@ export class TaskSandbox {
       throw new Error("SANDBOX_EMPTY_RENAMES: renames must not be empty");
     }
     const pending = await this.storage.listTree({ directoryId: this.pendingDirectoryId });
-    // ★ 2026-09-11:rename 前快照留痕(fileId→原名),归位炸 NOT_IN_PENDING 时
-    // 可对照「rename 前有没有这些 id」「rename 后去哪了」。
-    console.log(
-      `[mediary-run][${this.logRunId}] | rename 前 pending ${pending.length} 个: ` +
-        pending.map((f) => `${f.id}→${f.path.split("/").pop() ?? f.id}`).join(", "),
-    );
     const renamed: string[] = [];
     const errors: Array<{ fileId: string; error: string }> = [];
     for (const { fileId, newName } of input.renames) {
@@ -861,28 +858,21 @@ export class TaskSandbox {
     // (that stale id no longer exists once Quark swaps ids, and the later
     // move step then fails with SANDBOX_FILES_NOT_IN_PENDING).
     const after = await this.storage.listTree({ directoryId: this.pendingDirectoryId });
-    // ★ 2026-09-11:rename 后快照同样留痕,与 rename 前对照定位「换 id」。
-    console.log(
-      `[mediary-run][${this.logRunId}] | rename 后 pending ${after.length} 个: ` +
-        after.map((f) => `${f.id}→${f.path.split("/").pop() ?? f.id}`).join(", "),
-    );
     const idByNewName = new Map(after.map((f) => [f.path.split("/").pop() ?? f.path, f.id]));
     for (const { fileId, newName } of input.renames) {
       if (errors.some((e) => e.fileId === fileId)) continue;
       const newId = idByNewName.get(newName);
       if (newId) {
         renamed.push(newId);
-        // ★ 2026-09-11:成功条目也留痕(旧 id→新 id),归位按新 id 走却炸时,
-        // 能看出是新 id 本身没进 pending 还是反查错位。
-        console.log(
-          `[mediary-run][${this.logRunId}] | rename 反查: ${newName} ${fileId} → ${newId}`,
-        );
       } else {
         errors.push({ fileId, error: `SANDBOX_RENAME_NOT_VISIBLE: 改名后 pending 里查不到新名 ${newName}(换 id 的网盘 rename 可能异步生效)` });
-        console.log(
-          `[mediary-run][${this.logRunId}] | rename 反查失败: ${newName} 原 id ${fileId} ❌ pending 里查不到新名`,
-        );
       }
+    }
+    if (errors.length > 0) {
+      console.error(
+        `[mediary-run][${this.logRunId}] | rename 失败 ${errors.length} 条: ` +
+          errors.map((e) => `${e.fileId}: ${e.error}`).join(" | "),
+      );
     }
     console.log(
       `[mediary-run][${this.logRunId}] | rename 汇总: 请求 ${input.renames.length} 条, 成功(拿到新 id) ${renamed.length} 条, 失败 ${errors.length} 条`,
