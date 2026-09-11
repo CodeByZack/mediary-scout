@@ -13,7 +13,12 @@
 import type { PackageTreeFile, ResourceCandidate, TransferAttempt, TransferStatus, VerifiedFile } from "./domain.js";
 import { episodeCodeFromFileName } from "./episode-code.js";
 import type { StorageExecutor, UnparsedVideoFile } from "./ports.js";
-import { isQuarkAuthError, type QuarkCookieClient, type QuarkItem } from "./quark-cookie-client.js";
+import {
+  DIAGNOSTIC_LOGGING,
+  isQuarkAuthError,
+  type QuarkCookieClient,
+  type QuarkItem,
+} from "./quark-cookie-client.js";
 
 const MAX_RECURSIVE_COLLECT_DEPTH = 6;
 const DEFAULT_MAX_WRITE_SCOPE_DEPTH = 8;
@@ -148,7 +153,19 @@ export class QuarkStorageExecutor implements StorageExecutor {
           pwd_id: parsed.pwdId,
           stoken,
         });
-        await this.client.pollTask(taskId);
+        const result = await this.client.pollTask(taskId);
+        if (!result.done) {
+          // 转存任务没到完成态 = 这批文件可能根本没进 staging。后续所有
+          // 「文件不在 staging / 不在 pending」的错误都可能是它上游。
+          // 只留痕不 throw:轮询耗尽也可能只是 status 语义与我们假设不同。
+          console.warn(
+            `[quark] ⚠ 转存任务未完成 taskId=${taskId.slice(0, 12)}… 轮询 ${result.attempts} 次未到 status=2(最后 status=${result.lastStatus ?? "N/A"})`,
+          );
+        } else if (DIAGNOSTIC_LOGGING) {
+          console.log(
+            `[quark] 转存任务完成 taskId=${taskId.slice(0, 12)}… 第 ${result.attempts} 次轮询到 status=2,本批 ${fidList.slice(offset, offset + SAVE_SHARE_BATCH_SIZE).length} 个文件`,
+          );
+        }
       }
     } catch (error) {
       // Auth failures must surface so the worker freezes the drive — never absorbed.

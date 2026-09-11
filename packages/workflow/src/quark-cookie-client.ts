@@ -28,6 +28,16 @@ const QUARK_AUTH_CODE = 31001;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 诊断日志开关——与 sandbox 的退避探测同一个旋钮(MEDIA_TRACK_PROBE_DELAY_MS):
+ *  >0 = 生产/测试包,打全量诊断;<=0 = 单测,静默。
+ *  地球超新鲜案期间加的三处诊断(异步任务轮询结果 / rename 响应是否含 fid /
+ *  sandbox 的退避重读)统一由它控制,便于定性完一起摘除。 */
+const DIAGNOSTIC_LOGGING = (() => {
+  const raw = Number(process.env.MEDIA_TRACK_PROBE_DELAY_MS ?? 2000);
+  return Number.isFinite(raw) && raw > 0;
+})();
+export { DIAGNOSTIC_LOGGING };
+
 export interface QuarkHttpInit {
   method: "GET" | "POST";
   headers: Record<string, string>;
@@ -44,6 +54,17 @@ export interface QuarkCookieClientOptions {
   sleep?: (ms: number) => Promise<void>;
   pollAttempts?: number;
   pollDelayMs?: number;
+}
+
+/** pollTask 的结果。`done:false` = 轮询耗尽仍未到 status===2 —— 也就是
+ *  「任务没完成但调用方照常往下走」。改这个返回值就是为了让它可见:此前
+ *  awaitTaskFrom 直接丢掉 boolean,move/delete 没真正完成也会被当成功。 */
+export interface QuarkTaskPollResult {
+  done: boolean;
+  /** 实际轮询了几次(status===2 命中那次计入)。 */
+  attempts: number;
+  /** 最后一次读到的 task status;读不到为 null。 */
+  lastStatus: number | null;
 }
 
 /** A directory listing entry (file/sort). `dir:true` = directory. */
@@ -269,20 +290,23 @@ export class QuarkCookieClient {
   }
 
   /** Step 4: poll the async task until status===2 (done). false if it never completes. */
-  async pollTask(taskId: string, opts?: { maxAttempts?: number }): Promise<boolean> {
+  async pollTask(taskId: string, opts?: { maxAttempts?: number }): Promise<QuarkTaskPollResult> {
     const maxAttempts = opts?.maxAttempts ?? this.pollAttempts;
+    let lastStatus: number | null = null;
     for (let i = 0; i < maxAttempts; i++) {
       const response = await this.getJson("/1/clouddrive/task", [
         ["task_id", taskId],
         ["retry_index", String(i)],
       ]);
       const data = unwrap(response, "QUARK_TASK_FAILED");
-      if (numberValue(recordValue(data, "status")) === 2) {
-        return true;
+      const status = numberValue(recordValue(data, "status"));
+      lastStatus = Number.isFinite(status) ? status : null;
+      if (status === 2) {
+        return { done: true, attempts: i + 1, lastStatus };
       }
       await this.sleepFn(this.pollDelayMs);
     }
-    return false;
+    return { done: false, attempts: maxAttempts, lastStatus };
   }
 
   /** Delete files (action_type:2 = move to recycle bin, same as 115's rb/delete).
@@ -312,9 +336,30 @@ export class QuarkCookieClient {
   private async awaitTaskFrom(response: unknown, genericPrefix: string): Promise<void> {
     const data = unwrap(response, genericPrefix);
     const taskId = stringValue(recordValue(data, "task_id"));
-    if (taskId) {
-      await this.pollTask(taskId);
+    if (!taskId) {
+      // 无 task_id = 该操作这次是同步的(或夸克没走异步)。必须留痕,
+      // 否则分不清「同步完成」和「响应被截断丢了 task_id」。
+      if (DIAGNOSTIC_LOGGING) {
+        console.log(`[quark] ${genericPrefix}: 响应无 task_id,按同步操作处理,未轮询`);
+      }
+      return;
     }
+    const t0 = Date.now();
+    const result = await this.pollTask(taskId);
+    if (result.done) {
+      if (DIAGNOSTIC_LOGGING) {
+        console.log(
+          `[quark] 异步任务完成 ${genericPrefix} task=${taskId.slice(0, 12)}… 第 ${result.attempts}/${this.pollAttempts} 次轮询到 status=2,耗时 ${Date.now() - t0}ms`,
+        );
+      }
+      return;
+    }
+    // ⚠ 任务没到完成态,调用方却照常往下走——「move 假成功」最可能的来源。
+    // 只留痕不 throw:轮询耗尽也可能只是夸克 status 语义与我们假设不同,
+    // 先拿到数据定性,再决定是否 fail-loud。
+    console.warn(
+      `[quark] ⚠ 异步任务未完成 ${genericPrefix} task=${taskId.slice(0, 12)}… 轮询 ${result.attempts} 次仍未到 status=2(最后 status=${result.lastStatus ?? "N/A"}),耗时 ${Date.now() - t0}ms —— 调用方仍按成功继续`,
+    );
   }
 
   async renameFile(input: { fid: string; name: string }): Promise<void> {
@@ -322,7 +367,19 @@ export class QuarkCookieClient {
       fid: input.fid,
       file_name: input.name,
     });
-    unwrap(response, "QUARK_RENAME_FAILED");
+    const data = unwrap(response, "QUARK_RENAME_FAILED");
+    // ★ 2026-09-11:直接验证 rename 响应体。「夸克 rename 换 fid」曾是未经验证
+    // 的推断;run 53bf287e 的 rename 前/后快照显示 21 个 fid 完全一致,但从未
+    // 看过响应本身。这里把有无 fid 字段、是否换 fid 打出来,一锤定音。
+    if (DIAGNOSTIC_LOGGING) {
+      const respFid = stringValue(recordValue(data, "fid"));
+      const verdict = respFid
+        ? `响应 fid=${respFid.slice(0, 12)}… ${respFid === input.fid ? "(同 fid)" : "(换 fid!)"}`
+        : `无 fid 字段, data=${JSON.stringify(data).slice(0, 140)}`;
+      console.log(
+        `[quark] rename 响应: 入参 fid=${input.fid.slice(0, 12)}… → ${verdict} name=${input.name}`,
+      );
+    }
   }
 
   private async getJson(path: string, params: Array<[string, string]>): Promise<unknown> {
