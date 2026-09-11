@@ -114,5 +114,9 @@ export async function runTvAcquisitionV2(request: RunTvAcquisitionV2Request): Pr
     v2,
     workflowRunId: request.workflowRunId,
     now: request.now ?? defaultNowIso,
+    // ★ 2026-09-12:桥接 persist 必须拿到播出日/集名,否则 episode_states 被抹空、
+    // 年守卫失武(run 19ca7e1d S1 内容被判成 S2)。
+    ...(request.episodeAirDates === undefined ? {} : { episodeAirDates: request.episodeAirDates }),
+    ...(request.episodeNames === undefined ? {} : { episodeNames: request.episodeNames }),
   });
 }

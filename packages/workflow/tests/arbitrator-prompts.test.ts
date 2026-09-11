@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolvePromptText, PROMPT_TEMPLATES } from "../src/acquisition-v2/arbitrator.js";
+import { MockLanguageModelV3 } from "ai/test";
+import { arbitrateEpisodeMapping, resolvePromptText, PROMPT_TEMPLATES } from "../src/acquisition-v2/arbitrator.js";
 import { EPISODE_MAPPING_BODY_SINGLE, EPISODE_MAPPING_BODY_MULTI } from "../src/prompt-templates.js";
 import {
   ARBITRATION_KINDS,
@@ -79,5 +80,75 @@ describe("issue #53 — 多季/单季 episode-mapping body 变体", () => {
     expect(text.startsWith(PROMPT_TEMPLATES["episode-mapping"].head)).toBe(true);
     expect(text.endsWith(PROMPT_TEMPLATES["episode-mapping"].tail)).toBe(true);
     expect(text).toContain("自定义规则");
+  });
+});
+
+const USAGE = {
+  inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+  outputTokens: { total: undefined, text: undefined, reasoning: undefined },
+} as const;
+
+/** 记录实际收到的 system prompt 的假模型(2026-09-12 接线测试)。 */
+function capturingModel(captured: string[]) {
+  return new MockLanguageModelV3({
+    doGenerate: async (args: { prompt?: Array<{ role: string; content: unknown }> }) => {
+      const part = (c: unknown): string =>
+        typeof c === "string"
+          ? c
+          : Array.isArray(c)
+            ? (c as Array<{ text?: string }>)
+                .map((p) => p.text ?? "")
+                .join("")
+            : "";
+      captured.push((args.prompt ?? []).map((m) => `${m.role}::${part(m.content)}`).join("\n"));
+      return {
+        content: [{ type: "text" as const, text: '{"mapping":{},"unmapped":[],"reasoning":"probe"}' }],
+        finishReason: { unified: "stop" as const, raw: "stop" as const },
+        usage: USAGE,
+        warnings: [],
+      };
+    },
+  });
+}
+
+describe("arbitrateEpisodeMapping body 接线(2026-09-12 空覆盖误伤修复)", () => {
+  const base = {
+    allFiles: ["2025.07.27-第1期上.mp4"],
+    title: "地球超新鲜",
+    knownEpisodeRange: { min: 1, max: 20 } as const,
+  };
+
+  it("E1: 无 overrides + 多季 → system 用 MULTI body", async () => {
+    const seen: string[] = [];
+    await arbitrateEpisodeMapping({ model: capturingModel(seen), seasons: [1, 2], ...base });
+    expect(seen[0]).toContain(EPISODE_MAPPING_BODY_MULTI);
+    expect(seen[0]).not.toContain(EPISODE_MAPPING_BODY_SINGLE);
+  });
+
+  it("E2: 空对象 {} + 多季 → 仍用 MULTI body(回归:旧 truthy 判断被 {} 误伤)", async () => {
+    const seen: string[] = [];
+    await arbitrateEpisodeMapping({ model: capturingModel(seen), seasons: [1, 2], ...base, promptOverrides: {} });
+    expect(seen[0]).toContain(EPISODE_MAPPING_BODY_MULTI);
+    expect(seen[0]).not.toContain(EPISODE_MAPPING_BODY_SINGLE);
+  });
+
+  it("E3: 空对象 {} + 单季 → 用 SINGLE body(单季零回归)", async () => {
+    const seen: string[] = [];
+    await arbitrateEpisodeMapping({ model: capturingModel(seen), seasons: [1], ...base, promptOverrides: {} });
+    expect(seen[0]).toContain(EPISODE_MAPPING_BODY_SINGLE);
+    expect(seen[0]).not.toContain(EPISODE_MAPPING_BODY_MULTI);
+  });
+
+  it("E4: 已覆盖 episode-mapping + 多季 → 自定义正文优先(单季/多季共用)", async () => {
+    const seen: string[] = [];
+    await arbitrateEpisodeMapping({
+      model: capturingModel(seen),
+      seasons: [1, 2],
+      ...base,
+      promptOverrides: { "episode-mapping": "自定义正文" },
+    });
+    expect(seen[0]).toContain("自定义正文");
+    expect(seen[0]).not.toContain(EPISODE_MAPPING_BODY_MULTI);
+    expect(seen[0]).not.toContain(EPISODE_MAPPING_BODY_SINGLE);
   });
 });

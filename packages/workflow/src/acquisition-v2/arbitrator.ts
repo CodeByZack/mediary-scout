@@ -89,12 +89,19 @@ export async function arbitrateEpisodeMapping(options: {
   ].join("\n");
 
   logAiCall(options.model, "集数映射仲裁", options.title, options.allFiles.join(",").length);
+  // ★ 2026-09-12:按「该 kind 是否有实际覆盖」选 body,而不是 overrides 对象真值。
+  // 旧写法 options.promptOverrides(编译后恒为对象,哪怕 {} 是空表) 走 truthy 分支 →
+  // resolvePromptText 回落到单季 body → 多季任务拿到「单季任务」正文,文件夹归季规则
+  // 从未生效(run 19ca7e1d S1 内容被 AI 标 S2 的诱因之一)。现在:无覆盖按季数选
+  // MULTI/SINGLE;有覆盖(用户自定义)单季/多季共用同一正文——与整体 override 语义一致。
+  const template = PROMPT_TEMPLATES["episode-mapping"];
+  const episodeMappingBody =
+    options.promptOverrides?.["episode-mapping"] ??
+    (options.seasons.length > 1 ? EPISODE_MAPPING_BODY_MULTI : EPISODE_MAPPING_BODY_SINGLE);
   const result = await generateText({
     model: options.model,
     // issue #53:多季用"文件路径"body(提示文件夹含季信息),单季保持"文件名"body(零回归)。
-    system: options.promptOverrides
-      ? resolvePromptText("episode-mapping", options.promptOverrides)
-      : PROMPT_TEMPLATES["episode-mapping"].head + "\n" + (options.seasons.length > 1 ? EPISODE_MAPPING_BODY_MULTI : EPISODE_MAPPING_BODY_SINGLE) + "\n" + PROMPT_TEMPLATES["episode-mapping"].tail,
+    system: template.head + "\n" + episodeMappingBody + "\n" + template.tail,
     prompt,
   });
 
