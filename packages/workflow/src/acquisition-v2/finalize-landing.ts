@@ -494,6 +494,19 @@ export async function finalizeFromPending(options: {
 
   // Clear pending
   const pendingLeft = await sandbox.inspectPending();
+  // ★ 2026-09-11:归位后的 pending 残留必须留痕——若 moveToSeasonFromPending
+  // 只搬走了部分文件(残留 = 归位想搬却没搬走的),这里直接看到残了谁;
+  // 也让 deleteFromPending 的入参(id 清单)可对照它的 outOfScope。
+  if (pendingLeft.length > 0) {
+    stepLog(
+      sandbox,
+      canonicalTitle,
+      "pending 清理",
+      `归位后残留 ${pendingLeft.length} 个: ${pendingLeft.map((f) => `${f.id}→${f.path.split("/").pop() ?? f.id}`).join(", ")}`,
+    );
+  } else {
+    stepLog(sandbox, canonicalTitle, "pending 清理", "归位后 pending 已清空");
+  }
   const discarded = pendingLeft.map((f) => f.path);
   if (pendingLeft.length > 0) {
     await sandbox.deleteFromPending({ fileIds: pendingLeft.map((f) => f.id) });
