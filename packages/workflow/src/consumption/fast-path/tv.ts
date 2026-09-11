@@ -25,6 +25,7 @@ import {
   gradeDistribution,
   gradedCandidateEvidence,
   logStorageProvider,
+  pushWithinBudget,
   stepLog,
   type FastPathOptions,
   type FastPathResult,
@@ -705,7 +706,7 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
       total: needCodes.length,
     });
     try {
-      await finalizeFromPending({
+      const finalized = await finalizeFromPending({
         sandbox,
         entries: [...ctx.pendingEntries.entries()].map(([code, entry]) => ({
           code,
@@ -719,6 +720,19 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
         ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
         ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
       });
+      // ★ 2026-09-12(pending 收尾无 rename 显示,用户 09-11 实测反馈):正常路径
+      // landing.ts:578/688 把改名对交给 args.files,UI 活动页才渲染「原名 → 规范名」
+      // 明细;本路径此前只 stepLog 到 stdout(finalize-landing.ts:440 那行 `-> `),
+      // emitStep 只带了 covered/total —— UI 读不到任何改名数据。工具名沿用
+      // finalizeLanding,step-rounds 归进同一张收尾卡,不新造 UI 分支。
+      const pendingRenameRows = finalized.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
+      emitStep(
+        onProgress,
+        "finalizeLanding",
+        "organize",
+        `归位到 Season 目录${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}`,
+        { ok: true, files: pushWithinBudget<string>([], pendingRenameRows, 1300) },
+      );
       const doneDetail = `已完成:${pendingCodes.join(",")} 已入库(pending 积累)`;
       stepLog(sandbox, target.title, "结论", doneDetail);
       emitStep(onProgress, "finish", "finalize", doneDetail);

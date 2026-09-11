@@ -164,6 +164,29 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
       // seasonQualityRecord 是 LEGACY 逐季记录字符串（如 "4K"），区别于
       // ctx.qualityPreference（high/medium，走 qualityGuidance）。
       const quality = claimed.snapshot.season.qualityPreference ?? "4K";
+      // ★ 2026-09-12 年守卫数据缺口(run 5721e707 案):全季获取(type1)整条链路从没接过
+      // 播出日 —— queueSeriesInitialization 入参没有该字段、reserve 用 episodes:[]、
+      // prepareSeriesTarget 只调 show 级 getTvDetails 拿不到 air_date。于是 40 集跨季
+      // 任务里「假 S02 分享装 2025 文件」无任何防线。这里按季补取 TMDB 播出日;取不到
+      // = 守卫惰性(与 type2/type3 缺省语义一致,零回归)。
+      const guardAirDates = new Map<string, string>();
+      const guardNames = new Map<string, string>();
+      if (ctx.seasonMetadataSync) {
+        for (const scope of claimed.seasonScopes) {
+          const meta = await ctx.seasonMetadataSync({
+            tmdbId: ctx.title.tmdbId,
+            seasonNumber: scope.seasonNumber,
+          });
+          if (!meta) continue;
+          for (const [code, date] of Object.entries(meta.episodeAirDates ?? {})) {
+            guardAirDates.set(code, date);
+          }
+          for (const [code, name] of Object.entries(meta.episodeNames ?? {})) {
+            // 与 type2(:127)/type3(:290)同款占位名过滤:Episode N 是默认标题,无锚定价值。
+            if (!/^Episode \d+$/.test(name)) guardNames.set(code, name);
+          }
+        }
+      }
       const bridged = await runTvAcquisitionV2({
         title: ctx.title,
         mode: "series",
@@ -180,6 +203,10 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
         model: ctx.model,
         workflowRunId: claimed.runId,
         ...(episodeRules !== undefined ? { episodeRules } : {}),
+        ...(guardAirDates.size > 0
+          ? { episodeAirDates: Object.fromEntries(guardAirDates) }
+          : {}),
+        ...(guardNames.size > 0 ? { episodeNames: Object.fromEntries(guardNames) } : {}),
         promptOverrides: promptLookup,
         now,
         onProgress: progressAndTraceSink({

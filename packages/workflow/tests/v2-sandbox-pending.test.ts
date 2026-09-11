@@ -171,6 +171,13 @@ describe("finalizeFromPending", () => {
     expect(result.marked).toEqual(["S01E01", "S01E02"]);
     expect(result.movedCount).toBe(2);
     expect(result.renamed.length).toBe(2);
+    // ★ 2026-09-12:tv.ts 的 pending 收尾把本字段交给 UI 的 finalizeLanding.args.files
+    // (活动页「原名 → 规范名」明细)。from 必须是 rename 前的 pending 原名,否则显示成
+    // 「新名 → 新名」;修前 pending 路径只 stepLog 到 stdout,UI 恒为空。
+    expect(result.renamedPairs).toEqual([
+      { from: "Show - 01.mkv", to: "Show.S01E01.mkv" },
+      { from: "Show - 02.mkv", to: "Show.S01E02.mkv" },
+    ]);
     // Pending should be empty
     const pending = await sandbox.inspectPending();
     expect(pending).toEqual([]);

@@ -9,6 +9,7 @@ import type {
 } from "../domain.js";
 import type { ResourceProvider, StorageExecutor } from "../ports.js";
 import type { PersistedWorkflowRunSnapshot, WorkflowRepository } from "../repository.js";
+import type { SeasonMetadataSync } from "../worker.js";
 
 /**
  * 任务消费流水线 · 上下文（design §3）。
@@ -72,6 +73,9 @@ export interface ConsumptionContext {
   preferredLanguage: string | undefined;
   qualityPreference: "high" | "medium" | undefined;
   assrtToken: string | undefined;
+  /** 巡检同款 TMDB 元数据同步。type1 全季没有 episode_states 可抄,靠它逐季取播出日
+   *  喂 fast path 年守卫;缺省 = 守卫惰性(与 type2/type3 缺省语义一致)。 */
+  seasonMetadataSync: SeasonMetadataSync | undefined;
 
   // ── 运行上下文 ──
   /** 从 claimed 快照拷出（防双认领后落库仍指向原 run 的 drive）。 */
@@ -93,6 +97,8 @@ export interface ConsumptionDeps {
   tvParentDirectoryId: string | undefined;
   animeParentDirectoryId: string | undefined;
   moviesParentDirectoryId: string | undefined;
+  /** type1 全季取播出日的注入(见 ConsumptionContext.seasonMetadataSync)。 */
+  seasonMetadataSync?: SeasonMetadataSync | undefined;
 }
 
 /**
@@ -133,6 +139,7 @@ export function buildConsumptionContext(input: {
     preferredLanguage: input.deps.preferredLanguage,
     qualityPreference: input.deps.qualityPreference,
     assrtToken: input.deps.assrtToken,
+    seasonMetadataSync: input.deps.seasonMetadataSync,
     connectedStorageId: input.claimed.connectedStorageId,
     ...(input.now === undefined ? {} : { now: input.now }),
   };
@@ -164,6 +171,7 @@ export function buildPatrolConsumptionContext(input: {
     preferredLanguage: input.deps.preferredLanguage,
     qualityPreference: input.deps.qualityPreference,
     assrtToken: input.deps.assrtToken,
+    seasonMetadataSync: input.deps.seasonMetadataSync,
     connectedStorageId: input.patrol.connectedStorageId,
     ...(input.now === undefined ? {} : { now: input.now }),
   };

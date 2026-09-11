@@ -299,6 +299,9 @@ interface QueuedConsumptionInput {
   moviesParentDirectoryId?: string;
   now?: () => string;
   resolveAccountContext?: ResolveAccountWorkerContext;
+  /** TMDB 元数据同步(type3 巡检同款)：type1 全季没有 episode_states 可抄,
+   *  pipeline 的 type1 分支用它逐季取播出日喂 fast path 年守卫。 */
+  syncSeasonMetadata?: SeasonMetadataSync;
   onAuthErrorFreeze?: (storageId: string, reason: string) => Promise<void>;
 }
 
@@ -344,6 +347,8 @@ async function runQueuedConsumption(
         // movie 语义：账号级缺失时回落全局 movies 父目录（TV 侧不读取，无影响）。
         moviesParentDirectoryId:
           deps.moviesParentDirectoryId ?? input.moviesParentDirectoryId,
+        // type1 全季年守卫数据源(见 pipeline.ts type1 分支)；未配 TMDB = undefined = 惰性。
+        seasonMetadataSync: input.syncSeasonMetadata,
       },
       now,
     });
