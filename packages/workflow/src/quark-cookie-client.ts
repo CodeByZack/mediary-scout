@@ -46,6 +46,17 @@ export interface QuarkCookieClientOptions {
   pollDelayMs?: number;
 }
 
+/** pollTask 的结果。`done:false` = 轮询耗尽仍未到 status===2 —— 也就是
+ *  「任务没完成但调用方照常往下走」。改这个返回值就是为了让它可见:此前
+ *  awaitTaskFrom 直接丢掉 boolean,move/delete 没真正完成也会被当成功。 */
+export interface QuarkTaskPollResult {
+  done: boolean;
+  /** 实际轮询了几次(status===2 命中那次计入)。 */
+  attempts: number;
+  /** 最后一次读到的 task status;读不到为 null。 */
+  lastStatus: number | null;
+}
+
 /** A directory listing entry (file/sort). `dir:true` = directory. */
 export interface QuarkItem {
   fid?: string;
@@ -269,20 +280,23 @@ export class QuarkCookieClient {
   }
 
   /** Step 4: poll the async task until status===2 (done). false if it never completes. */
-  async pollTask(taskId: string, opts?: { maxAttempts?: number }): Promise<boolean> {
+  async pollTask(taskId: string, opts?: { maxAttempts?: number }): Promise<QuarkTaskPollResult> {
     const maxAttempts = opts?.maxAttempts ?? this.pollAttempts;
+    let lastStatus: number | null = null;
     for (let i = 0; i < maxAttempts; i++) {
       const response = await this.getJson("/1/clouddrive/task", [
         ["task_id", taskId],
         ["retry_index", String(i)],
       ]);
       const data = unwrap(response, "QUARK_TASK_FAILED");
-      if (numberValue(recordValue(data, "status")) === 2) {
-        return true;
+      const status = numberValue(recordValue(data, "status"));
+      lastStatus = Number.isFinite(status) ? status : null;
+      if (status === 2) {
+        return { done: true, attempts: i + 1, lastStatus };
       }
       await this.sleepFn(this.pollDelayMs);
     }
-    return false;
+    return { done: false, attempts: maxAttempts, lastStatus };
   }
 
   /** Delete files (action_type:2 = move to recycle bin, same as 115's rb/delete).
@@ -312,9 +326,21 @@ export class QuarkCookieClient {
   private async awaitTaskFrom(response: unknown, genericPrefix: string): Promise<void> {
     const data = unwrap(response, genericPrefix);
     const taskId = stringValue(recordValue(data, "task_id"));
-    if (taskId) {
-      await this.pollTask(taskId);
+    if (!taskId) {
+      // 无 task_id = 该操作这次是同步的,或夸克这次没走异步。
+      return;
     }
+    const t0 = Date.now();
+    const result = await this.pollTask(taskId);
+    if (result.done) {
+      return;
+    }
+    // ⚠ 任务没到完成态,调用方却照常往下走——「move 假成功」最可能的来源。
+    // 只留痕不 throw:轮询耗尽也可能只是夸克 status 语义与我们假设不同,
+    // 先拿到数据定性,再决定是否 fail-loud。
+    console.warn(
+      `[quark] ⚠ 异步任务未完成 ${genericPrefix} task=${taskId.slice(0, 12)}… 轮询 ${result.attempts} 次仍未到 status=2(最后 status=${result.lastStatus ?? "N/A"}),耗时 ${Date.now() - t0}ms —— 调用方仍按成功继续`,
+    );
   }
 
   async renameFile(input: { fid: string; name: string }): Promise<void> {
@@ -322,6 +348,9 @@ export class QuarkCookieClient {
       fid: input.fid,
       file_name: input.name,
     });
+    // 返回值只用于判定 code:0。响应体不含 fid(实测 data={})——夸克 rename
+    // 不换 fid(run 82a02640:34 条入参 fid 全部保留,名字全部变更),所以调用方
+    // 无需也不应依赖响应里的新 id。
     unwrap(response, "QUARK_RENAME_FAILED");
   }
 

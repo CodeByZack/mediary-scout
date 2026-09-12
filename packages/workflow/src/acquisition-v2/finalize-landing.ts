@@ -1,4 +1,4 @@
-import { canonicalEpisodeFileName, episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../episode-code.js";
+import { canonicalEpisodeFileName, episodeCodeFromFileName, episodeCodeFromPath, episodeDateConflict, type EpisodeParseRules } from "../episode-code.js";
 import { TaskSandbox } from "./sandbox.js";
 import type { SimTreeFile } from "./storage-115-simulator.js";
 import type { MovieStagingDigest, StagingDigest } from "./staging-digest.js";
@@ -117,7 +117,8 @@ export function buildSeasonMoves(
   for (const video of digest.videos) {
     if (junkNames.has(basenameOf(video.path))) continue;
     const base = basenameOf(video.path);
-    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons, undefined, rules);
+    // issue #53:多季用 episodeCodeFromPath(含路径归季);overrides 先查完整路径(多季 key)再查 basename(单季 key)。
+    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, undefined, rules).code;
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
@@ -131,7 +132,8 @@ export function buildSeasonMoves(
   for (const subtitle of digest.subtitles) {
     if (junkNames.has(basenameOf(subtitle.path))) continue;
     const base = basenameOf(subtitle.path);
-    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons, undefined, rules);
+    // issue #53:字幕与视频同款路径解析。
+    const code = overridesTable[subtitle.path] ?? overridesTable[base] ?? episodeCodeFromPath(subtitle.path, seasons, undefined, rules).code;
     if (code) {
       const season = seasonFromEpisodeCode(code);
       if (
@@ -174,7 +176,8 @@ export async function finalizeLanding(
   for (const video of digest.videos) {
     const base = basenameOf(video.path);
     if (junkNames.has(base)) continue;
-    const code = overridesTable[base] ?? episodeCodeFromFileName(base, seasons, undefined, rules);
+    // issue #53:多季用 episodeCodeFromPath(含路径归季);overrides 先查完整路径再查 basename。
+    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, undefined, rules).code;
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
@@ -363,3 +366,139 @@ export async function finalizeMovieLanding(
   return { movie, marked };
 }
 
+
+
+/** Finalize from pending entries (code -> fileId + subtitles). Used by the
+ *  pending accumulation flow when no single candidate covers the full need. */
+export async function finalizeFromPending(options: {
+  sandbox: TaskSandbox;
+  entries: Array<{ code: string; fileId: string; subtitles?: string[] }>;
+  canonicalTitle: string;
+  seasons: number[];
+  skipCodes?: string[];
+  onlyCodes?: string[];
+  episodeAirDates?: Record<string, string>;
+  rules?: EpisodeParseRules;
+}): Promise<FinalizeLandingResult> {
+  const { sandbox, entries, canonicalTitle, seasons, skipCodes, onlyCodes, episodeAirDates, rules } = options;
+  const seasonSet = new Set(seasons);
+  const skipSet = new Set(skipCodes ?? []);
+  const onlySet = onlyCodes ? new Set(onlyCodes) : null;
+
+  const renames: Array<{ fileId: string; newName: string }> = [];
+  const renamedPairs: Array<{ from: string; to: string }> = [];
+  const skippedOnDisk: string[] = [];
+  const skippedNotNeeded: string[] = [];
+  const plannedCodes = new Set<string>();
+
+  for (const entry of entries) {
+    const { code, fileId } = entry;
+    const season = seasonFromEpisodeCode(code);
+    if (season === null || !seasonSet.has(season)) continue;
+    if (skipSet.has(code)) { skippedOnDisk.push(code); continue; }
+    if (onlySet && !onlySet.has(code)) { skippedNotNeeded.push(code + "(not needed)"); continue; }
+    if (plannedCodes.has(code)) { skippedNotNeeded.push(code + "(dup)"); continue; }
+    plannedCodes.add(code);
+    const newName = canonicalEpisodeFileName({ title: canonicalTitle, episodeCode: code, sourceName: code + ".mkv" });
+    renames.push({ fileId, newName });
+  }
+
+  // Build a code->fileId map after rename. 夸克 rename 不换 fid(响应体 data={},
+  // 34/34 前后快照对照,run 82a02640),所以这里是恒等映射;保留是为了
+  // failedByFileId 剔除后仍能取回原 id。
+  const codeToNewFileId = new Map<string, string>();
+  if (renames.length > 0) {
+    // ★ 2026-09-10:rename【之前】先快照 pending 原名 —— renamedPairs.from 用原名,
+    // 否则 from 取的是 rename 后的新名,日志变成「新名 -> 新名」没法看。
+    const pendingBefore = await sandbox.inspectPending();
+    const pendingByIdBefore = new Map(pendingBefore.map((f) => [f.id, f.path.split("/").pop() ?? f.id]));
+    const result = await sandbox.renameInPending({ renames });
+    // ★ 2026-09-10 地球超新鲜案:renameInPending 失败曾被忽略 → finalize 用旧 id
+    // 归位撞 SANDBOX_FILES_NOT_IN_PENDING。现在两层都显式:errors 全部列出,
+    // 失败条目从 plannedCodes 剔除(不归位、不 mark),绝不用退化 id 进 moves。
+    const failedByFileId = new Set((result.errors ?? []).map((e) => e.fileId));
+    if (failedByFileId.size > 0) {
+      for (const e of result.errors ?? []) {
+        console.error(`[mediary-run][${sandbox.logRunId}] ${canonicalTitle} | pending 改名失败: ${e.fileId}: ${e.error}`);
+      }
+      const codeByFileId = new Map(entries.map((en) => [en.fileId, en.code]));
+      for (const fid of failedByFileId) {
+        const failedCode = codeByFileId.get(fid);
+        if (failedCode) plannedCodes.delete(failedCode);
+      }
+    }
+    // renameInPending 已按 renames 顺序返回改名后的新 id(rename 完成后单次反查,
+    // 已对齐 Quark 异步改名) —— 直接消费,不再二次反查(旧版自查同目录读两次,
+    // 且退化旧 id 不报错,是本次僵局的根源)。
+    let renamedIdx = 0;
+    for (const { fileId, newName } of renames) {
+      if (failedByFileId.has(fileId)) continue;
+      const newId = result.renamed[renamedIdx++] ?? fileId;
+      codeToNewFileId.set(fileId, newId);
+      const from = pendingByIdBefore.get(fileId) ?? fileId;
+      renamedPairs.push({ from, to: newName });
+      stepLog(sandbox, canonicalTitle, "改名", from + " -> " + newName);
+    }
+  }
+
+  // Group by season for move (use updated fileIds from rename)
+  const bySeason = new Map<number, string[]>();
+  for (const entry of entries) {
+    const { code, fileId } = entry;
+    if (!plannedCodes.has(code)) continue;
+    const season = seasonFromEpisodeCode(code);
+    if (season === null) continue;
+    const currentFileId = codeToNewFileId.get(fileId) ?? fileId;
+    const ids = bySeason.get(season) ?? [];
+    ids.push(currentFileId);
+    if (entry.subtitles) ids.push(...entry.subtitles);
+    bySeason.set(season, ids);
+  }
+
+  const moves = [...bySeason.entries()].map(([season, fileIds]) => ({ season, fileIds }));
+  // ★ 2026-09-10 地球超新鲜案:归位前打印 moves 全量,便于和
+  // moveToSeasonFromPending 的 outOfScope 对照(7 个 id 从哪来)。
+  for (const move of moves) {
+    stepLog(sandbox, canonicalTitle, "pending 归位", `S${move.season} 待搬 ${move.fileIds.join(",")}`);
+  }
+  let movedCount = 0;
+  if (moves.length > 0) {
+    await sandbox.moveToSeasonFromPending({ moves });
+    movedCount = moves.reduce((sum, m) => sum + m.fileIds.length, 0);
+  }
+
+  // Mark obtained
+  const marked = [...plannedCodes];
+  if (marked.length > 0) {
+    await sandbox.markObtained({ codes: marked });
+  }
+
+  // Clear pending — 观测为主,不再显式删除。
+  //
+  // 2026-09-11 地球超新鲜案:这里原先是「inspectPending → deleteFromPending(读到的
+  // 残留)」。归位是异步 move,源目录 list 索引滞后约 2s(run 82a02640 实测:归位后
+  // +0ms 仍看到 14 个已搬走的文件,+2000ms 才归零),所以紧跟归位的这次读会看到
+  // 已搬走的内容,拿它们去删 → 预写守卫读同一个滞后列表放行 → 删不在该目录的
+  // fid → QUARK_DELETE_FAILED → throw → 把已入库成功的 run 记成「缺集」。
+  //
+  // 现在只留观测:pending 由 withPendingCleanup(directory-lifecycle.ts)在 run
+  // 结束时整目录清扫,成败都跑、吞错、不翻转结果。残留只是没被识别成集数的垃圾
+  // (加更/旅行日记),不需要在这里删。
+  const pendingLeft = await sandbox.inspectPending();
+  stepLog(
+    sandbox,
+    canonicalTitle,
+    "pending 清理",
+    pendingLeft.length > 0
+      ? `归位后读到 ${pendingLeft.length} 个残留(读可能滞后,含已搬走的),run 结束由 withPendingCleanup 整目录清扫: ${pendingLeft.map((f) => `${f.id}→${f.path.split("/").pop() ?? f.id}`).join(", ")}`
+      : "归位后 pending 已清空",
+  );
+  const discarded = pendingLeft.map((f) => f.path);
+
+  return {
+    renamed: renamedPairs.map((p) => p.to),
+    renamedPairs,
+    movedSeasons: Object.fromEntries([...bySeason.entries()].map(([s, ids]) => [s, ids.length])),
+    marked, discarded, movedCount, skippedOnDisk, skippedNotNeeded,
+  };
+}

@@ -957,6 +957,9 @@ export async function runNextQueuedWorkflow() {
   const resolveAccountContext = buildAccountContextResolver();
   const startedAt = new Date().toISOString();
   const onAuthErrorFreeze = (id: string, reason: string) => freezeConnectedStorage(id, reason);
+  // ★ 2026-09-12：type1 全季(40 集跨季任务)的年守卫数据源 —— 队列侧此前从未注入
+  // 元数据同步,播出日只在 type3 巡检侧有,全季获取的守卫因此永久惰性。
+  const syncSeasonMetadata = tmdbSeasonMetadataSync();
   // ★ 步骤⑥：kind 优先级表（type2 单季 → series 整包 → movie）收进 workflow 包
   // 的 runNextQueuedConsumption —— 与旧三段式逐字段等价（父级字段各 kind 互不读取），
   // 三个导出仍保留（runQueuedType2Workflow 等，备料/兼容用）。
@@ -972,6 +975,7 @@ export async function runNextQueuedWorkflow() {
     moviesParentDirectoryId: parents.movies,
     resolveAccountContext,
     onAuthErrorFreeze,
+    ...(syncSeasonMetadata ? { syncSeasonMetadata } : {}),
   });
   if (outcome.status !== "idle") {
     await pushNotificationsSince(repository, startedAt);

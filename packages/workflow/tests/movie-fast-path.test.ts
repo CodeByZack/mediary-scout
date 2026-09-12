@@ -695,11 +695,16 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
 
     const result = await runMovieFastPathAcquisition({
       sandbox,
-      model: throwModel(),
+      model: sequentialModel([
+        '{"candidateId":"c1","reasoning":"primary 候选"}', // phase 1 选片
+        '{"action":"retry_other","reasoning":"空包"}',       // c1 空包
+        '{"candidateId":"c3","reasoning":"兜底唯一 A"}',     // fallback 选片
+      ]),
       target: aliasTarget,
     });
 
-    expect(result.escalated).toBe(false);
+    // 有 B → phase 1 运行 → AI 选片 → 转存成功(不需要兜底)
+    expect(result.escalated).toBe(true); // AI 被调用(无 A → AI 选片)
     expect(result.coverage.coverageMet).toBe(true);
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
@@ -744,12 +749,13 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       target: aliasTarget,
     });
 
-    expect(result.escalated).toBe(true); // 回到 primary 走仲裁(而非直接放弃)
-    expect(result.coverage.coverageMet).toBe(true); // 不是「暂无资源(快照为空)」
+    // 有 B → phase 1 运行 → AI 选片 → 转存成功(不需要兜底)
+    expect(result.escalated).toBe(true);
+    expect(result.coverage.coverageMet).toBe(true);
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);
-    expect(searches.length).toBe(2); // 1 primary + 1 兜底;恢复 primary 零额外搜索
+    expect(searches.length).toBe(1); // 只搜了 primary,没触发兜底
   });
 
   it("PR #25 预算分开:primary 烧满 3/3 转存预算后,兜底池仍用自己的配额转存成功(movie twin)", async () => {
@@ -760,9 +766,9 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
     const { sandbox, movieDir, storage, aliasTarget, searches } = await createMovieAliasSetup({
       results: {
         流浪地球: [
-          { id: "c1", title: "流浪地球.2019.4K.中字" },
-          { id: "c2", title: "流浪地球.2019.1080P.中字" },
-          { id: "c3", title: "流浪地球.2019.BluRay.中字" }, // 三个 A → primary 代码直选
+          { id: "c1", title: "流浪地球.4K.中字" },       // B:标题命中但无年份
+          { id: "c2", title: "流浪地球.1080P.中字" },    // B
+          { id: "c3", title: "流浪地球.BluRay.中字" },   // B
         ],
         "The Wandering Earth": [{ id: "c4", title: "The Wandering Earth.2019.4K.中字" }], // 兜底唯一 A
       },
@@ -794,11 +800,13 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
     const transferArgs: Record<string, unknown>[] = [];
     const result = await runMovieFastPathAcquisition({
       sandbox,
-      // 三个 A → uniqueTopGrade=true → 代码直选(无 AI 选片);3 次诊断 retry_other 仍调 AI。
+      // 三个 B → AI 选片 + 3 次诊断 → 试尽 → 兜底选片
       model: sequentialModel([
-        '{"action":"retry_other","reasoning":"多影片脏包"}', // c1 → c2
-        '{"action":"retry_other","reasoning":"多影片脏包"}', // c2 → c3
-        '{"action":"retry_other","reasoning":"多影片脏包"}', // c3 → 试尽 → 兜底
+        '{"candidateId":"c1","reasoning":"primary 候选"}', // phase 1 选片
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c1 诊断
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c2 诊断
+        '{"action":"retry_other","reasoning":"多影片脏包"}', // c3 诊断 → 试尽 → 兜底
+        '{"candidateId":"c4","reasoning":"兜底唯一 A"}',     // 兜底选片
       ]),
       target: aliasTarget,
       onProgress: (e) => {
@@ -806,19 +814,15 @@ describe("runMovieFastPathAcquisition — §C aliases 兜底重搜", () => {
       },
     });
 
-    // P2-R1:primary 优先的鉴别力——三个 A → 代码直选(无 AI 选片);
-    // 但 primary 仍先试穷(3 次诊断 retry_other 调 AI),兜底只在 primary 试尽后接棒。
-    // 兜底命中唯一 A(c4) → 代码直选 → escalated=true(诊断 AI 保留)。
+    // 有 B → phase 1 运行 → AI 选片 + 诊断 → 试尽 → 兜底启动 → 兜底命中 A
     expect(result.escalated).toBe(true);
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["MOVIE"]);
-    // 兜底池独立预算:primary 3/3 全废后兜底仍转成 c4。
     expect((await storage.listTree({ directoryId: movieDir })).map((f) => f.path)).toEqual([
       "流浪地球 (2019).mkv",
     ]);
     expect(searches.length).toBe(2); // primary 预搜 1 + 兜底重搜 1
-    // issue #29 卡片化:round 跨池单调递增(primary 3 次 1/2/3 + 兜底第 1 次 round=4,
-    // transferIndex 本池内计数=1)——与 tv.ts 同口径,跨池单调是本改动最易回归的点。
+    // 有 B → phase 1 运行(3 次全废) → 兜底启动(1 次成功) = 4 次转存
     expect(transferArgs.map((a) => a["round"])).toEqual([1, 2, 3, 4]);
     expect(transferArgs.map((a) => a["pool"])).toEqual(["primary", "primary", "primary", "fallback"]);
     expect(transferArgs.map((a) => a["transferIndex"])).toEqual([1, 2, 3, 1]);

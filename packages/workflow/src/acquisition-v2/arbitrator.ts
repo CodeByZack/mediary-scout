@@ -1,6 +1,6 @@
 import { generateText, type LanguageModel } from "ai";
 import type { ArbitrationKind, PromptOverrideLookup } from "../ruleset.js";
-import { PROMPT_TEMPLATES } from "../prompt-templates.js";
+import { PROMPT_TEMPLATES, EPISODE_MAPPING_BODY } from "../prompt-templates.js";
 export { PROMPT_TEMPLATES } from "../prompt-templates.js";
 
 /** Always-on stdout trace marking every LLM round-trip the arbitrator makes —
@@ -84,14 +84,21 @@ export async function arbitrateEpisodeMapping(options: {
     `目标剧集:${options.title}(${options.seasons.length > 0 ? `季:${options.seasons.join("/")}` : "未知季"})`,
     `已知集数范围:${options.knownEpisodeRange ? `${options.knownEpisodeRange.min} ~ ${options.knownEpisodeRange.max}` : "未知"}`,
     "",
-    "需要识别集数的文件:",
+    "需要识别集数的文件(可能是纯文件名,也可能带文件夹):",
     ...options.allFiles.map((name, i) => `${i + 1}. ${name}`),
   ].join("\n");
 
   logAiCall(options.model, "集数映射仲裁", options.title, options.allFiles.join(",").length);
+  // ★ 2026-09-12:按「该 kind 是否有实际覆盖」选 body,而不是 overrides 对象真值。
+  // 旧写法 options.promptOverrides(编译后恒为对象,哪怕 {} 是空表) 走 truthy 分支 →
+  // resolvePromptText 回落到内置 body,用户自定义正文永不生效。现在:有覆盖用覆盖,
+  // 无覆盖(含空表 {})用内置——单季/多季共用一版(2026-09-12 用户拍板合并,不再有
+  // SINGLE/MULTI 两版按 seasons.length 分选)。
+  const template = PROMPT_TEMPLATES["episode-mapping"];
+  const episodeMappingBody = options.promptOverrides?.["episode-mapping"] ?? template.body;
   const result = await generateText({
     model: options.model,
-    system: resolvePromptText("episode-mapping", options.promptOverrides),
+    system: template.head + "\n" + episodeMappingBody + "\n" + template.tail,
     prompt,
   });
 

@@ -1,16 +1,15 @@
-import { episodeCodeFromFileName, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
+import { episodeCodeFromFileName, episodeCodeFromPath, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
 import { arbitrateSelection } from "../../acquisition-v2/arbitrator.js";
 import type { PromptOverrideLookup } from "../../ruleset.js";
 import { gradeCandidates, summarizeGrading } from "../../acquisition-v2/candidate-grader.js";
 import { digestStaging } from "../../acquisition-v2/staging-digest.js";
-import { finalizeLanding } from "../../acquisition-v2/finalize-landing.js";
+import { finalizeLanding, finalizeFromPending } from "../../acquisition-v2/finalize-landing.js";
 import {
   MAX_DEAD_LINK_RETRIES,
   MAX_FALLBACK_TRANSFER_ATTEMPTS,
   MAX_TRANSFER_ATTEMPTS,
   MAX_AI_PICKS_PRIMARY,
   MAX_AI_PICKS_FALLBACK,
-  MAX_TAIL_RETRANSFER,
 } from "./budgets.js";
 import {
   aliasesFallbackReSearch,
@@ -26,6 +25,7 @@ import {
   gradeDistribution,
   gradedCandidateEvidence,
   logStorageProvider,
+  pushWithinBudget,
   stepLog,
   type FastPathOptions,
   type FastPathResult,
@@ -89,6 +89,12 @@ interface TvPoolContext {
   promptOverrides?: PromptOverrideLookup;
   /** 跨池累计的部分覆盖记录（§43 尾部兜底用）。 */
   coverageRecords: CoverageRecord[];
+  /** Pending 积累：code → { fileId, candidateId, subtitles }。同源优先算法维护。 */
+  pendingEntries: Map<string, { fileId: string; candidateId: string; subtitles?: string[] }>;
+  /** 当前主力源的候选 ID（覆盖数最多者）。 */
+  bestCandidateId: string | null;
+  /** 当前主力源的覆盖数。 */
+  bestCount: number;
 }
 
 /** 阶段运行结果。done 非空 = 该池已收尾(入库或诚实终止)，直接返回；否则 caller 决定是否
@@ -251,6 +257,107 @@ async function runTvCandidatePhase(
       ...(ctx.episodeNames !== undefined ? { episodeNames: ctx.episodeNames } : {}),
       ...(ctx.episodeRules !== undefined ? { episodeRules: ctx.episodeRules } : {}),
       ...(ctx.promptOverrides !== undefined ? { promptOverrides: ctx.promptOverrides } : {}),
+      onPartial: async (coveredFileMap, stagingTree) => {
+        // Move covered files from staging to pending (B1 fix: before wipe)
+        if (!current) return;
+        try {
+        const covered = [...coveredFileMap.keys()].filter((c) => needCodes.includes(c));
+        const count = covered.length;
+        if (count > ctx.bestCount) {
+          // New main source: replace ONLY the codes this candidate also covers.
+          // ★ 2026-09-12 多季互补(run fb3c2836 案):旧逻辑无条件清空所有非本候选的 code——
+          // 多季任务里 round4 认 19 集 S01、round5 认 20 集 S02,20>19 换主力就把 S01 的 19 集
+          // 全删掉,40 集任务只落 20。候选之间是互补(各覆盖不同的季),不是竞争(同一批 code
+          // 找更好的源);只有撞码才需要「新主力取代旧主力」。
+          for (const [code, entry] of ctx.pendingEntries) {
+            if (entry.candidateId !== current && covered.includes(code)) {
+              const fileIds = [entry.fileId, ...(entry.subtitles ?? [])];
+              try {
+                const del = await sandbox.deleteFromPending({ fileIds });
+                // ★ 2026-09-10:删除成功同样留痕——换主力时旧 pending 的清理过程,
+                // 与 finalize 报错对照(残留 vs 已删)。
+                stepLog(
+                  sandbox,
+                  target.title,
+                  "pending 积累",
+                  `删旧主力 ${code} ${del.deleted.length}/${fileIds.length} 个文件`,
+                );
+              } catch (err) {
+                // ★ 2026-09-10 地球超新鲜案:删旧主力失败曾被静默吞掉 → 磁盘残留、
+                // map 已删,与 pending 实况脱钩。必须留痕以便对照 finalize 报错。
+                stepLog(
+                  sandbox,
+                  target.title,
+                  "pending 积累",
+                  `删旧主力失败 ${code} ${entry.fileId}${entry.subtitles ? " +字幕" + entry.subtitles.join(",") : ""}: ${err instanceof Error ? err.message : String(err)}`,
+                  "warn",
+                );
+              }
+              ctx.pendingEntries.delete(code);
+            }
+          }
+          for (const [code, fileId] of coveredFileMap) {
+            if (needCodes.includes(code)) {
+              ctx.pendingEntries.set(code, { fileId, candidateId: current });
+            }
+          }
+          ctx.bestCount = count;
+          ctx.bestCandidateId = current;
+          stepLog(sandbox, target.title, "pending 积累", "新主力:" + count + " 集");
+        } else {
+          // Only add unique codes
+          let added = 0;
+          for (const [code, fileId] of coveredFileMap) {
+            if (needCodes.includes(code) && !ctx.pendingEntries.has(code)) {
+              ctx.pendingEntries.set(code, { fileId, candidateId: current });
+              added++;
+            }
+          }
+          if (added > 0) {
+            stepLog(sandbox, target.title, "pending 积累", "补充:" + added + " 集");
+          }
+        }
+        // Move covered files from staging to pending (with subtitle matching)
+        let movedCount = 0;
+        for (const [code, entry] of ctx.pendingEntries) {
+          if (entry.candidateId !== current) continue;
+          try {
+            // Match subtitles by episode code (same as buildSeasonMoves)
+            const subtitleIds = stagingTree
+              .filter((f) => f.isSubtitle && f.id !== entry.fileId)
+              .filter((f) => episodeCodeFromPath(f.path, seasons, ctx.episodeNames, ctx.episodeRules).code === code)
+              .map((f) => f.id);
+            if (subtitleIds.length > 0) entry.subtitles = subtitleIds;
+            await sandbox.moveToPending({
+              moves: [{
+                fileId: entry.fileId,
+                ...(subtitleIds.length > 0 ? { subtitleFileIds: subtitleIds } : {}),
+              }],
+            });
+            movedCount++;
+          } catch (err) {
+            // ★ 2026-09-10 地球超新鲜案:搬移失败曾被静默吞掉 → entry 留在 map,
+            // 磁盘没进 pending,后续 finalize 撞 SANDBOX_FILES_NOT_IN_PENDING。
+            // ★ 2026-09-11:moveToPending 不再对「回读看不到」throw(那是异步
+            // move 的 list 滞后,run 53bf287e 已证伪),这里只会遇到真失败
+            // (作用域不符/鉴权/接口报错)——同样剔除,避免 finalize 拿假 id 归位。
+            stepLog(
+              sandbox,
+              target.title,
+              "pending 积累",
+              `搬入失败 ${code} ${entry.fileId}${(entry.subtitles ?? []).length > 0 ? " +字幕" + (entry.subtitles ?? []).join(",") : ""}: ${err instanceof Error ? err.message : String(err)}`,
+              "warn",
+            );
+            ctx.pendingEntries.delete(code);
+          }
+        }
+        if (movedCount > 0) {
+          stepLog(sandbox, target.title, "pending 积累", "搬入 pending:" + movedCount + " 集");
+        }
+        } catch (err) {
+          stepLog(sandbox, target.title, "pending 积累失败", err instanceof Error ? err.message : String(err), "error");
+        }
+      },
     });
     if (closed.done) {
       return { done: closed.done, escalated: closed.escalated, deadRetries: closed.deadRetries };
@@ -264,11 +371,12 @@ async function runTvCandidatePhase(
     // §43 尾部兜底:记录部分覆盖,两池耗尽后按覆盖数降序重转最优候选。
     // 去重:合并证据池可能让同一候选在 primary 与兜底各产生一条记录。
     if (closed.verdict === "retry_other" && closed.coveredCodes && closed.coveredCodes.length > 0) {
+      const covered = closed.coveredCodes.filter((c) => needCodes.includes(c));
       if (!ctx.coverageRecords.some((r) => r.candidateId === current)) {
         ctx.coverageRecords.push({
           candidateId: current,
           snapshotId,
-          coveredCodes: closed.coveredCodes.filter((c) => needCodes.includes(c)),
+          coveredCodes: covered,
           ...(closed.overrides ? { overrides: closed.overrides } : {}),
         });
       }
@@ -455,11 +563,14 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     ...(episodeRules !== undefined ? { episodeRules } : {}),
     ...(promptOverrides !== undefined ? { promptOverrides } : {}),
     coverageRecords: [],
+    pendingEntries: new Map(),
+    bestCandidateId: null,
+    bestCount: 0,
   };
 
-  // ★ 阶段1 —— primary 池:只要 primary 有 A 候选(或根本没有别名可兜底)就先转存 primary,
-  //    绝不在有 A 时提前跳兜底(PR #25:反「primary 14 个 A 却被兜底池替换」)。
-  if (primaryHasA || target.aliases.length === 0) {
+  // ★ 阶段1 —— primary 池:有候选就转存(不只是 A——B/C 让 AI 挑 3 个试),
+  //    只有候选池全空才跳过阶段1 直接兜底。绝不在有 A 时提前跳兜底(PR #25)。
+  if (grading.ranked.length > 0) {
     const primaryOutcome = await runTvCandidatePhase(
       { ...ctx, urlById },
       raw,
@@ -487,9 +598,11 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     // primary 池试尽仍未覆盖 → 落到兜底池(若有别名)。
   }
 
-  // ★ 阶段2 —— 兜底池:仅当 primary 无 A 候选、或 primary 转存预算耗尽仍未覆盖时启动。
+  // ★ 阶段2 —— 兜底池:仅当 primary 无 A 候选时启动。
+  //    2026-09-10 用户拍板:有 A 转存 5 次都没找到,再兜底搜没有意义——
+  //    说明方向错了(候选质量差),不是关键词问题。只有第一次搜索没 A 才值得换关键词重搜。
   //    独立的转存预算(MAX_FALLBACK_TRANSFER_ATTEMPTS),primary 试穷不影响兜底配额。
-  if (target.aliases.length > 0) {
+  if (target.aliases.length > 0 && !primaryHasA) {
     const fallback = await aliasesFallbackReSearch({
       sandbox,
       title: target.title,
@@ -586,114 +699,58 @@ export async function runFastPathAcquisition(options: FastPathOptions): Promise<
     }
   }
 
-  // §43 尾部兜底:两池耗尽未全量对齐时,按覆盖数降序重转最优候选落库。
-  // 成功 → partial;三个全失败 → 回落 reportNoCoverage(同现状)。
-  if (ctx.coverageRecords.length > 0 && needCodes.length > 0) {
-    const sorted = [...ctx.coverageRecords].sort(
-      (a, b) => b.coveredCodes.length - a.coveredCodes.length,
-    );
-    const top = sorted.slice(0, MAX_TAIL_RETRANSFER);
-    let tailLanded = false;
-    let tailCovered = 0;
-    let tailCandidateTitle = "";
-    for (const record of top) {
-      const tailTitle =
-        grading.ranked.find((c) => c.id === record.candidateId)?.title ?? "候选";
-      const tailDetail = `尾部重转《${tailTitle}》(上次认出 ${record.coveredCodes.length}/${needCodes.length} 集)`;
-      stepLog(sandbox, target.title, "尾部兜底", tailDetail);
-      emitStep(onProgress, "tailRetransfer", "transfer", tailDetail, {
-        candidateId: record.candidateId,
-        title: tailTitle,
-        covered: record.coveredCodes.length,
-        total: needCodes.length,
+  // Pending 积累收尾:所有候选试完后,如果 pending 有已识别的集数,从 pending 落库。
+  // 全覆盖走快路径（finalizeLanding from staging）不变；部分覆盖才走 pending。
+  if (ctx.pendingEntries.size > 0) {
+    const pendingCodes = [...ctx.pendingEntries.keys()];
+    const pendingDetail = `pending 积累:从 ${ctx.pendingEntries.size} 个候选拼出 ${pendingCodes.length}/${needCodes.length} 集`;
+    stepLog(sandbox, target.title, "pending 收尾", pendingDetail);
+    emitStep(onProgress, "finalizeFromPending", "organize", pendingDetail, {
+      covered: pendingCodes,
+      total: needCodes.length,
+    });
+    try {
+      const finalized = await finalizeFromPending({
+        sandbox,
+        entries: [...ctx.pendingEntries.entries()].map(([code, entry]) => ({
+          code,
+          fileId: entry.fileId,
+          ...(entry.subtitles ? { subtitles: entry.subtitles } : {}),
+        })),
+        canonicalTitle: target.title,
+        seasons,
+        skipCodes: [...onDiskCodes],
+        onlyCodes: needCodes,
+        ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
+        ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
       });
-      try {
-        const transfer = await sandbox.transferCandidate({
-          snapshotId: record.snapshotId,
-          candidateId: record.candidateId,
-          skipDeadLinkRecording: true,
-        });
-        const digest = digestStaging({
-          files: transfer.staging,
-          seasons,
-          needCodes,
-          ...(record.overrides ? { overrides: record.overrides } : {}),
-          ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
-          ...(target.episodeNames !== undefined ? { episodeNames: target.episodeNames } : {}),
-          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
-        });
-        if (digest.coveredCodes.length > 0) {
-          await finalizeLanding({
-            sandbox,
-            digest,
-            canonicalTitle: target.title,
-            seasons,
-            ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
-            skipCodes: [...onDiskCodes],
-            onlyCodes: needCodes,
-            ...(target.episodeAirDates !== undefined ? { episodeAirDates: target.episodeAirDates } : {}),
-            ...(record.overrides ? { overrides: record.overrides } : {}),
-          });
-          tailLanded = true;
-          tailCovered = digest.coveredCodes.length;
-          tailCandidateTitle = tailTitle;
-          // 尾部兜底也走 finalizeLanding emit,供 onProgress 捕获。
-          const organizeDetail = `尾部兜底归位 ${digest.coveredCodes.length}/${needCodes.length} 集`;
-          stepLog(sandbox, target.title, "归位", organizeDetail);
-          emitStep(onProgress, "finalizeLanding", "organize", organizeDetail, {
-            covered: digest.coveredCodes.length,
-            total: needCodes.length,
-          });
-          stepLog(sandbox, target.title, "尾部兜底", `已落库 ${digest.coveredCodes.length} 集`);
-          emitStep(onProgress, "tailLanding", "finalize", `尾部落库《${tailTitle}》${digest.coveredCodes.length} 集`, {
-            candidateId: record.candidateId,
-            title: tailTitle,
-            covered: digest.coveredCodes.length,
-            missing: digest.missingCodes.length,
-          });
-          break;
-        } else {
-          const leftover = await sandbox.inspectStaging();
-          if (leftover.length > 0) {
-            await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
-          }
-        }
-      } catch (err) {
-        // 重转失败:不写 dead_links(该链接验证过能用);清残留防污染下一条 digest。
-        stepLog(
-          sandbox,
-          target.title,
-          "尾部兜底",
-          `重转失败: ${err instanceof Error ? err.message : String(err)}`,
-          "warn",
-        );
-        try {
-          const leftover = await sandbox.inspectStaging();
-          if (leftover.length > 0) {
-            await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
-          }
-        } catch {
-          // 清理失败不阻塞下一条。
-        }
-      }
-    }
-    if (tailLanded) {
-      const checkoutDetail = `转存 ${ctx.attempted.size} 次未全量对齐,尾部落库 ${tailCovered} 集`;
-      stepLog(sandbox, target.title, "结账", checkoutDetail);
-      emitStep(onProgress, "runCheckout", "finalize", checkoutDetail, {
-        transfers: ctx.attempted.size,
-        fallbackTransfers: ctx.attempted.size - primaryTransfers,
-        deadLinkRetries: deadRetries,
-        searches: 1 + fallbackRounds,
-        aiEscalated: escalated,
-        tailLanding: { covered: tailCovered, total: needCodes.length, candidateTitle: tailCandidateTitle },
-      });
+      // ★ 2026-09-12(pending 收尾无 rename 显示,用户 09-11 实测反馈):正常路径
+      // landing.ts:578/688 把改名对交给 args.files,UI 活动页才渲染「原名 → 规范名」
+      // 明细;本路径此前只 stepLog 到 stdout(finalize-landing.ts:440 那行 `-> `),
+      // emitStep 只带了 covered/total —— UI 读不到任何改名数据。工具名沿用
+      // finalizeLanding,step-rounds 归进同一张收尾卡,不新造 UI 分支。
+      const pendingRenameRows = finalized.renamedPairs.map((rp) => `${rp.from} → ${rp.to}`);
+      emitStep(
+        onProgress,
+        "finalizeLanding",
+        "organize",
+        `归位到 Season 目录${finalized.movedCount > 0 ? `,移动 ${finalized.movedCount} 个文件` : ""}`,
+        { ok: true, files: pushWithinBudget<string>([], pendingRenameRows, 1300) },
+      );
+      const doneDetail = `已完成:${pendingCodes.join(",")} 已入库(pending 积累)`;
+      stepLog(sandbox, target.title, "结论", doneDetail);
+      emitStep(onProgress, "finish", "finalize", doneDetail);
       return {
-        text: `fast path 部分覆盖(转存 ${ctx.attempted.size} 次,尾部落库 ${tailCovered}/${needCodes.length} 集)`,
+        text: `fast path pending 归位标记:${pendingCodes.join(",")}`,
         steps: ctx.attempted.size,
         coverage: await sandbox.finish(),
         escalated,
       };
+    } catch (error) {
+      // Pending finalization failed — fall through to reportNoCoverage.
+      const failDetail = error instanceof Error ? error.message : String(error);
+      stepLog(sandbox, target.title, "pending 失败", failDetail, "error");
+      emitStep(onProgress, "finalizeFromPending", "organize", failDetail, { ok: false });
     }
   }
 

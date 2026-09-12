@@ -97,8 +97,10 @@ describe("episodeCodeFromFileName — 2026-08-19 补齐的命名规则 (§3)", (
   it("parses 1×01 / 1x01 (Plex-style season×episode)", () => {
     expect(episodeCodeFromFileName("Show.1×01.mkv", [1])).toBe("S01E01");
     expect(episodeCodeFromFileName("Show 1x07.mkv", [1])).toBe("S01E07");
-    // 多季上下文:无季信息的无季规则不启用,季不明 → 交仲裁
-    expect(episodeCodeFromFileName("Show.2×03.mkv", [1, 2])).toBeNull();
+    // issue #53:cross 规则自带季号(1×01 = 季×集),多季场景也启用
+    expect(episodeCodeFromFileName("Show.2×03.mkv", [1, 2])).toBe("S02E03");
+    // 1080x576 不误判为 S1080E576(分辨率,非季×集)
+    expect(episodeCodeFromFileName("Show.1080x576.01.mkv", [1, 2])).toBeNull();
   });
 
   it("parses 第N话 (anime wording)", () => {

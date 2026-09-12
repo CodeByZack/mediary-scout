@@ -2,7 +2,7 @@
 // consumption/stages/directories.ts；③ 需求与 no-op 早退 → consumption/stages/need.ts；
 // ④–⑥ 装配连段 → consumption/stages/acquire.ts。本文件与 movie-workflow-v2 是
 // 现役宿主（TV 侧已纯组合化）；步骤⑥ 删除空壳、pipeline 直接串接各阶段。
-import { prepareDirectories, withStagingCleanupStage } from "../consumption/stages/directories.js";
+import { prepareDirectories, withStagingCleanupStage, withPendingCleanupStage } from "../consumption/stages/directories.js";
 import {
   computeNeed,
   noOpWorkflowStageResult,
@@ -38,11 +38,14 @@ export async function runAcquisitionV2Workflow(
   });
 
   // Harness-level leak guard: whatever the agent does (covers, fails, or
-  // reportNoCoverage), the run's staging dir is discarded when this returns or
-  // throws — the 斗破苍穹 335-file leak fix. The agent keeps its own discardStaging
-  // (and normally calls it); this is the deterministic backstop.
+  // reportNoCoverage), the run's staging + pending dirs are discarded when this
+  // returns or throws — the 斗破苍穹 335-file leak fix. The agent keeps its own
+  // discardStaging (and normally calls it); this is the deterministic backstop.
   return await withStagingCleanupStage(
     { executor: request.executor, stagingDirectoryId: directories.stagingDirectoryId },
+    async () => {
+  return await withPendingCleanupStage(
+    { executor: request.executor, pendingDirectoryId: directories.pendingDirectoryId },
     async () => {
   const seasonsForSync = request.seasons.map((season) => ({
     seasonNumber: season.seasonNumber,
@@ -67,6 +70,8 @@ export async function runAcquisitionV2Workflow(
     priorObtained,
   });
 
+    },
+  );
     },
   );
 }

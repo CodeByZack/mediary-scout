@@ -201,24 +201,28 @@ describe("QuarkCookieClient", () => {
     });
   });
 
-  it("pollTask resolves true once data.status===2 (polling)", async () => {
+  it("pollTask resolves done once data.status===2 (polling)", async () => {
     let calls = 0;
     const client = new QuarkCookieClient({
       cookie: "__uid=u",
       sleep: async () => {},
       fetchJson: async () => ({ code: 0, data: { status: calls++ < 2 ? 0 : 2 } }),
     });
-    await expect(client.pollTask("T1")).resolves.toBe(true);
+    await expect(client.pollTask("T1")).resolves.toEqual({ done: true, attempts: 3, lastStatus: 2 });
     expect(calls).toBe(3);
   });
 
-  it("pollTask returns false if status never reaches 2 within maxAttempts", async () => {
+  it("pollTask reports not-done with attempts + lastStatus when status never reaches 2", async () => {
     const client = new QuarkCookieClient({
       cookie: "__uid=u",
       sleep: async () => {},
       fetchJson: async () => ({ code: 0, data: { status: 0 } }),
     });
-    await expect(client.pollTask("T1", { maxAttempts: 3 })).resolves.toBe(false);
+    await expect(client.pollTask("T1", { maxAttempts: 3 })).resolves.toEqual({
+      done: false,
+      attempts: 3,
+      lastStatus: 0,
+    });
   });
 
   it("deleteFiles posts file/delete with action_type 2, then polls the task", async () => {
@@ -250,6 +254,19 @@ describe("QuarkCookieClient", () => {
     expect(requests[0]?.url).toContain("/1/clouddrive/file/move");
     expect(JSON.parse(requests[0]!.body)).toMatchObject({ filelist: ["f1"], to_pdir_fid: "dst" });
     expect(requests.some((r) => r.url.includes("/1/clouddrive/task"))).toBe(true); // polled
+  });
+
+  it("moveFiles does NOT throw when the task never reaches status 2 (log-only, lenient)", async () => {
+    // 地球超新鲜案期间把 pollTask 的 boolean 升级成 {done, attempts, lastStatus}
+    // 就是为了看清「任务没完成」——但故意保持不 throw:轮询耗尽也可能只是
+    // status 语义与我们假设不同,先拿数据定性再决定是否 fail-loud。
+    const client = new QuarkCookieClient({
+      cookie: "__uid=u",
+      sleep: async () => {},
+      pollAttempts: 2,
+      fetchJson: record([], async () => ({ code: 0, data: { task_id: "M2", status: 0 } })),
+    });
+    await expect(client.moveFiles({ fids: ["f1"], to: "dst" })).resolves.toBeUndefined();
   });
 
   it("renameFile posts file/rename", async () => {

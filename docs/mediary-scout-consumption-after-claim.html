@@ -578,8 +578,9 @@
       <span class="file"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/fast-path/tv.ts">fast-path/tv.ts</a> · <a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/fast-path/landing.ts">landing.ts</a></span>
     </div>
     <p class="lane-intro">
-      两步候选池：primary（按标题搜）永远先试；别名兜底池只在 primary 无 A 或转存预算耗尽时才启动。
-      <b>两个池的转存预算相互独立</b>——primary 一个 A 都没有也试穷了 3 次，兜底池照样有它自己的 3 次。
+      两步候选池：primary（按标题搜）永远先试；别名兜底池<b>仅当 primary 无 A 候选</b>才启动（2026-09-10 拍板：有 A 还试不到说明方向错了，再兜底重搜没意义）。
+      <b>两个池的转存预算相互独立</b>——primary 一个 A 都没有也试穷了 5 次，兜底池照样有它自己的 5 次。
+      <br><b>部分覆盖不再白丢</b>：每个候选「代码/AI 认出的缺集」先搬进 <code>pending</code> 目录暂存（换主力时旧文件清掉），候选耗尽后 <code>finalizeFromPending</code> 把拼出来的集改名归位落库（issue #53）。
     </p>
 
     <div class="stack">
@@ -611,8 +612,8 @@
       <div class="arr">↓</div>
       <div class="n r-budget" data-r="budget">
         <h4><span class="idx">3</span>阶段 1 · primary 池</h4>
-        <p>只要 primary 有 A 候选（或根本没有别名可兜底）就<b>先转 primary</b>——绝不在有 A 时提前跳兜底（PR #25：反「primary 14 个 A 被兜底池替换」）。</p>
-        <div class="sub">转存预算 <code>MAX_TRANSFER_ATTEMPTS = 3</code>，按「本池增量」独立记账。<br><code>tried</code> / <code>deadRetries</code> / <code>escalated</code> 跨池共享。</div>
+        <p>只要 primary <b>有候选</b>（不只是 A——B/C 也让 AI 挑 3 个试）就<b>先转 primary</b>，只有候选池全空才跳过阶段 1 直接兜底。绝不在有 A 时提前跳兜底（PR #25：反「primary 14 个 A 被兜底池替换」）。</p>
+        <div class="sub">转存预算 <code>MAX_TRANSFER_ATTEMPTS = 5</code>，按「本池增量」独立记账。<br><code>tried</code> / <code>deadRetries</code> / <code>escalated</code> 跨池共享。<br>（2026-09-10 拍板 10→5：有 A 时试太多说明方向错，省下的 PanSou 配额留给真无 A 的别名重搜。）</div>
         <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/main/packages/workflow/src/consumption/fast-path/budgets.ts">fast-path/budgets.ts</a> · tv.ts:431–458</span>
       </div>
       <div class="arr">↓</div>
@@ -636,20 +637,37 @@
       <div class="arr">↓</div>
       <div class="n r-code" data-r="code budget">
         <h4><span class="idx">6</span>阶段 2 · 兜底池 aliasesFallbackReSearch</h4>
-        <p>仅当 primary 无 A 候选、或 primary 预算耗尽仍未覆盖时启动。</p>
+        <p><b>仅当 primary 无 A 候选</b>时启动（预算耗尽不再触发兜底——有 A 试不到说明方向错，不是关键词问题）。</p>
         <div class="sub">
           每个别名一次 <code>primeRawSnapshot</code>，按 target 携带顺序（英文原名 → zh-TW / zh-HK 译名），<b>命中 A 提前停</b>，上限 <code>MAX_FALLBACK_SEARCHES = 3</code> 轮；关键词去重（标题算已用）；单轮 provider 失败<b>保上一快照</b>继续下一别名。<br>
           <b>§E 证据恢复</b>：兜底耗尽仍无 A，且 primary 有候选 → <b>合并 primary + 各轮兜底的证据池</b>继续仲裁/放弃。纯内存、按 id 去重（<b>不按标题</b>去重——同名异链是网盘常态）、primary 优先入池、<code>candidateSnapshots</code> 记归属。<b>零额外 PanSou 请求</b>，预算语义原样。<br>
           修掉两个事故：狂飙 primary 45 候选被「最后一个兜底快照为空」覆盖丢掉；母狮案「只看最后一轮」吞掉 primary 的好候选。<br>
-          转存预算 <b>独立</b>：<code>MAX_FALLBACK_TRANSFER_ATTEMPTS = 3</code>。
+          转存预算 <b>独立</b>：<code>MAX_FALLBACK_TRANSFER_ATTEMPTS = 5</code>。
         </div>
         <span class="src">landing.ts:258–362 · tv.ts:460–556</span>
       </div>
       <div class="arr">↓</div>
-      <div class="n r-term" data-r="term code">
-        <h4><span class="idx">7</span>耗尽尾段 · 诚实终止</h4>
-        <p>候选/预算耗尽 → 清暂存 → <code>reportNoCoverage</code>。诚实报告未覆盖，<b>下次巡检再来</b>——绝不伪造已获得。</p>
-        <span class="src">tv.ts:558–581</span>
+      <div class="n r-persist" data-r="persist code">
+        <h4><span class="idx">6½</span>pending 积累 · 部分覆盖暂存</h4>
+        <p>每轮收口判定 <code>retry_other</code>（未全量对齐）时，<b>先把当前候选认出的缺集文件从 staging 搬进 pending 目录</b>（在 wipe 之前，B1 修复），再清暂存换候选。</p>
+        <div class="sub">
+          多轮候选的识别结果按 <code>code → fileId</code> 累积在 <code>pendingEntries</code>：<br>
+          · <b>覆盖数超过当前主力</b> → 新主力：删掉旧主力的 pending 文件、整体替换；<br>
+          · <b>覆盖数不如当前主力</b> → 只补充缺的 code（<b>不删任何旧文件</b>）。<br>
+          同 code 只保留一条 <code>fileId</code>；字幕按同名解析出同 code 时随视频一起搬（<code>entry.subtitles</code>）。<br>
+          搬移/删除失败都打 <code>warn</code> 日志留痕（2026-09-10 地球超新鲜案：失败曾被静默吞掉 → 磁盘残留与 map 脱钩）。
+        </div>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/fix/issue53-multiseason-path/packages/workflow/src/consumption/fast-path/tv.ts">tv.ts</a> · <a href="https://github.com/CodeByZack/mediary-scout/blob/fix/issue53-multiseason-path/packages/workflow/src/acquisition-v2/sandbox.ts">sandbox.ts</a> <code>moveToPending / deleteFromPending</code></span>
+      </div>
+      <div class="arr">↓</div>
+      <div class="n r-persist" data-r="persist code">
+        <h4><span class="idx">7</span>耗尽尾段 · pending 归位 或 诚实终止</h4>
+        <p>候选/预算耗尽时，<b>先从 pending 落库</b>（<code>finalizeFromPending</code>）：pending 里攒下的已识别集，改名 → 按季搬入 Season → <code>markObtained</code>。归位成功后返回「部分/全部覆盖」完成；归位失败才回落到诚实终止。</p>
+        <div class="sub">
+          <code>finalizeFromPending</code> 顺序：<code>renameInPending</code>（规范名，Quark 改名会换 file id，改名后按 basename 重读反查新 id）→ <code>moveToSeasonFromPending</code>（按季分组搬入）→ <code>deleteFromPending</code>（清剩余未归位残留）。<br>
+          <b>兜底防线</b>：pending 里没有任何候选 → <code>reportNoCoverage</code> 诚实报告未覆盖，<b>下次巡检再来</b>——绝不伪造已获得。
+        </div>
+        <span class="src"><a href="https://github.com/CodeByZack/mediary-scout/blob/fix/issue53-multiseason-path/packages/workflow/src/acquisition-v2/finalize-landing.ts">finalize-landing.ts</a> <code>finalizeFromPending</code> · tv.ts:695–740</span>
       </div>
     </div>
   </section>
@@ -664,6 +682,7 @@
     <p class="lane-intro">
       一个候选的落地回合收敛为六种判定。<code>done</code> 非空 = 本轮终局，调用方直接 return；<code>done = null</code> 用 <code>next</code> 继续循环。
       <b>TV 没有落盘诊断仲裁</b>——未全量对齐即清暂存换下一个候选（§43 全量对齐才落盘）。
+      <b>但部分覆盖不再白丢</b>：<code>retry_other</code> 换候选前把已识别文件搬进 <code>pending</code>（见 <a href="#s-d">D 区 6½</a>），候选耗尽后 <code>finalizeFromPending</code> 统一归位（issue #53）。
     </p>
 
     <div class="svgwrap">
@@ -766,8 +785,8 @@
           <text class="elbl" x="200" y="520">否</text>
           <rect class="box" x="40" y="534" width="300" height="62" rx="8" stroke="var(--r-ai)"/>
           <text x="190" y="558" text-anchor="middle" font-weight="600" fill="var(--r-ai)">tryEpisodeMapping</text>
-          <text class="t3" x="190" y="575" text-anchor="middle">AI 集数映射 · 仅 TV 单季（升级点 ②）</text>
-          <text class="t3" x="190" y="589" text-anchor="middle">多季 / 代码已全覆盖 / 全衍生文件 → "no"</text>
+          <text class="t3" x="190" y="575" text-anchor="middle">AI 集数映射（升级点 ②）· TV 单季/多季</text>
+          <text class="t3" x="190" y="589" text-anchor="middle">多季看完整路径归季；movie/全覆盖/全衍生 → "no"</text>
         </g>
         <g data-r="ai code">
           <path class="edge" d="M190 596 L190 622" marker-end="url(#ah)"/>
@@ -807,11 +826,11 @@
       <div class="n r-code" data-r="code">
         <h4>两个不校验的东西（有意为之）</h4>
         <p>映射校验<b>不看</b> code 形状（SxxExx）、也<b>不看</b>季与任务是否匹配。</p>
-        <div class="sub">单季任务下越季 code 会被 digest 的 need 集合运算自然排除（need 只含目标季的 <code>SxxExx</code>），不会误入库——但没有显式闸门。<br>多季任务整段不调用本函数（入口的单季判定直接返回 <code>"no"</code>）。</div>
+        <div class="sub">单季任务下越季 code 会被 digest 的 need 集合运算自然排除（need 只含目标季的 <code>SxxExx</code>），不会误入库——但没有显式闸门。<br>多季任务 AI 看<b>完整路径</b>（path 含文件夹季信息，<code>seasonFromPathSegments</code> 归季），映射未全量对齐同样处理。</div>
       </div>
       <div class="n r-fail" data-r="fail">
         <h4>「no」不冒领 AI 归因</h4>
-        <p><code>"no"</code>（多季 / 代码已全覆盖 / 全衍生文件）一次 AI 都没跑：</p>
+        <p><code>"no"</code>（movie / 代码已全覆盖 / 全衍生文件）一次 AI 都没跑：</p>
         <div class="sub"><code>escalated</code> 不得虚增，结账行不得写「AI 介入」。<br>反之也<b>绝不能</b>在这里赋 false——它可能已带选片仲裁置的 true，覆盖会让 <code>runCheckout</code> 谎报零 AI。</div>
       </div>
     </div>
@@ -929,8 +948,8 @@
       <div class="card" style="--c:var(--r-budget)">
         <h3><span class="dot"></span>硬预算 <code>fast-path/budgets.ts</code></h3>
         <ul>
-          <li><b>primary 池</b>真实转存 ≤ <code>3</code>（<code>MAX_TRANSFER_ATTEMPTS</code>）</li>
-          <li><b>兜底池独立</b>转存 ≤ <code>3</code>（<code>MAX_FALLBACK_TRANSFER_ATTEMPTS</code>）——primary 全废兜底照样有配额</li>
+          <li><b>primary 池</b>真实转存 ≤ <code>5</code>（<code>MAX_TRANSFER_ATTEMPTS</code>，2026-09-10 由 10 下调）</li>
+          <li><b>兜底池独立</b>转存 ≤ <code>5</code>（<code>MAX_FALLBACK_TRANSFER_ATTEMPTS</code>）——primary 全废兜底照样有配额</li>
           <li>死链探测 ≤ <code>10</code>（<code>MAX_DEAD_LINK_RETRIES</code>）——<b>不占</b>转存预算，跨两阶段共享（狂飙 45 候选的教训）</li>
           <li>别名兜底重搜 ≤ <code>3</code> 轮（<code>MAX_FALLBACK_SEARCHES</code>）——保护共享 PanSou 配额</li>
           <li>队列侧退避重入队 ≤ <code>3</code> 次，<code>1min / 5min / 15min</code></li>
@@ -943,7 +962,7 @@
         <h3><span class="dot"></span>AI 升级点（单次调用、无工具）</h3>
         <ul>
           <li><b>选片</b> <code>arbitrateSelection</code>：无唯一 A → 挑一个或放弃（TV / movie 各一款）</li>
-          <li><b>集数映射</b> <code>arbitrateEpisodeMapping</code>：TV 单季代码解析不出集数 → 给 fileName→SxxExx 映射，<b>只给映射不定收否</b>（收否仍由 digest 客观判定）</li>
+          <li><b>集数映射</b> <code>arbitrateEpisodeMapping</code>：TV（单季/多季）代码解析未覆盖 need → 把<b>全部落盘视频</b>减衍生内容交 AI 映射（多季用完整路径归季），<b>只给映射不定收否</b>（收否仍由 digest 客观判定）</li>
           <li><b>movie 诊断</b> <code>arbitrateMovieDiagnosis</code>：落盘不像一部正片 → accept / retry_other / abandon</li>
           <li>回复解析失败一律<b>保守降级</b>；TV <b>没有</b>落盘诊断仲裁（§43）</li>
           <li>已知 gap：<code>arbitrateDiagnosis</code>（TV 版）零调用方，issue #43 待清</li>
@@ -1014,9 +1033,9 @@
           </tr>
           <tr>
             <th>AI 集数映射</th>
-            <td>仅单季可用</td>
-            <td><b>禁用</b>（多季入口直接 no）</td>
-            <td>仅单季可用</td>
+            <td>可用（单季或原生 SxxExx 直接命中）</td>
+            <td>可用（多季看完整路径归季，issue #53）</td>
+            <td>可用（同 type2）</td>
             <td><b>无此阶段</b></td>
           </tr>
           <tr>
@@ -1039,15 +1058,15 @@
 
     <div class="note term">
       <span class="mk">挂着的待办</span>
-      <span>① 部分覆盖到底怎么处置（用户 2026-09-06 明确搁置，§43）——当前行为是「AI 补不全就不落盘，清包换候选，预算耗尽才诚实报未覆盖」；② 字幕问题（assrtToken 未配置 + 夸克不支持字幕转存 → 夸克上的外语片没有中字，三选一未拍板）；③ 多季整包流程需重新规划（现状硬门槛是 <code>seasons.length !== 1 → no</code>，放开 AI 补认需同时补提示词按季给集号表、加季归属校验、给 <code>type1</code> 分支接上 <code>episodeAirDates</code> + <code>episodeNames</code>）。</span>
+      <span>① <b>部分覆盖处置已落地</b>（pending 积累，issue #53）——不再「AI 补不全就白丢」：候选认出的缺集搬进 pending 暂存，耗尽后 <code>finalizeFromPending</code> 归位；仍缺的集由下次巡检 <code>computeNeed</code> 自动只算剩余。② 字幕问题（assrtToken 未配置 + 夸克不支持字幕转存 → 夸克上的外语片没有中字，三选一未拍板）。③ <b>多季入口已放开</b>（不再 <code>seasons.length !== 1 → no</code>）：多季也调 AI 映射（完整路径归季），pending 归位按季分组搬入。</span>
     </div>
   </section>
 
   </main>
 
   <footer class="foot">
-    依据 <code>main</code> 工作树实读源码绘制 · 关键源文件：<code>worker.ts</code> · <code>consumption/pipeline.ts</code> · <code>acquisition-v2/workflow-v2.ts</code> · <code>acquisition-v2/orchestrator.ts</code> · <code>consumption/fast-path/{tv,landing,movie,budgets}.ts</code> · <code>acquisition-v2/arbitrator.ts</code> · <code>consumption/stages/*</code><br>
-    与仓库既有 <code>docs/consumption-after-claim-flow.{architecture,workflow}.json</code> 及 <code>/vol1/1000/docs/mediary-scout-consumption-refactor-design.md</code> 同一模型，未引入新术语。
+    依据 <code>fix/issue53-multiseason-path</code> 工作树实读源码绘制 · 关键源文件：<code>worker.ts</code> · <code>consumption/pipeline.ts</code> · <code>acquisition-v2/workflow-v2.ts</code> · <code>acquisition-v2/orchestrator.ts</code> · <code>consumption/fast-path/{tv,landing,movie,budgets}.ts</code> · <code>acquisition-v2/{finalize-landing,staging-digest,sandbox}.ts</code> · <code>episode-code.ts</code> · <code>consumption/stages/*</code><br>
+    与仓库既有 <code>docs/consumption-after-claim-flow.{architecture,workflow}.json</code> 及 <code>/vol1/1000/docs/mediary-scout-consumption-refactor-design.md</code> 同一模型，未引入新术语。<b>pending 积累与多季归季为 issue #53 新增</b>（2026-09-10）。
   </footer>
 </div>
 

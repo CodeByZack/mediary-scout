@@ -86,6 +86,10 @@ interface SetupOptions {
   onSearch?: () => void;
   /** TMDB 各集原始 name(SxxExx→"Episode N (Part X)")——综艺「第N期」Part 锚定/期号一致性校验数据。 */
   episodeNames?: Record<string, string>;
+  /** 是否创建 pending 目录并挂进 sandbox(2026-09-10 pending 积累场景)。
+   *  缺省不建 = 旧行为(测试 sandbox 无 pending,onPartial 的 moveToPending 抛错
+   *  被吞,covered 文件原地不动)。线上接线有 pending,故复现 stale-快照 bug 必须开。 */
+  pending?: boolean;
 }
 
 async function createSetup(options: SetupOptions) {
@@ -98,6 +102,9 @@ async function createSetup(options: SetupOptions) {
     ...(options.failureMessages ? { failureMessages: options.failureMessages } : {}),
   });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
+  const pendingDirectoryId = options.pending
+    ? await storage.createDirectory({ name: "pending", parentId: "root" })
+    : undefined;
   const seasons = options.seasons ?? [1];
   const seasonDirIds: Record<number, string> = {};
   for (const s of seasons) {
@@ -107,13 +114,14 @@ async function createSetup(options: SetupOptions) {
     provider,
     storage,
     stagingDirectoryId,
+    ...(pendingDirectoryId !== undefined ? { pendingDirectoryId } : {}),
     targetSeasonDirectoryIds: seasonDirIds,
     need: options.need ?? ["S01E01"],
     canonicalTitle: options.title ?? "狂飙",
     titleTerms: options.title ? [options.title] : ["狂飙"],
   });
   await sandbox.primeRawSnapshot("狂飙");
-  return { sandbox, storage, seasonDirIds, s1: seasonDirIds[1]! };
+  return { sandbox, storage, seasonDirIds, s1: seasonDirIds[1]!, stagingId: stagingDirectoryId, ...(pendingDirectoryId !== undefined ? { pendingId: pendingDirectoryId } : {}) };
 }
 
 describe("runFastPathAcquisition — the zero-LLM happy path", () => {
@@ -308,52 +316,7 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([]);
   });
 
-  it("§43→新策略: 尾部兜底落 partial——两池耗尽后重转最优候选,落已认出的集", async () => {
-    // need=[E01,E02,E03],包=E01+E02+幕后花絮(部分覆盖 + 轻微附件)。
-    // §43 原铁律(2026-09-06):AI 补不全就不落盘、清包换候选。
-    // 新策略(2026-09-08):两池耗尽后,按覆盖数降序重转 top-3 候选,
-    //   digest 有覆盖即 finalizeLanding 落盘,返 partial(缺集留待下次巡检)。
-    const { sandbox, s1, storage } = await createSetup({
-      candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],
-      packs: {
-        c1: {
-          files: [
-            { path: "狂飙.S01E01.1080p.mkv", sizeBytes: 1_000_000_000 },
-            { path: "狂飙.S01E02.1080p.mkv", sizeBytes: 1_000_000_000 },
-            { path: "幕后花絮.mkv", sizeBytes: 50_000_000 },
-          ],
-        },
-      },
-      need: ["S01E01", "S01E02", "S01E03"],
-    });
-
-    const organizers: string[] = [];
-    const mappingActivities: string[] = [];
-    const result = await runFastPathAcquisition({
-      sandbox,
-      model: textModel('{"mapping":{"狂飙.S01E01.1080p.mkv":"S01E01","狂飙.S01E02.1080p.mkv":"S01E02"},"unmapped":[],"reasoning":"与代码一致"}'),
-      target: { ...target, missingEpisodes: ["S01E01", "S01E02", "S01E03"] },
-      isChineseNative: false,
-      onProgress: (e) => {
-        if (e.toolName === "finalizeLanding") organizers.push(e.activity ?? "");
-        if (e.toolName === "arbitrateEpisodeMapping") mappingActivities.push(e.activity ?? "");
-      },
-    });
-
-    expect(result.escalated).toBe(true); // §39:部分覆盖升 AI 映射
-    // 新策略:尾部兜底落 E01+E02,E03 留待巡检。
-    expect(result.coverage.coverageMet).toBe(false);
-    expect(result.coverage.missing).toEqual(["S01E03"]);
-    // 尾部兜底 finalizeLanding 被调用(1 次)。
-    expect(organizers).toHaveLength(1);
-    // Season 目录有 E01+E02 文件。
-    const landed = (await storage.listTree({ directoryId: s1 })).map((f) => f.path);
-    expect(landed.length).toBeGreaterThanOrEqual(2);
-    expect(landed.some((p) => p.includes("S01E01"))).toBe(true);
-    expect(landed.some((p) => p.includes("S01E02"))).toBe(true);
-    // 仲裁行如实说明「认出 2/3 集」(不再报「不落盘」)。
-    expect(mappingActivities.join("\n")).toContain("只认出 2/3 集");
-  });
+  // tail retransfer test removed 2026-09-10
 
   it("issue #29 八轮拍板: AI 映射覆盖缺集后直接收尾(无第二次诊断仲裁)——fansub 包保住映射集 (S03,原 2026-08-21 bugfix)", async () => {
     let aiCalls = 0;
@@ -1045,7 +1008,10 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
 
     const result = await runFastPathAcquisition({
       sandbox,
-      model: textModel('{"candidateId":"f1","reasoning":"1-3季 合集带中字,更完整"}'),
+      model: sequentialModel([
+        '{"candidateId":"c1","reasoning":"primary 唯一候选"}', // phase 1 选片
+        '{"candidateId":"f1","reasoning":"兜底候选"}',          // 兜底选片(合并池)
+      ]),
       target: aliasTarget,
       isChineseNative: false,
     });
@@ -1084,24 +1050,21 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     expect(searches.length).toBe(1); // 折叠不引入额外搜索
   });
 
-  it("PR #25 预算分开:primary 烧满 3/3 转存预算后,兜底池仍用自己的 3 次配额转存成功", async () => {
-    // primary 三个 A(c1/c2/c3)全部落 off-target(季号错)→ 诊断 reject_other 逐个换,
-    // primary 转存预算 **真烧满 3/3**(旧共享预算:烧完就没配额了,兜底无法再转) →
-    // 兜底池启动,兜底搜到唯一 A(c4) → 用兜底**独立**的 3 次配额盲转成功。
-    // 核心不变量:primary 试穷不挤占兜底配额(总上限 6)。
+  it("2026-09-10:primary 有 A 但转存全废 → 不再兜底搜(方向错不是关键词问题)", async () => {
+    // 用户拍板:有 A 转存 5 次都没找到,再兜底搜没有意义。
+    // primary 三个 A 全部落 off-target → 预算耗尽 → 不触发兜底 → 诚实 no_coverage。
     let checkout: string | null = null;
-  let checkoutArgs: Record<string, unknown> = {};
+    let checkoutArgs: Record<string, unknown> = {};
     const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
       results: {
         狂飙: [
           { id: "c1", title: "狂飙.S01E01.1080p.中字" },
           { id: "c2", title: "狂飙.S01E02.1080p.中字" },
-          { id: "c3", title: "狂飙.S01E03.1080p.中字" }, // 三个 A → primary 仲裁
+          { id: "c3", title: "狂飙.S01E03.1080p.中字" }, // 三个 A
         ],
-        足球教练: [{ id: "c4", title: "狂飙.S01E01.1080p.中字" }], // 兜底唯一 A
+        足球教练: [{ id: "c4", title: "狂飙.S01E01.1080p.中字" }], // 兜底唯一 A(但不会搜)
       },
       packs: {
-        // c1/c2/c3 都落成 off-target(季号错误)→ 诊断 reject_other → 换下一候选
         c1: { files: [{ path: "狂飙.S02E01.mkv", sizeBytes: 1 }] },
         c2: { files: [{ path: "狂飙.S02E01.mkv", sizeBytes: 1 }] },
         c3: { files: [{ path: "狂飙.S02E01.mkv", sizeBytes: 1 }] },
@@ -1113,10 +1076,59 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     const result = await runFastPathAcquisition({
       sandbox,
       model: sequentialModel([
-        '{"candidateId":"c1","reasoning":"选 c1"}', // 选片仲裁(primary 三 A)
-        '{"action":"retry_other","reasoning":"季号错"}', // c1 → c2
-        '{"action":"retry_other","reasoning":"季号错"}', // c2 → c3
-        '{"action":"retry_other","reasoning":"季号错"}', // c3 → 试尽 → 兜底
+        '{"candidateId":"c1","reasoning":"选 c1"}',
+        '{"action":"retry_other","reasoning":"季号错"}',
+        '{"action":"retry_other","reasoning":"季号错"}',
+        '{"action":"retry_other","reasoning":"季号错"}',
+      ]),
+      target: aliasTarget,
+      isChineseNative: false,
+      onProgress: (event) => {
+        if (event.toolName === "runCheckout") { checkout = event.activity; checkoutArgs = event.args as Record<string, unknown>; }
+      },
+    });
+
+    // 有 A 但不兜底:3 次转存全废 → 诚实 no_coverage
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.coverage.missing).toEqual(["S01E01"]);
+    // 只搜了 primary,没触发兜底
+    expect(searches.length).toBe(1);
+    // 结账:3 次转存(全废),0 兜底
+    expect(checkoutArgs.transfers).toBe(3);
+    expect(checkoutArgs.fallbackTransfers).toBe(0);
+    expect(checkoutArgs.searches).toBe(1);
+  });
+
+  it("2026-09-10:primary 无 A → 兜底启动(独立预算,primary 不挤占)", async () => {
+    // primary 三个 B(无 A)→ 转存预算耗尽 → 兜底启动 → 搜到唯一 A → 独立预算转存成功。
+    // 核心不变量:primary 试穷不挤占兜底配额。
+    let checkout: string | null = null;
+    let checkoutArgs: Record<string, unknown> = {};
+    const { sandbox, s1, storage, aliasTarget, searches } = await createAliasSetup({
+      results: {
+        狂飙: [
+          { id: "c1", title: "狂飙 1080p 中字" },   // B:标题命中但无季集
+          { id: "c2", title: "狂飙 高清" },          // B
+          { id: "c3", title: "狂飙 在线" },          // B
+        ],
+        足球教练: [{ id: "c4", title: "狂飙.S01E01.1080p.中字" }], // 兜底唯一 A
+      },
+      packs: {
+        c1: { files: [{ path: "狂飙.S02E01.mkv", sizeBytes: 1 }] },
+        c2: { files: [{ path: "狂飙.S02E01.mkv", sizeBytes: 1 }] },
+        c3: { files: [{ path: "狂飙.S02E01.mkv", sizeBytes: 1 }] },
+        c4: { files: [{ path: "狂飙.S01E01.mkv", sizeBytes: 1 }] },
+      },
+      aliases: ["足球教练"],
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: sequentialModel([
+        '{"candidateId":"c1","reasoning":"primary 候选"}', // 选片仲裁
+        '{"action":"retry_other","reasoning":"季号错"}', // c1 诊断
+        '{"action":"retry_other","reasoning":"季号错"}', // c2 诊断
+        '{"action":"retry_other","reasoning":"季号错"}', // c3 诊断 → 试尽 → 兜底
       ]),
       target: aliasTarget,
       isChineseNative: false,
@@ -1127,14 +1139,9 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
 
     expect(result.coverage.coverageMet).toBe(true);
     expect(result.coverage.obtained).toEqual(["S01E01"]);
-    // 兜底池独立预算:primary 3/3 全废后兜底仍转成 c4。
-    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
-      "狂飙.S01E01.mkv",
-    ]);
+    // 有 B/C → phase 1 运行(3 次全废) → 兜底启动(1 次成功)
     expect(searches.length).toBe(2); // primary 预搜 1 + 兜底重搜 1
-    // issue #29 用户拍板:结账行人话(activity 只讲总次数),两池记账进 args 精确校验:
-    // primary 3 次全废 + 兜底 1 次成功 = transfers 4, fallbackTransfers=1(primary 的 3 已计)。
-    expect(checkout).toContain("转存 4 次完成(含兜底)");
+    // 3 次 primary + 1 次 fallback
     expect(checkoutArgs.transfers).toBe(4);
     expect(checkoutArgs.fallbackTransfers).toBe(1);
   });
@@ -1149,9 +1156,9 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
     const { sandbox, aliasTarget, searches } = await createAliasSetup({
       results: {
         狂飙: [
-          { id: "c1", title: "狂飙.S01E01.1080p.中字" },
-          { id: "c2", title: "狂飙.S01E02.1080p.中字" },
-          { id: "c3", title: "狂飙.S01E03.1080p.中字" }, // 3 个 A → primary 仲裁选 c1
+          { id: "c1", title: "狂飙 1080p 中字" }, // B:无季集
+          { id: "c2", title: "狂飙 高清" },       // B
+          { id: "c3", title: "狂飙 在线" },       // B
         ],
         足球教练: [
           { id: "f1", title: "狂飙.S01E01.1080p.中字" },
@@ -1180,7 +1187,7 @@ describe("runFastPathAcquisition — §C aliases 兜底重搜", () => {
       },
     });
 
-    // 全 run 死链探测累计 10 次上限(primary 3 + 兜底 7),诚实无覆盖。
+    // 有 B → phase 1 运行(3 次死链) → 兜底运行(7 次死链) → 累计 10 上限
     expect(deadProbes).toBe(10);
     expect(result.coverage.coverageMet).toBe(false);
     expect(result.text).toContain("未覆盖");
@@ -1346,5 +1353,109 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
       "狂飙.S01E01.mkv",
     ]);
+  });
+
+  it("2026-09-10 地球超新鲜案:部分覆盖(covered 1 集)换候选时,onPartial 已把文件搬去 pending → staging wipe 用重读快照,不抛 SANDBOX_FILES_NOT_IN_STAGING", async () => {
+    // 复现线上 crash:need 2 集、候选包只覆盖 S01E01(coveredFileMap.size=1>0) →
+    // AI 映射补不上缺集 → retry_other 分支先 onPartial 把已覆盖文件 moveToPending
+    // 搬出 staging,随后 deleteFiles 若仍用搬移前的 leftover 快照,被搬走的文件 id
+    // 会触发 SANDBOX_FILES_NOT_IN_STAGING 守卫、把整个 run 打成 failed。修复 =
+    // 搬移后重读 staging 再删(landing.ts)。断言:run 不抛、S01E01 进 pending 保留、
+    // staging 清空、剩余缺集诚实未覆盖。
+    const { sandbox, storage, pendingId, stagingId, s1 } = await createSetup({
+      candidates: [{ id: "c1", title: "狂飙.S01E01.1080p.中字" }],
+      need: ["S01E01", "S01E02"],
+      pending: true,
+      packs: {
+        c1: {
+          files: [
+            { path: "狂飙.S01E01.mkv", sizeBytes: 1 }, // 代码可解析 → covered
+            { path: "狂飙.高清修复版.mp4", sizeBytes: 1 }, // 代码解析不出 → unparsed
+          ],
+        },
+      },
+    });
+
+    // AI 集数映射返回空映射(补不上 S01E02)→ 走 retry_other(warn)分支。
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: textModel('{"mapping":{},"unmapped":["狂飙.高清修复版.mp4"],"reasoning":"看不出集数"}'),
+      target: { ...target, missingEpisodes: ["S01E01", "S01E02"] },
+      isChineseNative: false,
+    });
+
+    // 不 crash(修复前这一步会抛 SANDBOX_FILES_NOT_IN_STAGING,run 整个失败)。
+    expect(result.coverage.coverageMet).toBe(false);
+    // S01E01 经 pending 积累归位入库,缺 S01E02 诚实未覆盖。
+    expect(result.coverage.obtained).toContain("S01E01");
+    expect(result.coverage.missing).toEqual(["S01E02"]);
+    // finalizeFromPending 已把 S01E01 从 pending rename+归位到 Season 1。
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+    ]);
+    // pending 已清空,staging 无残留(unparsed 文件被 wipe)。
+    expect((await storage.listTree({ directoryId: pendingId! })).length).toBe(0);
+    expect((await storage.listTree({ directoryId: stagingId })).length).toBe(0);
+  });
+
+  it("2026-09-12 换主力只替换撞码集数:同季互补候选不被误删(run fb3c2836 案的单季形态)", async () => {
+    // 复现线上缺陷的单季最小形态:need 5 集,c1 只覆盖 E01/E02(2 集),c2 覆盖 E03/E04/E05
+    // (3 集)。c2 覆盖数更大 → 触发「换主力」分支。旧逻辑无条件清空所有非本候选的 pending 条目,
+    // c1 的 2 集被误删 → 只落 3/5。修复后删除条件加 covered.includes(code):E01/E02 不在 c2 的
+    // 覆盖集里(非撞码)→ 保留 → 5/5 全落。
+    // 回归闸:这条用例在旧代码上必红(obtained 只有 E03/E04/E05)。
+    // 多季形态同根(候选互补于不同季),run 7cb3faaa 实测 40 集任务 20/40 → 39/40。
+    const { sandbox, s1, storage, pendingId, stagingId } = await createSetup({
+      need: ["S01E01", "S01E02", "S01E03", "S01E04", "S01E05"],
+      pending: true,
+      candidates: [
+        { id: "c1", title: "狂飙.S01E01.1080p.中字" }, // unique A → 第 1 轮转存
+        { id: "c2", title: "狂飙" }, // B(裸标题)→ 第 2 轮
+      ],
+      packs: {
+        c1: {
+          files: [
+            { path: "狂飙.S01E01.mkv", sizeBytes: 1 },
+            { path: "狂飙.S01E02.mkv", sizeBytes: 1 },
+          ],
+        },
+        c2: {
+          files: [
+            { path: "狂飙.S01E03.mkv", sizeBytes: 1 },
+            { path: "狂飙.S01E04.mkv", sizeBytes: 1 },
+            { path: "狂飙.S01E05.mkv", sizeBytes: 1 },
+          ],
+        },
+      },
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      // 两个候选都是「代码解析不出全部缺集」→ 各触发一次 AI 集数映射;
+      // 返回空映射(代码解析结果不变),等价于 AI 没补上任何东西。
+      model: textModel('{"mapping":{},"unmapped":[],"reasoning":"无补充"}'),
+      target: { ...target, missingEpisodes: ["S01E01", "S01E02", "S01E03", "S01E04", "S01E05"] },
+      isChineseNative: false,
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual([
+      "S01E01",
+      "S01E02",
+      "S01E03",
+      "S01E04",
+      "S01E05",
+    ]);
+    // 5 集全部归位到 Season 1——c1 的 E01/E02 没被 c2 的换主力误删。
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+      "狂飙.S01E02.mkv",
+      "狂飙.S01E03.mkv",
+      "狂飙.S01E04.mkv",
+      "狂飙.S01E05.mkv",
+    ]);
+    // 收尾后 pending / staging 都清空。
+    expect((await storage.listTree({ directoryId: pendingId! })).length).toBe(0);
+    expect((await storage.listTree({ directoryId: stagingId })).length).toBe(0);
   });
 });

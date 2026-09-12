@@ -75,6 +75,13 @@ export function bridgeV2WorkflowToResult(input: {
   v2: RunAcquisitionV2WorkflowResult;
   workflowRunId: string;
   now: () => string;
+  /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD")。★ 2026-09-12:必须传,否则
+   *  createEpisodeStates 重建后 airDate 全 null → persist 把 episode_states 的
+   *  播出日抹掉,年守卫随之失武(run 19ca7e1d S1 内容被判成 S2)。 */
+  episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")。同上:不传则 title 被抹成
+   *  "Episode N",综艺 Part 锚定数据(#27)一并丢失。 */
+  episodeNames?: Record<string, string>;
 }): BridgedV2Result {
   const { title, v2, workflowRunId } = input;
   const obtainedSet = new Set(v2.obtained);
@@ -82,7 +89,15 @@ export function bridgeV2WorkflowToResult(input: {
   const stillMissingSet = new Set(v2.stillMissing);
 
   const seasons: BridgedSeasonResult[] = input.seasons.map((intent) =>
-    bridgeSeason({ title, intent, v2, obtainedSet, providerAheadSet }),
+    bridgeSeason({
+      title,
+      intent,
+      v2,
+      obtainedSet,
+      providerAheadSet,
+      ...(input.episodeAirDates === undefined ? {} : { episodeAirDates: input.episodeAirDates }),
+      ...(input.episodeNames === undefined ? {} : { episodeNames: input.episodeNames }),
+    }),
   );
 
   const status = resolveStatus({ missingBefore: v2.missingBefore, stillMissing: v2.stillMissing });
@@ -134,6 +149,9 @@ function bridgeSeason(input: {
   v2: RunAcquisitionV2WorkflowResult;
   obtainedSet: Set<string>;
   providerAheadSet: Set<string>;
+  /** 见 bridgeV2WorkflowToResult:不传会让 persist 抹掉播出日/集名。 */
+  episodeAirDates?: Record<string, string>;
+  episodeNames?: Record<string, string>;
 }): BridgedSeasonResult {
   const { title, intent, v2, obtainedSet, providerAheadSet } = input;
   const trackedSeasonId = `${title.id}_s${intent.seasonNumber}`;
@@ -143,6 +161,8 @@ function bridgeSeason(input: {
     seasonNumber: intent.seasonNumber,
     totalEpisodes: intent.totalEpisodes,
     latestAiredEpisode: intent.latestAiredEpisode,
+    ...(input.episodeAirDates === undefined ? {} : { episodeAirDates: input.episodeAirDates }),
+    ...(input.episodeNames === undefined ? {} : { episodeNames: input.episodeNames }),
   });
   const episodes: EpisodeState[] = base.map((episode) => {
     const ahead = providerAheadSet.has(episode.episodeCode);

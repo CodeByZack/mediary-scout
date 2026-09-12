@@ -14,7 +14,7 @@ const title = {
 
 function v2Result(over: Partial<RunAcquisitionV2WorkflowResult>): RunAcquisitionV2WorkflowResult {
   return {
-    directories: { showDirectoryId: "show_1", seasonDirectoryIds: { 1: "season_1_dir" }, stagingDirectoryId: "staging_1" },
+    directories: { showDirectoryId: "show_1", seasonDirectoryIds: { 1: "season_1_dir" }, stagingDirectoryId: "staging_1", pendingDirectoryId: "pending_1" },
     missingBefore: [],
     outcome: { resourceSnapshots: [], decisions: [], transferAttempts: [] },
     agentText: "",
@@ -254,6 +254,7 @@ describe("bridgeV2WorkflowToResult — V2 facts → per-season WorkflowResult sh
           showDirectoryId: "show_1",
           seasonDirectoryIds: { 1: "s1_dir", 2: "s2_dir" },
           stagingDirectoryId: "staging_1",
+          pendingDirectoryId: "pending_1",
         },
         missingBefore: ["S01E01", "S01E02", "S01E03", "S02E01", "S02E02", "S02E03"],
         outcome: { resourceSnapshots: [], decisions: [], transferAttempts: [] },
@@ -275,5 +276,46 @@ describe("bridgeV2WorkflowToResult — V2 facts → per-season WorkflowResult sh
     expect(result.seasons[1]!.episodes.every((episode) => !episode.obtained)).toBe(true);
     expect(result.notification.kind).toBe("series_initialized");
     expect(result.notification.title).toBe("示例剧");
+  });
+
+  it("传入 episodeAirDates/episodeNames → 重建的 episodes 保留播出日与集名(2026-09-12 persist 抹除修复)", () => {
+    const result = bridgeV2WorkflowToResult({
+      title,
+      mode: "type2",
+      seasons: [{ seasonNumber: 1, totalEpisodes: 2, latestAiredEpisode: 2, qualityPreference: "4K" }],
+      v2: v2Result({
+        missingBefore: ["S01E01", "S01E02"],
+        obtained: ["S01E01", "S01E02"],
+        stillMissing: [],
+      }),
+      workflowRunId: "run-x",
+      now: () => "2026-06-15T00:00:00.000Z",
+      episodeAirDates: { S01E01: "2026-06-01", S01E02: "2026-06-08" },
+      episodeNames: { S01E01: "Episode 1 (Part 1)", S01E02: "Episode 1 (Part 2)" },
+    });
+    const episodes = result.seasons[0]!.episodes;
+    expect(episodes).toHaveLength(2);
+    expect(episodes.find((e) => e.episodeCode === "S01E01")!.airDate).toBe("2026-06-01");
+    expect(episodes.find((e) => e.episodeCode === "S01E02")!.airDate).toBe("2026-06-08");
+    expect(episodes.find((e) => e.episodeCode === "S01E01")!.title).toBe("Episode 1 (Part 1)");
+    expect(episodes.find((e) => e.episodeCode === "S01E02")!.title).toBe("Episode 1 (Part 2)");
+  });
+
+  it("不传 episodeAirDates/episodeNames → 播出日 null、集名回落 Episode N(旧语义基准)", () => {
+    const result = bridgeV2WorkflowToResult({
+      title,
+      mode: "type2",
+      seasons: [{ seasonNumber: 1, totalEpisodes: 2, latestAiredEpisode: 2, qualityPreference: "4K" }],
+      v2: v2Result({
+        missingBefore: ["S01E01", "S01E02"],
+        obtained: ["S01E01", "S01E02"],
+        stillMissing: [],
+      }),
+      workflowRunId: "run-x",
+      now: () => "2026-06-15T00:00:00.000Z",
+    });
+    const episodes = result.seasons[0]!.episodes;
+    expect(episodes.find((e) => e.episodeCode === "S01E01")!.airDate).toBeNull();
+    expect(episodes.find((e) => e.episodeCode === "S01E01")!.title).toBe("Episode 1");
   });
 });

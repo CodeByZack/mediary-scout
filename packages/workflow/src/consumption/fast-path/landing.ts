@@ -7,6 +7,7 @@ import { finalizeLanding } from "../../acquisition-v2/finalize-landing.js";
 import { digestStaging, digestTitle, type StagingDigest } from "../../acquisition-v2/staging-digest.js";
 import { normalizeSearchKeyword } from "../../planning-search-gate.js";
 import type { AgentToolEvent } from "../../acquisition-v2/activity.js";
+import type { SimTreeFile } from "../../acquisition-v2/storage-115-simulator.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import type { TvAnimeTarget } from "../../acquisition-v2/target-types.js";
 import { MAX_DEAD_LINK_RETRIES, MAX_FALLBACK_SEARCHES } from "./budgets.js";
@@ -75,10 +76,8 @@ export async function tryEpisodeMapping(options: {
   promptOverrides?: PromptOverrideLookup;
 }): Promise<"passed" | "no" | "failed"> {
   const { digest } = options;
-  // 仅 TV 单季值得让 AI 映射;movie / 多季 → no。
-  if (options.seasons.length !== 1) {
-    return "no";
-  }
+  // issue #53:多季也值得让 AI 映射(路径含文件夹季信息,AI 看到完整路径可归季)。
+  // movie(seasons 为空)仍 → no(电影无集数)。
 
   // ★ 触发条件(2026-08-31 地球超新鲜案修正):不再要求「有 unparsed 才让 AI」——
   // 代码解析可能**错误**(综艺「第N期」被机械解析成 SxxEN,而 TMDB 一期拆多集时
@@ -98,9 +97,14 @@ export async function tryEpisodeMapping(options: {
   // 含 ost/mv/making/采访 等 DERIVATIVE 缺的词)——否则"已判附件、必然被 finalize 丢弃"的
   // 文件仍会送去问 AI,答案被 ram() 忽略却打出「AI 识别出 N 集」冒报(issue #29 review ① 同族)。
   const junkSet = new Set(digest.junkSignals);
+  // issue #53:多季场景用完整路径(文件夹含季信息),单季保持 basename(零回归)。
+  const isMultiSeason = options.seasons.length > 1;
   const allFiles = digest.videos
-    .map((v) => v.path.split("/").pop() ?? v.path)
-    .filter((name) => !junkSet.has(name) && !DERIVATIVE.test(name));
+    .map((v) => isMultiSeason ? v.path : (v.path.split("/").pop() ?? v.path))
+    .filter((name) => {
+      const base = name.split("/").pop() ?? name;
+      return !junkSet.has(base) && !DERIVATIVE.test(base);
+    });
   if (allFiles.length === 0) {
     return "no"; // 全是衍生内容 → 无正片可映射。
   }
@@ -389,6 +393,8 @@ export interface TvCloseOut {
   deadRetries: number;
   /** retry_other only: 该候选覆盖的 need 集码 + AI 映射覆盖表（尾部兜底用）。 */
   coveredCodes?: string[];
+  /** retry_other only: 覆盖集码 → 文件 ID 映射（pending 积累用）。 */
+  coveredFileMap?: Map<string, string>;
   overrides?: Record<string, string>;
 }
 
@@ -400,6 +406,9 @@ export async function closeOutTvLanding(options: {
   seasons: number[];
   needCodes: string[];
   onDiskCodes: Set<string>;
+  /** Callback fired before staging wipe in the retry_other path — lets the caller
+   *  capture covered files to pending before they're deleted. */
+  onPartial?: (coveredFileMap: Map<string, string>, stagingTree: SimTreeFile[]) => Promise<void>;
   /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD",可缺省)—— digest/finalize 共用的年守卫数据。 */
   episodeAirDates?: Record<string, string>;
   /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")——「第N期」Part 锚定数据。 */
@@ -730,9 +739,18 @@ export async function closeOutTvLanding(options: {
     // 候选/预算耗尽才诚实报告未覆盖,交给下次巡检。issue #39 的「附件/junk 不否决整包」
     // 语义不变(附件仍只进 junkSignals、不参与集号覆盖)。部分覆盖到底要不要为少数缺集
     // 重复转存大包,留待后续讨论。
+    // Capture covered files to pending BEFORE wiping staging (B1 fix).
     const leftover = await sandbox.inspectStaging();
-    if (leftover.length > 0) {
-      await sandbox.deleteFiles({ directory: "staging", fileIds: leftover.map((f) => f.id) });
+    if (leftover.length > 0 && options.onPartial && landingDigest.coveredFileMap && landingDigest.coveredFileMap.size > 0) {
+      await options.onPartial(landingDigest.coveredFileMap, leftover);
+    }
+    // ★ 2026-09-10 地球超新鲜案修复:onPartial 可能已把「代码识别出的已覆盖文件」
+    // 从 staging 搬去 pending,上面 leftover 是搬移前的快照——若照单全删,被搬走的
+    // 文件 id 会触发 deleteFiles 的 SANDBOX_FILES_NOT_IN_STAGING 守卫,把整个 run
+    // 打成 failed(本应优雅换候选)。必须重读 staging,只删此刻仍在暂存区的剩余文件。
+    const remaining = await sandbox.inspectStaging();
+    if (remaining.length > 0) {
+      await sandbox.deleteFiles({ directory: "staging", fileIds: remaining.map((f) => f.id) });
     }
     const next = nextCandidate(grading, tried);
     const coveredCount = landingDigest.coveredCodes.length;
@@ -748,6 +766,7 @@ export async function closeOutTvLanding(options: {
     return {
       verdict: "retry_other", done: null, next, escalated, deadRetries,
       coveredCodes: landingDigest.coveredCodes,
+      coveredFileMap: landingDigest.coveredFileMap,
       ...(mappingTable ? { overrides: mappingTable } : {}),
     };
 

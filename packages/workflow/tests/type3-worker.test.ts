@@ -93,6 +93,8 @@ async function seedTrackedSeason(input: {
   title: MediaTitle;
   season: TrackedSeason;
   obtainedCodes: string[];
+  /** 缺省 = 全 null,即「播出日被抹」的历史状态。 */
+  airDates?: Record<string, string>;
 }) {
   const files = input.obtainedCodes.map((code, index) =>
     verifiedFile(input.season.storageDirectoryId, `seed_${index}`, code),
@@ -104,6 +106,7 @@ async function seedTrackedSeason(input: {
       seasonNumber: input.season.seasonNumber,
       totalEpisodes: input.season.totalEpisodes,
       latestAiredEpisode: input.season.latestAiredEpisode,
+      ...(input.airDates === undefined ? {} : { episodeAirDates: input.airDates }),
     }),
     files,
   });
@@ -211,6 +214,77 @@ describe("runScheduledType3Monitoring (V2 engine)", () => {
     const saved = await repository.getWorkflowRunSnapshot("run_sync_type3");
     // The sync refreshed the season's aired cursor so E03/E04 became the need.
     expect(saved?.season.latestAiredEpisode).toBe(4);
+  });
+
+  it("backfills missing air dates for a COMPLETED season so the year guard stays armed (run 5721e707)", async () => {
+    const repository = new InMemoryWorkflowRepository();
+    const { title } = trackedFixture("done");
+    // 全部播完 → status completed;播出日全 null(被抹) → 原本被巡检闸门整体跳过,永无回填。
+    const season: TrackedSeason = { ...trackedFixture("done").season, status: "completed" };
+    await seedTrackedSeason({ repository, title, season, obtainedCodes: ["S01E01", "S01E02"] });
+    const storage = new FakeStorageExecutor();
+    await seedV2Season(storage, title, season, ["S01E01", "S01E02"]);
+
+    let syncs = 0;
+    const outcomes = await runScheduledType3Monitoring({
+      repository,
+      resourceProvider: emptyProvider(),
+      storage,
+      model: throwingModel(), // 追更仍是 no-op,agent 不得被调用
+      storageParentDirectoryId: "library_root",
+      now: fixedNow,
+      createWorkflowRunId: () => "run_backfill_type3",
+      syncSeasonMetadata: async () => {
+        syncs += 1;
+        return {
+          latestAiredEpisode: 2,
+          totalEpisodes: 2,
+          episodeAirDates: { S01E01: "2025-07-27", S01E02: "2025-07-28" },
+        };
+      },
+    });
+
+    expect(syncs).toBe(1);
+    expect(outcomes).toEqual([
+      { trackedSeasonId: season.id, status: "ran", workflowRunId: "run_backfill_type3", workflowStatus: "succeeded" },
+    ]);
+    const saved = await repository.getWorkflowRunSnapshot("run_backfill_type3");
+    expect(saved?.episodes[0]?.airDate).toBe("2025-07-27");
+    expect(saved?.episodes[1]?.airDate).toBe("2025-07-28");
+    // 追更语义零改动:仍是完结季,不被复活成 active。
+    expect(saved?.season.status).toBe("completed");
+  });
+
+  it("still skips a completed season that already has air dates (no extra TMDB round trip)", async () => {
+    const repository = new InMemoryWorkflowRepository();
+    const { title } = trackedFixture("dated");
+    const season: TrackedSeason = { ...trackedFixture("dated").season, status: "completed" };
+    await seedTrackedSeason({
+      repository,
+      title,
+      season,
+      obtainedCodes: ["S01E01", "S01E02"],
+      airDates: { S01E01: "2025-07-27", S01E02: "2025-07-28" },
+    });
+    const storage = new FakeStorageExecutor();
+    let syncs = 0;
+
+    const outcomes = await runScheduledType3Monitoring({
+      repository,
+      resourceProvider: emptyProvider(),
+      storage,
+      model: throwingModel(),
+      storageParentDirectoryId: "library_root",
+      now: fixedNow,
+      createWorkflowRunId: () => "run_dated_type3",
+      syncSeasonMetadata: async () => {
+        syncs += 1;
+        return { latestAiredEpisode: 2, totalEpisodes: 2 };
+      },
+    });
+
+    expect(outcomes).toEqual([]);
+    expect(syncs).toBe(0);
   });
 
   it("records a no-op run when a tracked season is already current — the agent model is never invoked", async () => {

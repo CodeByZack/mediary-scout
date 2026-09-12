@@ -19,6 +19,7 @@ import {
   type WorkflowKind,
 } from "../src/domain.js";
 import type { ResourceProvider } from "../src/ports.js";
+import type { SeasonMetadataSync } from "../src/worker.js";
 
 const USAGE = {
   inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
@@ -217,6 +218,65 @@ describe("consumption pipeline persist — V2 engine results persisted in the ex
     expect(s2!.resourceSnapshots).toEqual([]);
     const tracked = await repository.listTrackedSeasonStates();
     expect(tracked.map((state) => state.season.id).sort()).toEqual(["tmdb_tv_100_s1", "tmdb_tv_100_s2"]);
+  });
+
+  /** type1 认领快照：两季范围装在 series_init_queued 审计事件里(pipeline 由此派生 seasonScopes)。 */
+  function seriesClaimed(): PersistedWorkflowRunSnapshot {
+    return fakeClaimed({
+      kind: "type1_package_init",
+      title: tvTitle,
+      season: trackedSeason(),
+      auditEvents: [
+        {
+          type: "series_init_queued",
+          message: "Series initialization queued",
+          data: {
+            seasons: [
+              { seasonNumber: 1, totalEpisodes: 3, latestAiredEpisode: 3 },
+              { seasonNumber: 2, totalEpisodes: 3, latestAiredEpisode: 3 },
+            ],
+          },
+        },
+      ],
+    });
+  }
+
+  it("series init: 按季取 TMDB 播出日喂年守卫(run 5721e707 — 全季获取守卫永久惰性)", async () => {
+    const repository = new InMemoryWorkflowRepository();
+    const calls: Array<{ tmdbId: number; seasonNumber: number }> = [];
+    const syncSeasonMetadata: SeasonMetadataSync = async (input) => {
+      calls.push(input);
+      return {
+        latestAiredEpisode: 3,
+        totalEpisodes: 3,
+        ...(input.seasonNumber === 1
+          ? { episodeAirDates: { S01E01: "2025-07-27", S01E02: "2025-08-03" }, episodeNames: { S01E01: "第1期上" } }
+          : { episodeAirDates: { S02E01: "2026-06-27" }, episodeNames: { S02E01: "Episode 1" } }),
+      };
+    };
+    const ctx = buildConsumptionContext({
+      kind: "type1_package_init",
+      claimed: seriesClaimed(),
+      deps: depsFor(repository, { tvParentDirectoryId: "tv_root", seasonMetadataSync: syncSeasonMetadata }),
+    });
+    await consumeClaimedRun(ctx);
+
+    // 全季没有 episode_states 可抄:type1 分支必须自己按季取(修前 0 次调用 = 守卫失武)。
+    expect(calls).toEqual([
+      { tmdbId: 100, seasonNumber: 1 },
+      { tmdbId: 100, seasonNumber: 2 },
+    ]);
+  });
+
+  it("series init: 未注入元数据同步时守卫惰性且零调用(缺省语义,零回归)", async () => {
+    const repository = new InMemoryWorkflowRepository();
+    const ctx = buildConsumptionContext({
+      kind: "type1_package_init",
+      claimed: seriesClaimed(),
+      deps: depsFor(repository, { tvParentDirectoryId: "tv_root" }),
+    });
+    const outcome = await consumeClaimedRun(ctx);
+    expect(outcome.workflowStatus).toBe("no_coverage");
   });
 
   it("movie init: persists a movie_init snapshot via the V2 movie engine", async () => {
