@@ -1397,4 +1397,65 @@ describe("runFastPathAcquisition — 步骤写入 agent_steps（Task D）", () =
     expect((await storage.listTree({ directoryId: pendingId! })).length).toBe(0);
     expect((await storage.listTree({ directoryId: stagingId })).length).toBe(0);
   });
+
+  it("2026-09-12 换主力只替换撞码集数:同季互补候选不被误删(run fb3c2836 案的单季形态)", async () => {
+    // 复现线上缺陷的单季最小形态:need 5 集,c1 只覆盖 E01/E02(2 集),c2 覆盖 E03/E04/E05
+    // (3 集)。c2 覆盖数更大 → 触发「换主力」分支。旧逻辑无条件清空所有非本候选的 pending 条目,
+    // c1 的 2 集被误删 → 只落 3/5。修复后删除条件加 covered.includes(code):E01/E02 不在 c2 的
+    // 覆盖集里(非撞码)→ 保留 → 5/5 全落。
+    // 回归闸:这条用例在旧代码上必红(obtained 只有 E03/E04/E05)。
+    // 多季形态同根(候选互补于不同季),run 7cb3faaa 实测 40 集任务 20/40 → 39/40。
+    const { sandbox, s1, storage, pendingId, stagingId } = await createSetup({
+      need: ["S01E01", "S01E02", "S01E03", "S01E04", "S01E05"],
+      pending: true,
+      candidates: [
+        { id: "c1", title: "狂飙.S01E01.1080p.中字" }, // unique A → 第 1 轮转存
+        { id: "c2", title: "狂飙" }, // B(裸标题)→ 第 2 轮
+      ],
+      packs: {
+        c1: {
+          files: [
+            { path: "狂飙.S01E01.mkv", sizeBytes: 1 },
+            { path: "狂飙.S01E02.mkv", sizeBytes: 1 },
+          ],
+        },
+        c2: {
+          files: [
+            { path: "狂飙.S01E03.mkv", sizeBytes: 1 },
+            { path: "狂飙.S01E04.mkv", sizeBytes: 1 },
+            { path: "狂飙.S01E05.mkv", sizeBytes: 1 },
+          ],
+        },
+      },
+    });
+
+    const result = await runFastPathAcquisition({
+      sandbox,
+      // 两个候选都是「代码解析不出全部缺集」→ 各触发一次 AI 集数映射;
+      // 返回空映射(代码解析结果不变),等价于 AI 没补上任何东西。
+      model: textModel('{"mapping":{},"unmapped":[],"reasoning":"无补充"}'),
+      target: { ...target, missingEpisodes: ["S01E01", "S01E02", "S01E03", "S01E04", "S01E05"] },
+      isChineseNative: false,
+    });
+
+    expect(result.coverage.coverageMet).toBe(true);
+    expect(result.coverage.obtained).toEqual([
+      "S01E01",
+      "S01E02",
+      "S01E03",
+      "S01E04",
+      "S01E05",
+    ]);
+    // 5 集全部归位到 Season 1——c1 的 E01/E02 没被 c2 的换主力误删。
+    expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual([
+      "狂飙.S01E01.mkv",
+      "狂飙.S01E02.mkv",
+      "狂飙.S01E03.mkv",
+      "狂飙.S01E04.mkv",
+      "狂飙.S01E05.mkv",
+    ]);
+    // 收尾后 pending / staging 都清空。
+    expect((await storage.listTree({ directoryId: pendingId! })).length).toBe(0);
+    expect((await storage.listTree({ directoryId: stagingId })).length).toBe(0);
+  });
 });
