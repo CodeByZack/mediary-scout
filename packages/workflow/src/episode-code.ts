@@ -101,6 +101,13 @@ const VARIETY_PART_IN_NAME_PAREN = /\(Part\s*(\d{1,2})\)/i;
 /** TMDB 集名里的部分号,连字符形态(花儿与少年 `EP1-2`);1-2 位避免吃掉年份/CRC。 */
 const VARIETY_PART_IN_NAME_DASH = /-\s*(\d{1,2})$/;
 
+/** TMDB 集名里的期号(`Episode 1` / `EP1` / `EP1-1` → "1"),无则 null。
+ *  Part 锚定与 landing 的期号一致性校验共用 —— 两处各写一份正则时,连字符形态
+ *  会在 landing 那侧静默失锚(2026-09-12 花儿与少年案)。 */
+export function tmdbPeriodInName(name: string): string | null {
+  return VARIETY_PERIOD_IN_NAME.exec(name)?.[1] ?? null;
+}
+
 /**
  * 综艺「第N期」Part 锚定:期号 N + 文件名部分标记(上/中/下)→ TMDB 集号。
  * 一期在 TMDB 可能拆多集,机械 E(N) 会系统性错位(2026-08-31 地球超新鲜案)。
@@ -127,22 +134,20 @@ function anchorVarietyPeriod(
   // 收集该季里期号 == N 的所有集。
   const hits: Array<{ code: string; part: number | null }> = [];
   for (const [code, tmdbName] of Object.entries(episodeNames)) {
-    const em = VARIETY_PERIOD_IN_NAME.exec(tmdbName);
-    if (!em || Number(em[1]) !== n) continue;
+    if (Number(tmdbPeriodInName(tmdbName)) !== n) continue;
     const pm =
       VARIETY_PART_IN_NAME_PAREN.exec(tmdbName) ?? VARIETY_PART_IN_NAME_DASH.exec(tmdbName);
     hits.push({ code, part: pm?.[1] !== undefined ? Number(pm[1]) : null });
   }
   if (hits.length === 0) return null;
   // 部分号升序(无部分号排最前),与「上<中<下」按下标对齐;部分数不足时回落到最后一部分。
-  const sorted = [...hits].sort(
-    (a, b) => (a.part ?? -1) - (b.part ?? -1),
-  );
-  const wanted =
-    partOfFile === null || VARIETY_PART_ORDER[partOfFile] === undefined
-      ? 0
-      : VARIETY_PART_ORDER[partOfFile];
-  return sorted[Math.min(wanted, sorted.length - 1)]!.code;
+  const sorted = [...hits].sort((a, b) => (a.part ?? -1) - (b.part ?? -1));
+  // 有标记时只从「带部分号」的集里选:同一期若同时有 `EP3` 与 `EP3-1/EP3-2`,
+  // 无标记条目不应吃掉「上」的位置(旧实现 `find(part === 1)` 的语义保持)。
+  const pool = partOfFile !== null ? sorted.filter((hit) => hit.part !== null) : sorted;
+  const src = pool.length > 0 ? pool : sorted;
+  const wanted = VARIETY_PART_ORDER[partOfFile ?? ""] ?? 0;
+  return src[Math.min(wanted, src.length - 1)]!.code;
 }
 
 /**

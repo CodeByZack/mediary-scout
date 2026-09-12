@@ -1,5 +1,6 @@
 import type { LanguageModel } from "ai";
 import type { EpisodeParseRules } from "../../episode-code.js";
+import { tmdbPeriodInName } from "../../episode-code.js";
 import type { PromptOverrideLookup } from "../../ruleset.js";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
 import { arbitrateEpisodeMapping } from "../../acquisition-v2/arbitrator.js";
@@ -156,13 +157,15 @@ export async function tryEpisodeMapping(options: {
     if (options.episodeNames) {
       const filePeriod = /第\s*(\d{1,4})\s*期/.exec(fileName)?.[1];
       const tmdbName = options.episodeNames[code];
-      const tmdbPeriod = tmdbName ? /Episode\s*(\d{1,4})\b/i.exec(tmdbName)?.[1] : undefined;
+      // 共用 episode-code 的抽取器:`EP1-1` 连字符形态此前不匹配老的 /Episode N/ 正则,
+      // 使这道校验在花儿与少年整季惰性。
+      const tmdbPeriod = tmdbName ? tmdbPeriodInName(tmdbName) : null;
       if (
         filePeriod !== undefined &&
-        tmdbPeriod !== undefined &&
+        tmdbPeriod !== null &&
         Number(filePeriod) !== Number(tmdbPeriod)
       ) {
-        const mismatch = `映射期号不符:${fileName}(第${filePeriod}期) → ${code}(TMDB Episode ${tmdbPeriod})`;
+        const mismatch = `映射期号不符:${fileName}(第${filePeriod}期) → ${code}(TMDB 第${tmdbPeriod}期)`;
         stepLog(options.sandbox, options.targetTitle, "集数映射", mismatch, "warn");
         valid = false;
         break;

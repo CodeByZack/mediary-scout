@@ -16,6 +16,7 @@ import {
   episodeCodeFromFileName,
   episodeDateConflict,
   explicitFileDate,
+  tmdbPeriodInName,
 } from "../src/index.js";
 import { syncSeasonAgainstMetadata } from "../src/season-sync.js";
 import type { TvAnimeTarget } from "../src/acquisition-v2/target-types.js";
@@ -120,6 +121,9 @@ describe("candidate-grader — 隐形季号(issue #21 验收②)", () => {
     expect(seasonNumbersInTitle("中餐厅3季")).toEqual([3]);
     expect(seasonNumbersInTitle("【综艺】花儿与少年4.完结")).toEqual([4]);
     expect(seasonNumbersInTitle("X 2019.合集")).toEqual([]);
+    // 日期残段:2026.09.完结 的 09 前是点号,不是季号
+    expect(seasonNumbersInTitle("X 2026.09.完结")).toEqual([]);
+    expect(seasonNumbersInTitle("X 2026.09.全集")).toEqual([]);
     expect(seasonNumbersInTitle("X 全20集")).toEqual([]);
     expect(seasonNumbersInTitle("X 共3季")).toEqual([]);
     expect(seasonNumbersInTitle("X 1-10季")).toEqual([]);
@@ -223,6 +227,31 @@ describe("anchorVarietyPeriod — 一期拆多部分的四种 TMDB 集名形态"
   it("中餐厅 `Episode N`(无部分):第N期 → 对应集,机械 E(N) 与锚定一致", () => {
     expect(episodeCodeFromFileName("2026.06.19-第1期.mp4", [10], chefS10)).toBe("S10E01");
     expect(episodeCodeFromFileName("2026.06.26-第2期.mp4", [10], chefS10)).toBe("S10E02");
+  });
+
+  it("tmdbPeriodInName — Part 锚定与 landing 期号校验共用同一抽取器", () => {
+    // 旧 landing 校验用 /Episode\s*(\d+)/ 私有正则,连字符形态全 null → 校验整季惰性。
+    expect(tmdbPeriodInName("Episode 1 (Part 1)")).toBe("1");
+    expect(tmdbPeriodInName("EP1")).toBe("1");
+    expect(tmdbPeriodInName("EP1-1")).toBe("1");
+    expect(tmdbPeriodInName("EP2-2")).toBe("2");
+    expect(tmdbPeriodInName("Episode 4")).toBe("4");
+    expect(tmdbPeriodInName("EP 1080p")).toBeNull();
+    expect(tmdbPeriodInName("世界树奇遇派对")).toBeNull();
+    expect(tmdbPeriodInName("S08E01")).toBeNull();
+  });
+
+  it("同一期同时有 `EP3` 与 `EP3-1/EP3-2`:带标记时取部分号,不吞无标记条目", () => {
+    const mixed: Record<string, string> = {
+      S03E01: "EP3",
+      S03E02: "EP3-1",
+      S03E03: "EP3-2",
+    };
+    // 无标记 → 仍取无标记条目(该期正片主体)
+    expect(episodeCodeFromFileName("第3期.mp4", [3], mixed)).toBe("S03E01");
+    // 有标记 → 只在带部分号的集里对号入座(旧实现 find(part === 1) 的语义)
+    expect(episodeCodeFromFileName("第3期上.mp4", [3], mixed)).toBe("S03E02");
+    expect(episodeCodeFromFileName("第3期下.mp4", [3], mixed)).toBe("S03E03");
   });
 
   it("无 episodeNames / 该期不在表内 / 集名无期号 → 回退机械 E(N)", () => {

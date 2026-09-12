@@ -75,10 +75,12 @@ describe("episode-mapping body 合并(2026-09-12 用户拍板「合成一个」)
     expect(PROMPT_TEMPLATES["episode-mapping"].body).toBe(EPISODE_MAPPING_BODY);
   });
 
-  it("D5: 一期拆多部分 —— 上<中<下 依次占连续集数,别合成一集也别跳号", () => {
+  it("D5: 一期拆多部分 —— 上<中<下 占连续集数,别合成一集也别跳号", () => {
     expect(EPISODE_MAPPING_BODY).toContain("第1期上");
     expect(EPISODE_MAPPING_BODY).toContain("第1期中");
-    expect(EPISODE_MAPPING_BODY).toContain("第1期下=E03");
+    expect(EPISODE_MAPPING_BODY).toContain("别把多部分合成一集");
+    // 不写死绝对集号:前面期被拆过时 第N期上 ≠ E{N},绝对示例会误导 AI 迎合 need
+    expect(EPISODE_MAPPING_BODY).not.toContain("第1期下=E03");
   });
 
   it("D6: 纯日期名不是集数 —— 禁止按文件排列顺序猜(2026-09-12 花儿与少年假入库)", () => {
