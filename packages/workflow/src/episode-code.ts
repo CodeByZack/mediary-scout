@@ -91,11 +91,27 @@ export function episodeDateConflict(
   return Math.abs(t1 - t2) / 86400000 > EPISODE_DATE_TOLERANCE_DAYS;
 }
 
+/** 文件名部分标记的排序:与 TMDB 部分号升序按下标对号入座。 */
+const VARIETY_PART_ORDER: Record<string, number> = { 上: 0, 中: 1, 下: 2 };
+/** TMDB 集名里的期号:`Episode 1` / `EP1` / `EP1-1` 都取 1。大小写不敏感 ——
+ *  `EP1` 与 `episode 1` 同形不同案,漏 i 标志会让连字符形态整季失锚。 */
+const VARIETY_PERIOD_IN_NAME = /ep(?:isode)?\s*(\d{1,4})\b/i;
+/** TMDB 集名里的部分号,括号形态(地球超新鲜)。 */
+const VARIETY_PART_IN_NAME_PAREN = /\(Part\s*(\d{1,2})\)/i;
+/** TMDB 集名里的部分号,连字符形态(花儿与少年 `EP1-2`);1-2 位避免吃掉年份/CRC。 */
+const VARIETY_PART_IN_NAME_DASH = /-\s*(\d{1,2})$/;
+
 /**
- * 综艺「第N期」Part 锚定:期号 N + 上/下标记 → TMDB 集号。
- * TMDB name 形如 "Episode 10 (Part 1)/Episode 10 (Part 2)"(地球超新鲜一季 20 集,
- * 每期拆两集),与文件名「第10期上/下」一一对应。无 episodeNames 或期号/part 不在表内
- * → null(调用方回退机械 E(N))。
+ * 综艺「第N期」Part 锚定:期号 N + 文件名部分标记(上/中/下)→ TMDB 集号。
+ * 一期在 TMDB 可能拆多集,机械 E(N) 会系统性错位(2026-08-31 地球超新鲜案)。
+ * TMDB 集名的期号/部分号有四种真实形态(2026-09-12 实测):
+ *   地球超新鲜 S1/S2: `Episode 1 (Part 1)` / `Episode 1 (Part 2)`
+ *   花儿与少年 S8:    `EP1-1` / `EP1-2` / `EP1-3`(一期三部分)
+ *   花儿与少年 S7:    `EP1` / `EP2-1` / `EP2-2`(不分与拆分混用)
+ *   中餐厅 S10:       `Episode 1`(无部分)
+ * 故期号/部分号各自通用抽取,再按「上<中<下」下标与部分号升序对号入座 —— 拆几部分
+ * 都成立,不必每加一种形态改一次代码。无 episodeNames 或该期不在表内 → null(调用方
+ * 回退机械 E(N);表缺失场景仍是旧语义,宁可过解析也不退化为全包 unparsed 的旧问题)。
  */
 function anchorVarietyPeriod(
   name: string,
@@ -106,29 +122,27 @@ function anchorVarietyPeriod(
   if (!episodeNames) return null;
   const n = Number(periodStr);
   if (!Number.isFinite(n) || n < 1) return null;
-  // 文件名里的上/下标记(紧贴期号,容忍空格:第10期上 / 第10期 上)。
-  const partOfFile = /第\s*\d{1,4}\s*期\s*([上下])/.exec(name)?.[1] ?? null;
-  // 收集该季里期号 == N 的所有集(TMDB name 匹配 "Episode N ...")。
+  // 文件名里的部分标记(紧贴期号,容忍空格:第10期上 / 第10期 上 / 第1期下)。
+  const partOfFile = /第\s*\d{1,4}\s*期\s*([上中下])/.exec(name)?.[1] ?? null;
+  // 收集该季里期号 == N 的所有集。
   const hits: Array<{ code: string; part: number | null }> = [];
   for (const [code, tmdbName] of Object.entries(episodeNames)) {
-    const em = /Episode\s*(\d{1,4})\b/i.exec(tmdbName);
+    const em = VARIETY_PERIOD_IN_NAME.exec(tmdbName);
     if (!em || Number(em[1]) !== n) continue;
-    const pm = /\(Part\s*(\d{1,2})\)/i.exec(tmdbName);
-    hits.push({ code, part: pm ? Number(pm[1]) : null });
+    const pm =
+      VARIETY_PART_IN_NAME_PAREN.exec(tmdbName) ?? VARIETY_PART_IN_NAME_DASH.exec(tmdbName);
+    hits.push({ code, part: pm?.[1] !== undefined ? Number(pm[1]) : null });
   }
   if (hits.length === 0) return null;
-  if (partOfFile === "上") {
-    const hit = hits.find((h) => h.part === 1) ?? hits[0];
-    return hit ? hit.code : null;
-  }
-  if (partOfFile === "下") {
-    const hit = hits.find((h) => h.part === 2) ?? hits[hits.length - 1];
-    return hit ? hit.code : null;
-  }
-  // 无上/下标记:该期唯一集直接用;多 part 取 Part 1(正片主体)。
-  if (hits.length === 1) return hits[0]!.code;
-  const first = hits.find((h) => h.part === 1);
-  return (first ?? hits[0])!.code;
+  // 部分号升序(无部分号排最前),与「上<中<下」按下标对齐;部分数不足时回落到最后一部分。
+  const sorted = [...hits].sort(
+    (a, b) => (a.part ?? -1) - (b.part ?? -1),
+  );
+  const wanted =
+    partOfFile === null || VARIETY_PART_ORDER[partOfFile] === undefined
+      ? 0
+      : VARIETY_PART_ORDER[partOfFile];
+  return sorted[Math.min(wanted, sorted.length - 1)]!.code;
 }
 
 /**
