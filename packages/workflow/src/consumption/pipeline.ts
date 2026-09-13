@@ -92,6 +92,29 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
       const claimed = requireClaimed(ctx);
       const now = resolveNow(ctx);
       const season = claimed.snapshot.season;
+      // ★ 2026-09-13 type2 集名缺口(花儿与少年 S8 假入库案):DB 里的 episode_states.title
+      // 是「Episode N」占位符 —— 季入库时 TMDB 还没建好该季剧集(占位回落),而 type3 巡检
+      // 是唯一会把真集名回填进 DB 的路径,用户没点过巡检 → 占位符永不清掉。下面的过滤把
+      // 占位符全丢 → episodeNames 空 → Part 锚定拿不到数据 →「第1期上/中/下」三个文件塌成
+      // 同一个 S08E01,全靠 AI 映射补认(烧一次仲裁才覆盖齐)。与 series 路径(:204-218)
+      // 同款:按季现场补取 TMDB 原始 name,不等巡检;取不到 = 回落 DB 值(零回归)。
+      // 副作用:桥接 persist 会把补取到的真集名写回 episode_states,后续运行自愈。
+      const episodeNames = Object.fromEntries(
+        claimed.snapshot.episodes.flatMap((episode) =>
+          !episode.title || /^Episode \d+$/.test(episode.title)
+            ? []
+            : [[episode.episodeCode, episode.title] as const],
+        ),
+      );
+      if (ctx.seasonMetadataSync) {
+        const meta = await ctx.seasonMetadataSync({
+          tmdbId: ctx.title.tmdbId,
+          seasonNumber: season.seasonNumber,
+        });
+        for (const [code, name] of Object.entries(meta?.episodeNames ?? {})) {
+          if (!/^Episode \d+$/.test(name)) episodeNames[code] = name;
+        }
+      }
       // ①–⑥（策略装配 → 目录 → 需求 → 沙盒快路径 → 对账 → 体积 + 通知口径 bridge）。
       const bridged = await runTvAcquisitionV2({
         title: ctx.title,
@@ -120,15 +143,10 @@ export async function consumeClaimedRun(ctx: ConsumptionContext): Promise<Consum
               : [[episode.episodeCode, episode.airDate] as const],
           ),
         ),
-        // 综艺 Part 锚定数据:TMDB 原始 name 已在 episode_states.title(createEpisodeStates
-        // 用 episodeNames 生成);「第N期上/下 ↔ Episode N (Part 1/2)」靠它定位。
-        episodeNames: Object.fromEntries(
-          claimed.snapshot.episodes.flatMap((episode) =>
-            !episode.title || /^Episode \d+$/.test(episode.title)
-              ? []
-              : [[episode.episodeCode, episode.title] as const],
-          ),
-        ),
+        // 综艺 Part 锚定数据:TMDB 原始 name(优先上面现场补取的,回落到 episode_states.title)。
+        // 「第N期上/中/下」按 zh-CN `第1期上：…`/`第1期中：…`(线上默认语言)或 en-US
+        // `EP1-1/EP1-2` 形态定位,见 episode-code.anchorVarietyPeriod。
+        episodeNames,
         ...(episodeRules !== undefined ? { episodeRules } : {}),
         promptOverrides: promptLookup,
         now,

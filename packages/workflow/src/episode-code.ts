@@ -101,11 +101,23 @@ const VARIETY_PART_IN_NAME_PAREN = /\(Part\s*(\d{1,2})\)/i;
 /** TMDB 集名里的部分号,连字符形态(花儿与少年 `EP1-2`);1-2 位避免吃掉年份/CRC。 */
 const VARIETY_PART_IN_NAME_DASH = /-\s*(\d{1,2})$/;
 
-/** TMDB 集名里的期号(`Episode 1` / `EP1` / `EP1-1` → "1"),无则 null。
+/** TMDB 集名里的期号,中文形态(`第1期上：王星越喜提首站导游` → 1)。zh-CN 是 TMDB 默认
+ *  语言(tmdb-provider.ts:239),中文综艺的期号/部分标记都在中文名里 —— 只认英文
+ *  `EP1-1` 会让锚定在线上整季失锚(2026-09-13 花儿与少年 S8 案:DB 里存的是
+ *  「第1期上：…」,老正则 `/ep…\d/` 一个都匹配不到)。 */
+const VARIETY_PERIOD_IN_NAME_CN = /第\s*(\d{1,4})\s*(?:期|话|話)/;
+/** TMDB 集名里的部分标记,中文形态(`第1期上` → 上),按 上<中<下 映射到部分号。 */
+const VARIETY_PART_IN_NAME_CN = /第\s*\d{1,4}\s*(?:期|话|話)\s*([上中下])/;
+
+/** TMDB 集名里的期号(英文 `Episode 1` / `EP1-1` 或中文 `第1期上` → "1"),无则 null。
  *  Part 锚定与 landing 的期号一致性校验共用 —— 两处各写一份正则时,连字符形态
  *  会在 landing 那侧静默失锚(2026-09-12 花儿与少年案)。 */
 export function tmdbPeriodInName(name: string): string | null {
-  return VARIETY_PERIOD_IN_NAME.exec(name)?.[1] ?? null;
+  return (
+    VARIETY_PERIOD_IN_NAME.exec(name)?.[1] ??
+    VARIETY_PERIOD_IN_NAME_CN.exec(name)?.[1] ??
+    null
+  );
 }
 
 /**
@@ -119,6 +131,13 @@ export function tmdbPeriodInName(name: string): string | null {
  * 故期号/部分号各自通用抽取,再按「上<中<下」下标与部分号升序对号入座 —— 拆几部分
  * 都成立,不必每加一种形态改一次代码。无 episodeNames 或该期不在表内 → null(调用方
  * 回退机械 E(N);表缺失场景仍是旧语义,宁可过解析也不退化为全包 unparsed 的旧问题)。
+ *
+ * zh-CN 集名(线上默认语言,tmdb-provider.ts:239)是第五种形态,比 en-US 信息更多 ——
+ * 期号与部分标记都在名字里,直接跟文件名的「第N期上/中/下」对齐:
+ *   花儿与少年 S8(zh-CN): `第1期上：王星越喜提首站导游` / `第1期中：…` / `第1期下：…`
+ *   花儿与少年 S7(zh-CN): `第1期：龚俊…` / `第2期上：…` / `第2期下：…`(不分与拆分混用)
+ *   地球超新鲜/中餐厅(zh-CN): `奇异新世界` / `中餐厅第十年`(无期号 → 回退机械 E(N))
+ * 只认英文 `EP1-1` 会让锚定在线上整季惰性(2026-09-13 花儿与少年 S8 实测)。
  */
 function anchorVarietyPeriod(
   name: string,
@@ -135,9 +154,18 @@ function anchorVarietyPeriod(
   const hits: Array<{ code: string; part: number | null }> = [];
   for (const [code, tmdbName] of Object.entries(episodeNames)) {
     if (Number(tmdbPeriodInName(tmdbName)) !== n) continue;
-    const pm =
-      VARIETY_PART_IN_NAME_PAREN.exec(tmdbName) ?? VARIETY_PART_IN_NAME_DASH.exec(tmdbName);
-    hits.push({ code, part: pm?.[1] !== undefined ? Number(pm[1]) : null });
+    // 部分号:英文 `Part K` / `-K` 优先,回落中文 `上/中/下`(按 上<中<下 映射)。
+    const partNum =
+      VARIETY_PART_IN_NAME_PAREN.exec(tmdbName)?.[1] ??
+      VARIETY_PART_IN_NAME_DASH.exec(tmdbName)?.[1];
+    const partCn = VARIETY_PART_IN_NAME_CN.exec(tmdbName)?.[1];
+    const part =
+      partNum !== undefined
+        ? Number(partNum)
+        : partCn !== undefined
+          ? VARIETY_PART_ORDER[partCn] ?? null
+          : null;
+    hits.push({ code, part });
   }
   if (hits.length === 0) return null;
   // 部分号升序(无部分号排最前),与「上<中<下」按下标对齐;部分数不足时回落到最后一部分。

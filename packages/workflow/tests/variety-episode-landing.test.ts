@@ -178,8 +178,10 @@ describe("candidate-grader — 隐形季号(issue #21 验收②)", () => {
  *   花儿与少年 S8  (id 121876): `EP1-1` / `EP1-2` / `EP1-3`  ← 一期三部分
  *   花儿与少年 S7  (id 121876): `EP1` / `EP2-1` / `EP2-2`  ← 不分与拆分混用
  *   中餐厅 S10    (id 91914) : `Episode 1`             ← 无部分
+ * 同一批 id 的 zh-CN 集名(TMDB 默认语言 tmdb-provider.ts:239,线上实际拿到的形态)
+ * 是第五种,2026-09-13 补齐 —— 只认英文会让锚定在线上整季惰性。
  */
-describe("anchorVarietyPeriod — 一期拆多部分的四种 TMDB 集名形态", () => {
+describe("anchorVarietyPeriod — 一期拆多部分的 TMDB 集名形态(en-US + zh-CN)", () => {
   const wowS1: Record<string, string> = {
     S01E01: "Episode 1 (Part 1)",
     S01E02: "Episode 1 (Part 2)",
@@ -199,6 +201,27 @@ describe("anchorVarietyPeriod — 一期拆多部分的四种 TMDB 集名形态"
     S07E04: "EP3",
   };
   const chefS10: Record<string, string> = { S10E01: "Episode 1", S10E02: "Episode 2" };
+  // zh-CN(TMDB 默认语言,tmdb-provider.ts:239)真实集名 —— 线上实际拿到的形态。
+  // 比 en-US 信息更多:期号与部分标记都在名字里,直接跟文件名的「第N期上/中/下」对齐。
+  // 只认英文 `EP1-1` 会让锚定在线上整季惰性(2026-09-13 花儿与少年 S8 实测)。
+  const divasS8Zn: Record<string, string> = {
+    S08E01: "第1期上：王星越喜提首站导游",
+    S08E02: "第1期中：全员感受世界杯氛围",
+    S08E03: "第1期下：吴君如邓为船头热舞",
+    S08E04: "第 4 集",
+  };
+  const divasS7Zn: Record<string, string> = {
+    S07E01: "第1期：龚俊花少首站导游",
+    S07E02: "第2期上：花少团狐猴超绝互动",
+    S07E03: "第2期下：花少团下田割水稻",
+    S07E04: "第3期：龚俊情绪稳定名场面",
+  };
+  // zh-CN 无期号(地球超新鲜/中餐厅):回退机械 E(N),与原语义一致。
+  const wowS1Zn: Record<string, string> = {
+    S01E01: "奇异新世界",
+    S01E02: "彗星之子",
+    S01E03: "伊利里亚的幽灵",
+  };
 
   it("地球超新鲜 `Episode N (Part K)`:第N期上/下 对上/下两部分", () => {
     expect(episodeCodeFromFileName("2025.07.27-第1期上.mp4", [1], wowS1)).toBe("S01E01");
@@ -229,6 +252,29 @@ describe("anchorVarietyPeriod — 一期拆多部分的四种 TMDB 集名形态"
     expect(episodeCodeFromFileName("2026.06.26-第2期.mp4", [10], chefS10)).toBe("S10E02");
   });
 
+  it("zh-CN 花儿与少年 S8 `第1期上/中/下：…`(线上默认语言):三部分各就各位", () => {
+    // 线上实测形态:DB 里存的就是中文名,老正则 /ep…\d/ 一个都匹配不到 → 整季失锚。
+    expect(episodeCodeFromFileName("2026.09.10-第1期上.mp4", [8], divasS8Zn)).toBe("S08E01");
+    expect(episodeCodeFromFileName("2026.09.10-第1期中.mp4", [8], divasS8Zn)).toBe("S08E02");
+    expect(episodeCodeFromFileName("2026.09.11-第1期下.mp4", [8], divasS8Zn)).toBe("S08E03");
+    // 第4期无部分标记 → 机械 E(4) 与锚定一致(TMDB 名「第 4 集」不含期号,不参与锚定)。
+    expect(episodeCodeFromFileName("2026.09.17-第4期.mp4", [8], divasS8Zn)).toBe("S08E04");
+  });
+
+  it("zh-CN 花儿与少年 S7 不分与拆分混用:中文部分标记同样按序分配", () => {
+    expect(episodeCodeFromFileName("2025.08.16-第1期.mp4", [7], divasS7Zn)).toBe("S07E01");
+    expect(episodeCodeFromFileName("2025.08.23-第2期上.mp4", [7], divasS7Zn)).toBe("S07E02");
+    expect(episodeCodeFromFileName("2025.08.23-第2期下.mp4", [7], divasS7Zn)).toBe("S07E03");
+    // 标记多于实际部分数 → 回落到最后一部分,不返回 null
+    expect(episodeCodeFromFileName("2025.08.23-第2期中.mp4", [7], divasS7Zn)).toBe("S07E03");
+  });
+
+  it("zh-CN 无期号集名(地球超新鲜):回退机械 E(N),不错锚", () => {
+    expect(episodeCodeFromFileName("2025.07.27-第1期上.mp4", [1], wowS1Zn)).toBe("S01E01");
+    expect(episodeCodeFromFileName("2025.07.28-第1期下.mp4", [1], wowS1Zn)).toBe("S01E01");
+    expect(episodeCodeFromFileName("2025.08.03-第2期上.mp4", [1], wowS1Zn)).toBe("S01E02");
+  });
+
   it("tmdbPeriodInName — Part 锚定与 landing 期号校验共用同一抽取器", () => {
     // 旧 landing 校验用 /Episode\s*(\d+)/ 私有正则,连字符形态全 null → 校验整季惰性。
     expect(tmdbPeriodInName("Episode 1 (Part 1)")).toBe("1");
@@ -236,6 +282,11 @@ describe("anchorVarietyPeriod — 一期拆多部分的四种 TMDB 集名形态"
     expect(tmdbPeriodInName("EP1-1")).toBe("1");
     expect(tmdbPeriodInName("EP2-2")).toBe("2");
     expect(tmdbPeriodInName("Episode 4")).toBe("4");
+    // 中文形态(zh-CN 默认语言)
+    expect(tmdbPeriodInName("第1期上：王星越喜提首站导游")).toBe("1");
+    expect(tmdbPeriodInName("第2期下：花少团下田割水稻")).toBe("2");
+    expect(tmdbPeriodInName("第3期：龚俊情绪稳定名场面")).toBe("3");
+    expect(tmdbPeriodInName("第 4 集")).toBeNull();
     expect(tmdbPeriodInName("EP 1080p")).toBeNull();
     expect(tmdbPeriodInName("世界树奇遇派对")).toBeNull();
     expect(tmdbPeriodInName("S08E01")).toBeNull();

@@ -268,6 +268,43 @@ describe("consumption pipeline persist — V2 engine results persisted in the ex
     ]);
   });
 
+  it("type2 init: DB 集名是占位符时按季现场补取(2026-09-13 花儿与少年 S8 — 单季获取 Part 锚定惰性)", async () => {
+    const repository = new InMemoryWorkflowRepository();
+    const calls: Array<{ tmdbId: number; seasonNumber: number }> = [];
+    const syncSeasonMetadata: SeasonMetadataSync = async (input) => {
+      calls.push(input);
+      return {
+        latestAiredEpisode: 3,
+        totalEpisodes: 3,
+        episodeNames: { S01E01: "EP1-1", S01E02: "EP1-2", S01E03: "EP1-3" },
+      };
+    };
+    // DB 里是占位标题:tracking 时 TMDB 没给 name(createEpisodeStates 回落「Episode N」),
+    // 或季是在全剧获取路径下建的(queueSeriesInitialization 入参根本没有 episodeNames)——
+    // 两种都被下面 pipeline 的占位名过滤全丢 → Part 锚定拿不到数据 →「第1期上/中/下」
+    // 三个文件塌成同一个 S01E01。
+    const placeholders = createEpisodeStates({
+      trackedSeasonId: "tmdb_tv_100_s1",
+      seasonNumber: 1,
+      totalEpisodes: 3,
+      latestAiredEpisode: 3,
+    });
+    const ctx = buildConsumptionContext({
+      kind: "type2_init",
+      claimed: fakeClaimed({
+        kind: "type2_init",
+        title: tvTitle,
+        season: trackedSeason(),
+        episodes: placeholders,
+      }),
+      deps: depsFor(repository, { tvParentDirectoryId: "tv_root", seasonMetadataSync: syncSeasonMetadata }),
+    });
+    await consumeClaimedRun(ctx);
+
+    // type2 分支必须自己按季取(修前 0 次调用 = 上/中/下 全塌成 S01E01)。
+    expect(calls).toEqual([{ tmdbId: 100, seasonNumber: 1 }]);
+  });
+
   it("series init: 未注入元数据同步时守卫惰性且零调用(缺省语义,零回归)", async () => {
     const repository = new InMemoryWorkflowRepository();
     const ctx = buildConsumptionContext({
