@@ -1,5 +1,4 @@
-import { createRequire } from "node:module";
-import type Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import { DEFAULT_ACCOUNT_ID, episodeNumberFromCode } from "./domain.js";
 import type {
   AgentDecision,
@@ -187,33 +186,24 @@ export const SQLITE_SCHEMA = `
     ON CONFLICT (id) DO NOTHING;
 `;
 
-// Lazy-load the native better-sqlite3 at CALL time (the desktop path), NOT at module
-// evaluation time. This keeps `import "@media-track/workflow"` (container, Vercel
-// serverless demo — Postgres-only) free of the native module, so those paths never pay
-// the native load and can't hard-crash on a platform where better-sqlite3 isn't built.
-const requireNative = createRequire(import.meta.url);
-
 export function createSqliteWorkflowRepository(options: { path: string }): SqliteWorkflowRepository {
-  let DatabaseCtor: typeof import("better-sqlite3");
   try {
-    DatabaseCtor = requireNative("better-sqlite3") as typeof import("better-sqlite3");
+    return new SqliteWorkflowRepository(new DatabaseSync(options.path));
   } catch (error) {
     const cause = error instanceof Error ? error.message : String(error);
     throw new Error(
-      "SQLite mode is enabled (MEDIA_TRACK_SQLITE_PATH is set) but the optional native " +
-        "dependency 'better-sqlite3' could not be loaded. Install it (e.g. `npm install` " +
-        "without --no-optional) and ensure it is built for this platform's Node/Electron ABI " +
-        `(desktop builds: @electron/rebuild). Original error: ${cause}`,
+      "SQLite mode is enabled (MEDIA_TRACK_SQLITE_PATH is set) but the database could not " +
+        `be opened at ${options.path}. Original error: ${cause}`,
       { cause: error },
     );
   }
-  return new SqliteWorkflowRepository(new DatabaseCtor(options.path));
 }
 
 export class SqliteWorkflowRepository implements WorkflowRepository {
-  constructor(private readonly db: Database.Database) {
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("foreign_keys = ON");
+  constructor(private readonly db: DatabaseSync) {
+    // node:sqlite 没有 db.pragma(),一律走 exec。WAL 必须在 schema 之前设置。
+    this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec(SQLITE_SCHEMA);
   }
 
@@ -221,12 +211,34 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     this.db.close();
   }
 
+  /**
+   * better-sqlite3 的 db.transaction(fn) 在 node:sqlite 里不存在(只有裸 BEGIN/COMMIT/
+   * ROLLBACK),这里补一个同步等价物:fn() 抛错即回滚并原样上抛。已核实 12 处调用点
+   * 无嵌套(被调方法内部不再调 transaction),故不需要 SAVEPOINT 分级。
+   * 用 BEGIN IMMEDIATE 而非裸 BEGIN —— 写事务立即取锁,better-sqlite3 的 DEFERRED
+   * 语义只在真正写入时才升级,这里所有事务体第一步都是写,提前取锁等价且更快暴露冲突。
+   */
+  private runTransaction<T>(fn: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // 事务可能已自行回滚,忽略二次失败。
+      }
+      throw error;
+    }
+  }
+
   async saveWorkflowRunSnapshot(input: PersistWorkflowRunSnapshotInput): Promise<void> {
     validateWorkflowRunSnapshot(input);
     const snapshot = cloneWorkflowValue(input);
-    // better-sqlite3 transactions are synchronous — the whole multi-table write
-    // commits atomically or rolls back on throw.
-    this.db.transaction(() => this.replaceWorkflowRunSnapshot(snapshot))();
+    // 整个多表写入原子提交,fn() 抛错即整体回滚(见 runTransaction)。
+    this.runTransaction(() => this.replaceWorkflowRunSnapshot(snapshot));
   }
 
   async reserveWorkflowRun(input: ReserveWorkflowRunInput): Promise<WorkflowRunReservationResult> {
@@ -235,7 +247,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     const accountId = snapshot.accountId ?? DEFAULT_ACCOUNT_ID;
     const connectedStorageId = snapshot.connectedStorageId ?? UNSCOPED_STORAGE;
 
-    return this.db.transaction((): WorkflowRunReservationResult => {
+    return this.runTransaction((): WorkflowRunReservationResult => {
       this.expireStaleActiveWorkflowRuns(input);
 
       if (input.blockIfTitleHasActiveRun === true) {
@@ -279,7 +291,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
         status: "reserved",
         snapshot: withDerivedEpisodeSummaries(cloneWorkflowValue(snapshot)),
       };
-    })();
+    });
   }
 
   async getWorkflowRunSnapshot(
@@ -574,7 +586,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     // Read the oldest claimable queued run and flip it to running INSIDE one
     // transaction so two ticks can't double-claim (single-writer + WAL make the
     // read+update atomic). claimableQueuedRuns applies the nextAttemptAt gate + FIFO.
-    const claimedRunId = this.db.transaction((): string | null => {
+    const claimedRunId = this.runTransaction((): string | null => {
       // Prefilter to queued runs of this kind in SQL (json_extract) rather than
       // scanning every run each tick; claimableQueuedRuns then applies the
       // nextAttemptAt backoff gate + FIFO on that small set.
@@ -586,7 +598,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
       // upsertWorkflowRun preserves account_id / connected_storage_id on conflict.
       this.upsertWorkflowRun(claimedRun);
       return claimedRun.id;
-    })();
+    });
     // Cross-account: load WITHOUT an account filter (the worker drains every
     // account's queue; the snapshot carries its own accountId).
     return claimedRunId ? this.loadSnapshot(claimedRunId) : null;
@@ -594,7 +606,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
 
   async requeueRunningWorkflowRuns(now: string = new Date().toISOString()): Promise<number> {
     // Crash recovery: every `running` run → requeue (capped) or terminal fail.
-    return this.db.transaction((): number => {
+    return this.runTransaction((): number => {
       const running = this.allWorkflowRuns().filter(
         (workflowRun) => workflowRun.status === "running",
       );
@@ -605,11 +617,11 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
         if (recovered.action === "requeue") requeued += 1;
       }
       return requeued;
-    })();
+    });
   }
 
   async pruneFinishedWorkflowRuns(olderThan: string): Promise<number> {
-    return this.db.transaction((): number => {
+    return this.runTransaction((): number => {
       const prunable = this.allWorkflowRuns().filter((run) =>
         isPrunableFinishedRun(run, olderThan),
       );
@@ -622,7 +634,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
         this.db.prepare("DELETE FROM workflow_runs WHERE id = ?").run(run.id);
       }
       return prunable.length;
-    })();
+    });
   }
 
   async findActiveWorkflowRun(input: {
@@ -768,7 +780,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     scopeArg: ScopeArg = undefined,
   ): Promise<{ status: "cancelled" | "not_cancellable" }> {
     const scope = normalizeScope(scopeArg);
-    return this.db.transaction((): { status: "cancelled" | "not_cancellable" } => {
+    return this.runTransaction((): { status: "cancelled" | "not_cancellable" } => {
       const row = this.db
         .prepare("SELECT payload, account_id, connected_storage_id FROM workflow_runs WHERE id = ?")
         .get(workflowRunId) as
@@ -803,7 +815,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
         this.teardownSeasonScoped(seasonId, storageValue);
       }
       return { status: "cancelled" as const };
-    })();
+    });
   }
 
   /** Tear down one (season, drive): delete its episodes + tracked_seasons row, then
@@ -854,7 +866,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     const targetSeasonIds = [...new Set(states.map((state) => state.season.id))];
     const storageValue = scope.connectedStorageId ?? UNSCOPED_STORAGE;
 
-    return this.db.transaction(
+    return this.runTransaction(
       (): { status: "untracked" | "not_found" | "in_flight"; removedSeasons: number } => {
         // In-flight guard: a running run on any target season → refuse, delete nothing.
         const hasRunning = targetSeasonIds.some((seasonId) =>
@@ -886,7 +898,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
         }
         return { status: "untracked" as const, removedSeasons: targetSeasonIds.length };
       },
-    )();
+    );
   }
 
   async retryFailedWorkflowRun(
@@ -894,7 +906,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     scopeArg: ScopeArg = undefined,
   ): Promise<{ status: "retried" | "not_retriable" }> {
     const scope = normalizeScope(scopeArg);
-    return this.db.transaction((): { status: "retried" | "not_retriable" } => {
+    return this.runTransaction((): { status: "retried" | "not_retriable" } => {
       const row = this.db
         .prepare("SELECT payload, account_id, connected_storage_id FROM workflow_runs WHERE id = ?")
         .get(workflowRunId) as
@@ -917,7 +929,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
       // upsertWorkflowRun preserves account_id / connected_storage_id on conflict.
       this.upsertWorkflowRun(retriedWorkflowRun(run, new Date().toISOString()));
       return { status: "retried" as const };
-    })();
+    });
   }
 
   async getTrackedSeasonState(
@@ -1166,12 +1178,12 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     const insert = this.db.prepare(
       "INSERT OR REPLACE INTO rule_patterns (rule_id, role, expression, label, sort_order, is_default) VALUES (?, ?, ?, ?, ?, ?)",
     );
-    this.db.transaction(() => {
+    this.runTransaction(() => {
       clear.run();
       for (const p of patterns) {
         insert.run(p.ruleId, p.role, p.expression, p.label, p.sortOrder, p.isDefault ? 1 : 0);
       }
-    })();
+    });
   }
 
   async listPromptOverrides(): Promise<PromptOverride[]> {
@@ -1192,12 +1204,12 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     const insert = this.db.prepare(
       "INSERT OR REPLACE INTO prompt_overrides (arbitration_kind, prompt_text, is_active) VALUES (?, ?, ?)",
     );
-    this.db.transaction(() => {
+    this.runTransaction(() => {
       clear.run();
       for (const o of overrides) {
         insert.run(o.arbitrationKind, o.promptText, o.isActive ? 1 : 0);
       }
-    })();
+    });
   }
 
   async getAccountSetting(accountId: string, key: string): Promise<string | null> {
@@ -1221,7 +1233,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     // earliest-created (primary) drive; skip accounts with no drive. Mirrors the
     // InMemory oracle: move tracked_seasons + workflow_runs + the episode bucket, and
     // count one per moved workflow_run.
-    return this.db.transaction((): number => {
+    return this.runTransaction((): number => {
       // Earliest-created drive per account = its primary (root) workspace.
       const drives = this.db
         .prepare("SELECT account_id, id FROM connected_storages ORDER BY created_at")
@@ -1268,7 +1280,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
         filled += 1;
       }
       return filled;
-    })();
+    });
   }
 
   private connectedStorageFromRow(row: Record<string, unknown>): ConnectedStorage {
@@ -1356,7 +1368,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     | { ok: true; storage: ConnectedStorage }
     | { ok: false; reason: "active_runs" | "not_found" }
   > {
-    const unbind = this.db.transaction(() => {
+    const unbind = this.runTransaction(() => {
       const row = this.db
         .prepare(
           "SELECT id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, status, frozen_reason, frozen_at, created_at " +
@@ -1382,7 +1394,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
         .run(storageId, accountId);
       return { ok: true as const, storage: this.connectedStorageFromRow(row) };
     });
-    return unbind();
+    return unbind;
   }
 
   async findConnectedStorageByUid(
