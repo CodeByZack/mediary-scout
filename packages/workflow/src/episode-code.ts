@@ -99,8 +99,9 @@ const VARIETY_PART_ORDER: Record<string, number> = { 上: 0, 中: 1, 下: 2 };
 /** TMDB 集名里的期号:`Episode 1` / `EP1` / `EP1-1` 都取 1。大小写不敏感 ——
  *  `EP1` 与 `episode 1` 同形不同案,漏 i 标志会让连字符形态整季失锚。 */
 const VARIETY_PERIOD_IN_NAME = /ep(?:isode)?\s*(\d{1,4})\b/i;
-/** TMDB 集名里的部分号,括号形态(地球超新鲜)。 */
-const VARIETY_PART_IN_NAME_PAREN = /\(Part\s*(\d{1,2})\)/i;
+/** TMDB 集名里的部分号,括号形态(地球超新鲜)。全角括号也认 —— 4K 资源站爱用
+ *  `第1期（上）` 这类全角包裹,只认半角会让括号形态整季失锚。 */
+const VARIETY_PART_IN_NAME_PAREN = /[（(]\s*Part\s*(\d{1,2})\s*[）)]/i;
 /** TMDB 集名里的部分号,连字符形态(花儿与少年 `EP1-2`);1-2 位避免吃掉年份/CRC。 */
 const VARIETY_PART_IN_NAME_DASH = /-\s*(\d{1,2})$/;
 
@@ -109,8 +110,13 @@ const VARIETY_PART_IN_NAME_DASH = /-\s*(\d{1,2})$/;
  *  `EP1-1` 会让锚定在线上整季失锚(2026-09-13 花儿与少年 S8 案:DB 里存的是
  *  「第1期上：…」,老正则 `/ep…\d/` 一个都匹配不到)。 */
 const VARIETY_PERIOD_IN_NAME_CN = /第\s*(\d{1,4})\s*(?:期|话|話)/;
-/** TMDB 集名里的部分标记,中文形态(`第1期上` → 上),按 上<中<下 映射到部分号。 */
-const VARIETY_PART_IN_NAME_CN = /第\s*\d{1,4}\s*(?:期|话|話)\s*([上中下])/;
+/** 「第N期」后的中文部分标记(`第1期上` → 上),按 上<中<下 映射到部分号。
+ *  ⚠️ 2026-09-13 花少 S8 案第 5 根因:TMDB 名是 `第1期上：…`(紧贴),但**文件名**是
+ *  `第1期（上）-4K`(全角括号)。旧正则要求「期」与「上」之间只有空白 → 上/中/下 三份
+ *  全部失锚回落机械 E(N) → 全塌成 S08E01,只能靠 AI 补认。现在文件名侧与 TMDB 名侧
+ *  **共用这一个正则**(此前 :155 另写一份内联正则,同样不认括号 —— 两处分叉的又一个实例)。
+ *  容忍:紧贴 / 空白 / 半角括号 / 全角括号,括号内可再带空白。 */
+const VARIETY_PART_IN_NAME_CN = /第\s*\d{1,4}\s*(?:期|话|話)\s*[（(]?\s*([上中下])/;
 
 /** TMDB 集名里的期号(英文 `Episode 1` / `EP1-1` 或中文 `第1期上` → "1"),无则 null。
  *  Part 锚定与 landing 的期号一致性校验共用 —— 两处各写一份正则时,连字符形态
@@ -151,8 +157,10 @@ function anchorVarietyPeriod(
   if (!episodeNames) return null;
   const n = Number(periodStr);
   if (!Number.isFinite(n) || n < 1) return null;
-  // 文件名里的部分标记(紧贴期号,容忍空格:第10期上 / 第10期 上 / 第1期下)。
-  const partOfFile = /第\s*\d{1,4}\s*期\s*([上中下])/.exec(name)?.[1] ?? null;
+  // 文件名里的部分标记 —— 与 TMDB 名侧共用 VARIETY_PART_IN_NAME_CN。
+  // ⚠️ 此前这里另写一份内联正则(同样不认括号),两处分叉导致「第1期（上）」在文件名侧
+  // 失锚、TMDB 名侧却正常,锚定永远对不上号(2026-09-13 花少 S8 实测)。
+  const partOfFile = VARIETY_PART_IN_NAME_CN.exec(name)?.[1] ?? null;
   // 收集该季里期号 == N 的所有集。
   const hits: Array<{ code: string; part: number | null }> = [];
   for (const [code, tmdbName] of Object.entries(episodeNames)) {

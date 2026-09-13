@@ -557,3 +557,40 @@ describe("syncSeasonAgainstMetadata — 播出日回填(年守卫④数据源)",
     expect(regressed.episodes[1]!.title).toBe("EP1-2");
   });
 });
+
+describe("anchorVarietyPeriod — 全角括号「第N期（上）」(2026-09-13 花少 S8 第 5 根因)", () => {
+  // 用户实测包(12:32 run)文件名带全角括号:
+  //   2026.09.10- 第1期（上）-4K.高码率.mp4 → 三份全塌 S08E01
+  // TMDB 名是紧贴形态「第1期上：…」。旧正则在**两处**各自不认括号:
+  //   ① VARIETY_PART_IN_NAME_CN(TMDB 名侧)② anchorVarietyPeriod 内联正则(文件名侧)
+  // ② 才是致命的那个 —— 文件名失锚 → partOfFile=null → 回落 src[0] → 三份同一集号。
+  const names = {
+    S08E01: "第1期上：王星越喜提首站导游",
+    S08E02: "第1期中：全员感受世界杯氛围",
+    S08E03: "第1期下：吴君如邓为船头热舞",
+    S08E04: "第 4 集",
+  };
+
+  it.each([
+    ["2026.09.10- 第1期（上）-4K.高码率.mp4", "S08E01"],
+    ["2026.09.10- 第1期（中）-4K.高码率.mp4", "S08E02"],
+    ["2026.09.11-第1期（下）-4K.高码率.mp4", "S08E03"],
+  ])("%s → %s", (file, want) => {
+    expect(episodeCodeFromFileName(file, [8], names)).toBe(want);
+  });
+
+  it("紧贴/空白形态不变;半角、全角括号新增支持", () => {
+    expect(episodeCodeFromFileName("第1期上.mp4", [8], names)).toBe("S08E01");
+    expect(episodeCodeFromFileName("第1期 中.mp4", [8], names)).toBe("S08E02");
+    // 旧正则对半角括号同样不认 —— 这次是顺带修上的,不是原本就能用。
+    expect(episodeCodeFromFileName("第1期(下).mp4", [8], names)).toBe("S08E03");
+  });
+
+  it("无锚定表时保持机械 E(N) 回退(零回归)", () => {
+    expect(episodeCodeFromFileName("2026.09.10- 第1期（上）-4K.高码率.mp4", [8])).toBe("S08E01");
+    expect(episodeCodeFromFileName("2026.09.11-第1期（下）-4K.高码率.mp4", [8])).toBe("S08E01");
+  });
+  // 注:VARIETY_PART_IN_NAME_PAREN 也容忍了全角括号,但英文形态只作用于 TMDB 名侧,
+  // 文件名侧只有「第N期」进锚定;而锚定的下标兜底(src[min(wanted, len-1)])对
+  // 「无部分号排最前」的排序太宽容,全角/半角 Part 在公开接口上无法区分,故不单测。
+});
