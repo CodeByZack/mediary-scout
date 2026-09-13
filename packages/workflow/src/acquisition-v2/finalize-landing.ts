@@ -21,11 +21,6 @@ export interface FinalizeLandingOptions {
   canonicalTitle: string;
   /** The task's target seasons (drives 归位 grouping). */
   seasons: number[];
-  /** AI 集数映射(§2.2)的 fileName→code 覆盖表。代码解析不出的 fansub/纯数字
-   *  文件名由映射仲裁给出 code 后,rename 与归位也必须用它 —— 否则 finalize 用
-   *  裸文件名重新解析(AI 映射的文件名原规则解析不出)会跳过这些文件,导致
-   *  renamed 空 → 空洞校验把 mark 也挡掉,映射的成果完全落不了地。 */
-  overrides?: Record<string, string>;
   /** 目标季目录里已存在的集代码(如 S03E01)。整包候选常把已入库的集再带一遍,
    *  原样 rename/归位会和季目录已有文件重名 —— 夸克对同名移动自动加 `(1)` 后缀
    *  (2026-08-21 线上:Season 03 已有 E01-E07,整包归位后出现 7 个 `(1)` 重复)。
@@ -35,17 +30,20 @@ export interface FinalizeLandingOptions {
    *  机会性顺带入库自此收口 —— 2026-08-30 中餐厅:一集「1-10季」合集包顺带
    *  重复入库 7 个早已获取的集。给了 onlyCodes 时,非缺集的解析成果随 wipe 丢弃。 */
   onlyCodes?: string[];
-  /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD")。与 digest 同一份年守卫数据:
-   *  文件自带日期与该集播出日矛盾的,finalize 也不落地(不依赖 digest 先行过滤)。 */
-  episodeAirDates?: Record<string, string>;
-  /** issue #44: 可配置集数解析规则。缺省 = 内置正则。 */
-  rules?: EpisodeParseRules;
+  /** ⛔ 只接「筛选条件」(skipCodes / onlyCodes),**不接任何解析输入**。
+   *  单次解析前这里还有 `overrides` / `episodeNames` / `episodeAirDates` / `rules`
+   *  四个 —— 那是给函数体自己裸解析文件名用的;台账化后判定全固化在 `digest.parsed`
+   *  里,四个参数变成**静默 no-op**:调用方以为传了生效,实际归位照旧。
+   *  已删除(2026-09-13),防止日后接错地方:要改解析行为,改 `digestStaging` 的入参。 */
 }
 
-/** buildSeasonMoves 的收窄选项(与 finalizeLanding 同名参数同义)。 */
+/** buildSeasonMoves 的收窄选项:只保留真在用的 `onlyCodes`。
+ *  ⚠️ 2026-09-13 单次解析前这里还有 `episodeAirDates`/`episodeNames` 两个字段 ——
+ *  那是给函数体自己裸解析用的(年守卫 + 锚定表)。台账化后判定全在 `digest.parsed`,
+ *  两个字段变成静默 no-op:调用方以为传了生效,实际归位照旧。死接口比没写过更危险,删。 */
 export interface SeasonMoveRestrictions {
+  /** 只归位缺集;非缺集副本留 staging 被 wipe(避免重复件与错季件)。 */
   onlyCodes?: string[];
-  episodeAirDates?: Record<string, string>;
 }
 
 export interface FinalizeLandingResult {
@@ -87,77 +85,65 @@ function stepLog(sandbox: TaskSandbox, title: string, step: string, detail: stri
 /** Group every in-scope video (and its subtitles) into per-season move batches.
  *  Videos move by their parsed episode code's season; a subtitle rides with its
  *  video when it parses to the same season, else stays in staging.
- *  `overrides`(AI 集数映射)优先于裸文件名解析。`skipCodes`(已在库的集)整体
- *  跳过 —— 整包候选重放已入库的集会撞夸克同名 `(1)` 重复。`restrictions`:
- *  onlyCodes 把归位收窄到缺集(非缺集副本留 staging 被 wipe);episodeAirDates
- *  启用年守卫(文件自带日期与该集播出日矛盾 → 不移动);同集多副本只移第一份。 */
+ *  判定来源是 `digest.parsed` 台账(digestStaging 唯一解析点)—— overrides /
+ *  episodeNames / 年守卫全在 digest 阶段固化,本函数只做筛选与分组,不再接解析输入。
+ *  `skipCodes`(已在库的集)整体跳过 —— 整包候选重放已入库的集会撞夸克同名 `(1)` 重复。
+ *  `restrictions.onlyCodes` 把归位收窄到缺集(非缺集副本留 staging 被 wipe)。
+ *  同集多副本只移第一份。 */
 export function buildSeasonMoves(
   digest: StagingDigest,
   seasons: number[],
-  overrides?: Record<string, string>,
   skipCodes?: string[],
   restrictions?: SeasonMoveRestrictions,
-  /** issue #44: 可配置集数解析规则。缺省 = 内置正则。 */
-  rules?: EpisodeParseRules,
 ): Array<{ season: number; fileIds: string[] }> {
   const seasonSet = new Set(seasons);
-  const junkNames = new Set(digest.junkSignals);
   const bySeason = new Map<number, string[]>();
-  const overridesTable = overrides ?? {};
   const skipSet = new Set(skipCodes ?? []);
   const onlySet = restrictions?.onlyCodes ? new Set(restrictions.onlyCodes) : null;
-  const airDates = restrictions?.episodeAirDates;
   const push = (season: number, fileId: string) => {
     const list = bySeason.get(season) ?? [];
     list.push(fileId);
     bySeason.set(season, list);
   };
 
+  // ★ 2026-09-13:不再自己解析,全部查 digest 的解析台账(digestStaging 是唯一解析点)。
+  // 旧实现这里裸调 episodeCodeFromPath 两遍(视频 + 字幕),与 digest 的判定是两套独立
+  // 解析;episodeNames 只喂给了 digest、这里漏喂 → 「第1期上/中/下」在 digest 认成 3 集、
+  // 在归位塌成 1 集(线上:移动 1 个文件 / 非缺集跳过 2 件)。台账里 code/dateRejected/junk
+  // 都已算好,overrides 也在 digest 阶段固化,这里只做筛选与分组。
   const acceptedCodes = new Set<string>();
-  for (const video of digest.videos) {
-    if (junkNames.has(basenameOf(video.path))) continue;
-    const base = basenameOf(video.path);
-    // issue #53:多季用 episodeCodeFromPath(含路径归季);overrides 先查完整路径(多季 key)再查 basename(单季 key)。
-    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, undefined, rules).code;
-    if (!code) continue;
-    const season = seasonFromEpisodeCode(code);
+  for (const file of digest.parsed) {
+    if (!file.isVideo || file.junk || !file.code || file.dateRejected) continue;
+    const season = seasonFromEpisodeCode(file.code);
     if (season === null || !seasonSet.has(season)) continue;
-    if (skipSet.has(code)) continue;
-    if (episodeDateConflict(code, base, airDates)) continue;
-    if (onlySet && !onlySet.has(code)) continue;
-    if (acceptedCodes.has(code)) continue; // 同集多副本(源包 `(1)` 件),只归位首个
-    acceptedCodes.add(code);
-    push(season, video.id);
+    if (skipSet.has(file.code)) continue;
+    if (onlySet && !onlySet.has(file.code)) continue;
+    if (acceptedCodes.has(file.code)) continue; // 同集多副本(源包 `(1)` 件),只归位首个
+    acceptedCodes.add(file.code);
+    push(season, file.fileId);
   }
-  for (const subtitle of digest.subtitles) {
-    if (junkNames.has(basenameOf(subtitle.path))) continue;
-    const base = basenameOf(subtitle.path);
-    // issue #53:字幕与视频同款路径解析。
-    const code = overridesTable[subtitle.path] ?? overridesTable[base] ?? episodeCodeFromPath(subtitle.path, seasons, undefined, rules).code;
-    if (code) {
-      const season = seasonFromEpisodeCode(code);
-      if (
-        season !== null &&
-        seasonSet.has(season) &&
-        !skipSet.has(code) &&
-        !episodeDateConflict(code, base, airDates) &&
-        (!onlySet || onlySet.has(code))
-      ) {
-        push(season, subtitle.id);
-      }
-    }
+  for (const file of digest.parsed) {
+    if (!file.isSubtitle || file.junk || !file.code || file.dateRejected) continue;
+    const season = seasonFromEpisodeCode(file.code);
+    if (season === null || !seasonSet.has(season)) continue;
+    if (skipSet.has(file.code) || (onlySet && !onlySet.has(file.code))) continue;
+    push(season, file.fileId);
   }
 
   return [...bySeason.entries()].map(([season, fileIds]) => ({ season, fileIds }));
 }
 
-/** Rename, 归位, mark, and wipe — the fast path's mechanical close-out. */
+/** Rename, 归位, mark, and wipe — the fast path's mechanical close-out.
+ *
+ *  ⛔ **只读台账,不接解析输入**(2026-09-13 单次解析)。`digest` 是 `digestStaging`
+ *  的唯一产出,overrides / episodeNames / episodeAirDates / rules 全在它上游喂一次、
+ *  由 `digest.parsed` 固化。本函数按 `fileId` 改名与归位,不重新解析文件名。
+ *  曾踩过 4 次静默分叉(花少 S8:digest 认 3 集、归位只落 1 个、结论却报 3 集已入库)。 */
 export async function finalizeLanding(
   options: FinalizeLandingOptions,
 ): Promise<FinalizeLandingResult> {
-  const { sandbox, digest, canonicalTitle, seasons, overrides, skipCodes, onlyCodes, episodeAirDates, rules } = options;
+  const { sandbox, digest, canonicalTitle, seasons, skipCodes, onlyCodes } = options;
   const seasonSet = new Set(seasons);
-  const overridesTable = overrides ?? {};
   const skipSet = new Set(skipCodes ?? []);
   const onlySet = onlyCodes ? new Set(onlyCodes) : null;
 
@@ -171,14 +157,13 @@ export async function finalizeLanding(
   const renamedPairs: Array<{ from: string; to: string }> = [];
   const skippedOnDisk: string[] = [];
   const skippedNotNeeded: string[] = [];
-  const junkNames = new Set(digest.junkSignals);
   const plannedCodes = new Set<string>();
-  for (const video of digest.videos) {
-    const base = basenameOf(video.path);
-    if (junkNames.has(base)) continue;
-    // issue #53:多季用 episodeCodeFromPath(含路径归季);overrides 先查完整路径再查 basename。
-    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, undefined, rules).code;
-    if (!code) continue;
+  // ★ 2026-09-13:改名全部查 digest 的解析台账(digestStaging 是唯一解析点),不再裸解析。
+  // 台账的 code 已含 overrides 优先级,日期守卫结果在 dateRejected 上 —— 与 digest 的
+  // 判定是同一份,不会再出现「digest 认 3 集、改名只认 1 集」的分叉。
+  for (const file of digest.parsed) {
+    if (!file.isVideo || file.junk || !file.code) continue;
+    const { base, code } = file;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
     if (skipSet.has(code)) {
@@ -186,7 +171,7 @@ export async function finalizeLanding(
       skippedOnDisk.push(code);
       continue;
     }
-    if (episodeDateConflict(code, base, episodeAirDates)) {
+    if (file.dateRejected) {
       // 年守卫:文件自带日期与该集播出日矛盾(典型:「1-10季」合集实际是第九季)→
       // 不采信,副本随 wipe 丢弃;与 digest 的 dateRejectedVideos 同一判据。
       skippedNotNeeded.push(`${base}(${code},季份日期不符)`);
@@ -204,7 +189,7 @@ export async function finalizeLanding(
     }
     plannedCodes.add(code);
     const newName = canonicalEpisodeFileName({ title: canonicalTitle, episodeCode: code, sourceName: base });
-    renames.push({ fileId: video.id, newName });
+    renames.push({ fileId: file.fileId, newName });
   }
   if (renames.length > 0) {
     const result = await sandbox.renameVideo({ renames });
@@ -225,34 +210,26 @@ export async function finalizeLanding(
         stepLog(sandbox, canonicalTitle, "改名失败", `${source} → ${newName} (${err})`);
       }
     }
-    // ★ 夸克 renameFile 后 file ID 会变,归位必须用 rename 后的当前 ID。
-    //   重读 staging,按新名建 name→currentId 映射,回填 digest 视频的 ID。
-    const stagingNow = await sandbox.inspectStaging();
-    const idByNewName = new Map(stagingNow.map((f) => [basenameOf(f.path), f.id]));
-    for (const { newName } of renames) {
-      const currentId = idByNewName.get(newName);
-      if (currentId) {
-        // 在 digest.videos 里找匹配旧 ID 的项,更新其 ID。
-        for (const video of digest.videos) {
-          // 通过原名→新名映射找对应的 video 项
-          const origBase = baseById.get(video.id);
-          const expectedRename = renames.find((r) => r.fileId === video.id);
-          if (expectedRename && expectedRename.newName === newName) {
-            video.id = currentId;
-            break;
-          }
-        }
-      }
-    }
+    // ⛔ rename 后**不重读 staging**:当前所有驱动的 renameFile 都不换文件 id ——
+    // 夸克实测不换 fid(quark-cookie-client.ts:响应体 data={} 不含新 fid,
+    // run 82a02640 的 34 条入参 fid 全部保留、名字全部变更);115 模拟器原地改 name
+    // 保留 id。digest 台账里的 fileId 因此始终有效,归位直接用,省一次网盘 listTree 调用。
+    // ⚠️ 新增网盘执行器时**必须保证 rename 不换 id**(或改完同步回填 digest.videos
+    // 与 digest.parsed 两张表),否则归位会拿改名前的旧 id 移动 → 静默失败。
+    // 2026-09-13 曾有 idRemap 重映射块 + 一次 inspectStaging,实测为纯 no-op 后删掉;
+    // 那句「夸克 renameFile 后 file ID 会变」的旧注释与 quark-cookie-client.ts 矛盾,
+    // 是同一轮误判成「线上 blocker」的源头。
   }
 
   // 2. 归位 into season directories (subtitles ride with their videos).
-  //    overrides 同样优先 —— 否则 fansub 名(如 `[NC-Raws] 狂飙 - 01.mkv`)虽然
-  //    rename 成功为 `狂飙.S01E01.mkv`,归位又按裸名解析会跳过,文件留在 staging 被清。
-  const moves = buildSeasonMoves(digest, seasons, overridesTable, skipCodes, {
-    ...(onlyCodes !== undefined ? { onlyCodes } : {}),
-    ...(episodeAirDates !== undefined ? { episodeAirDates } : {}),
-  }, rules);
+  //    归位读的是 digest 台账,与改名循环同一份 code —— 不存在「改名认了、归位不认」的分叉。
+  //    (曾踩过:fansub 名 `[NC-Raws] 狂飙 - 01.mkv` rename 成功为 `狂飙.S01E01.mkv`,
+  //    归位却按裸名重解析跳过去,文件留 staging 被清。)
+  // ★ 2026-09-13 单次解析:overrides / episodeNames / episodeAirDates / rules 全部只在
+  // digestStaging 入口喂一次,台账固化。这里只传筛选条件(缺集收窄 + 已在库跳过)。
+  const moves = buildSeasonMoves(digest, seasons, skipCodes, {
+    ...(onlyCodes === undefined ? {} : { onlyCodes }),
+  });
   // moveToSeason 的返回是「移动后整目录 reread」不是移动清单 —— 真实移动数从这里算。
   const movedCount = moves.reduce((sum, move) => sum + move.fileIds.length, 0);
   const movedSeasons: Record<number, number> = {};

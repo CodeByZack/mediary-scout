@@ -16,6 +16,36 @@ import type { EpisodeParseRules } from "../episode-code.js";
 import type { PromptOverrideLookup } from "../ruleset.js";
 import { runMovieFastPathAcquisition } from "../consumption/fast-path/movie.js";
 
+/** ⛔ 字幕总开关 —— 2026-09-13 用户拍板:暂不支持字幕,关掉。
+ *  只关这一个开关(方案 A):门禁、assrt 快照、字幕挑选、网盘转存实现全部原样保留,
+ *  恢复支持改回 true 即可。选它而非全量注释 250+ 处引用的原因:目标是「产品上不支持」,
+ *  清理债与目标不匹配,且要动 ports.ts 接口与 5 个网盘执行器的接口一致性。 */
+const SUBTITLES_ENABLED = false;
+
+/** 字幕三重闸门:token 已配 + **已知**非 CN origin + 执行器有 `transferSubtitleUrl` 能力。
+ *  抽成纯函数单独测试 —— 2026-09-13 字幕总开关关闭后,整条字幕链在生产上永不触发,
+ *  闸门语义只能在这里覆盖;恢复字幕那天直接对着它验收。
+ *
+ *  ⚠️ UNKNOWN origin(undefined/空数组)按**不合格**处理:niche 国产短剧恰恰最缺
+ *  origin 元数据,主流外语片几乎都有 —— 误判成会合格会在每次巡检烧掉共享 assrt
+ *  配额(20/min),还会给本来就讲中文的片子塞字幕工具。与 UI 文案「仅对非国产内容生效」一致。
+ *  ⚠️ 能力探测看**方法存在性**而非品牌字符串:光鸭/夸克哪天实现了该方法,字幕自动
+ *  点亮,闸门永远不会和执行器实际能做的事不一致(今天只有 115 实现了)。 */
+export function subtitleGateSatisfied(input: {
+  assrtToken?: string | undefined;
+  originCountries?: string[] | undefined;
+  canLandSubtitleUrls: boolean;
+}): boolean {
+  const origins = input.originCountries ?? [];
+  return (
+    input.assrtToken !== undefined &&
+    input.assrtToken.trim() !== "" &&
+    origins.length > 0 &&
+    origins.every((c) => c !== "CN") &&
+    input.canLandSubtitleUrls
+  );
+}
+
 /**
  * Phase 6 — the composition root. Given the real provider + executor, a model,
  * a target, and the already-resolved scoped handles, it wires the registry +
@@ -179,13 +209,19 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
   // Soft-fail: a flaky assrt / empty search sets an empty snapshot, never
   // blocks the video task. When the gates don't pass, the subtitle tools are
   // simply not registered (the agent never knows subtitles were an option).
+  // ⛔ 2026-09-13 用户拍板:暂不支持字幕(方案 A —— 只关总开关,不动执行器实现)。
+  // 影响:assrt 快照不预热、subtitle 工具不注册、快路径 subtitle 阶段不触发、
+  // 字幕不进解析台账的消费分支(buildSeasonMoves 仍查表但永远查不到字幕)。
+  // 5 个网盘执行器的 transferSubtitleUrl 实现原样保留 —— 变成休眠能力。
+  // 恢复支持字幕:把 SUBTITLES_ENABLED 改回 true,subtitleGateSatisfied 原样生效。
   const origins = request.originCountries ?? [];
   const subtitleActive =
-    request.assrtToken !== undefined &&
-    request.assrtToken.trim() !== "" &&
-    origins.length > 0 &&
-    origins.every((c) => c !== "CN") &&
-    typeof request.executor.transferSubtitleUrl === "function";
+    SUBTITLES_ENABLED &&
+    subtitleGateSatisfied({
+      assrtToken: request.assrtToken,
+      originCountries: request.originCountries,
+      canLandSubtitleUrls: typeof request.executor.transferSubtitleUrl === "function",
+    });
   if (subtitleActive) {
     const subtitleProvider: AssrtProviderPort =
       request.assrtProvider ?? new AssrtSubtitleProvider({ token: request.assrtToken! });

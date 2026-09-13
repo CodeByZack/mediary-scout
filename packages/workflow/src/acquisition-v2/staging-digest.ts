@@ -52,6 +52,39 @@ export interface StagingDigest {
   passes: boolean;
   /** Compact LLM-ready summary (the diagnostic arbitrator's input). */
   summary: string;
+  /** ★ 逐文件解析台账 —— digest 算一次,下游全部查表,不再各自裸解析。
+   *
+   *  2026-09-13 之前这条入库链有 **5 处独立**调用 `episodeCodeFromPath`:
+   *  ① 本文件(判定)② finalizeLanding 改名循环 ③ buildSeasonMoves 视频
+   *  ④ buildSeasonMoves 字幕 ⑤ landingParseRows(日志展示)。每加一个共享输入
+   *  (`episodeNames` / `episodeAirDates` / `rules` / `overrides`)都要喂 5 遍,漏一个
+   *  就静默分叉。`episodeNames` 这轮漏了 ②③④⑤,线上表现为:digest 认 3 集、归位只落
+   *  1 集、解析明细全写同一集号、结论却报 3 集已入库(花少 S8,四次实测)。
+   *
+   *  现在唯一入口是本函数 —— 以后再加共享输入只改 `StagingDigestInput` 一处。
+   *  ⚠️ 改名后 file id 会变(夸克),finalize 改名后重读 staging 回填 id;
+   *  本台账的 `code` 只跟 basename 走,改名后仍有效(规范名自带 SxxExx)。 */
+  parsed: StagingParsedFile[];
+}
+
+/** digest 解析台账里的单个文件(视频与字幕同表 —— 字幕跟随要靠它解析出的集号)。 */
+export interface StagingParsedFile {
+  /** 暂存区 file id。 */
+  fileId: string;
+  /** basename(overrides 与年守卫按它匹配)。 */
+  base: string;
+  /** 完整路径(多季归季用它)。 */
+  path: string;
+  isVideo: boolean;
+  isSubtitle: boolean;
+  /** 解析出的集号:overrides 优先,否则裸解析;未解析出 = null。
+   *  ⚠️ 即使 `dateRejected` 为 true 也保留原值 —— 下游要拿它打「季份日期不符」的
+   *  跳过日志,置 null 会让那个分支不可达、日志静默丢信息。采信与否看 `dateRejected`。 */
+  code: string | null;
+  /** 年守卫判成矛盾 → 不采信(不采信就是解析不出),但 `code` 保留原值供日志用。 */
+  dateRejected: boolean;
+  /** 命中 JUNK_FILE_MARKER 的附件(sample/广告/花絮)—— 不参与解析与归位。 */
+  junk: boolean;
 }
 
 export interface StagingDigestInput {
@@ -101,6 +134,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
   // 文件名的匹配对不上 overrides 里给的 key 时按 unparsed 处理(宁可少认不乱认)。
   const overrides = input.overrides ?? {};
 
+  const parsedFiles: StagingParsedFile[] = [];
   for (const video of videos) {
     const base = fileBaseName(video);
     // issue #39(用户拍板):命中 JUNK_FILE_MARKER 的视频一律只进 junkSignals
@@ -109,14 +143,23 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
     // 不区分严重/轻微:只要集数覆盖 need 即收尾,附件(含 sample/广告)都不否决整包。
     if (JUNK_FILE_MARKER.test(base)) {
       junkSignals.push(base);
+      parsedFiles.push({
+        fileId: video.id, base, path: video.path, isVideo: true, isSubtitle: false,
+        code: null, dateRejected: false, junk: true,
+      });
       continue;
     }
     const parsedCode =
       overrides[video.path] ?? overrides[base] ?? episodeCodeFromPath(video.path, input.seasons, input.episodeNames, input.rules).code;
+    // 年守卫(issue #21 同族):文件自带日期与该集播出日明显矛盾 → 不采信,
+    // 按解析失败处理(宁可少认不乱认;映射表给出的 code 同样过守卫)。
+    const rejected = parsedCode !== null && episodeDateConflict(parsedCode, base, input.episodeAirDates);
+    parsedFiles.push({
+      fileId: video.id, base, path: video.path, isVideo: true, isSubtitle: false,
+      code: parsedCode, dateRejected: rejected, junk: false,
+    });
     if (parsedCode) {
-      // 年守卫(issue #21 同族):文件自带日期与该集播出日明显矛盾 → 不采信,
-      // 按解析失败处理(宁可少认不乱认;映射表给出的 code 同样过守卫)。
-      if (episodeDateConflict(parsedCode, base, input.episodeAirDates)) {
+      if (rejected) {
         dateRejectedVideos.push(base);
         unparsedVideos.push(base);
       } else if (!episodeCodes.includes(parsedCode)) {
@@ -128,6 +171,22 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
       // 如 fansub 纯数字/怪命名),交 AI 集数映射(§2.2)。
       unparsedVideos.push(base);
     }
+  }
+  // 字幕:解析集号供跟随用(buildSeasonMoves)。年守卫照算 —— 旧逻辑在 buildSeasonMoves
+  // 里对字幕单独查过 episodeDateConflict,这里保真,行为不变(字幕名多无日期,守卫多惰性)。
+  // junk 标记也照算:旧 buildSeasonMoves 对字幕查过 junkNames(该集合只装视频 basename,
+  // 同 basename 的字幕实际不会命中),这里让判据完整可查。
+  for (const subtitle of subtitles) {
+    const base = fileBaseName(subtitle);
+    const junk = JUNK_FILE_MARKER.test(base);
+    const subtitleCode = junk
+      ? null
+      : overrides[subtitle.path] ?? overrides[base] ?? episodeCodeFromPath(subtitle.path, input.seasons, input.episodeNames, input.rules).code;
+    const subtitleRejected = subtitleCode !== null && episodeDateConflict(subtitleCode, base, input.episodeAirDates);
+    parsedFiles.push({
+      fileId: subtitle.id, base, path: subtitle.path, isVideo: false, isSubtitle: true,
+      code: subtitleCode, dateRejected: subtitleRejected, junk,
+    });
   }
 
   // Non-video, non-subtitle strays (nfo/jpg/cover) are residue, not junk-per-se —
@@ -167,6 +226,7 @@ export function digestStaging(input: StagingDigestInput): StagingDigest {
     coveredCodes,
     coveredFileMap,
     missingCodes,
+    parsed: parsedFiles,
     passes,
     summary: summarizeDigest({
       videos,
@@ -202,7 +262,7 @@ export function digestTitle(d: Pick<StagingDigest, "coveredCodes" | "missingCode
   return `代码识别出 0 集,还有 ${missing} 集没认出来${unparsedNote}`;
 }
 
-function summarizeDigest(d: Omit<StagingDigest, "summary">): string {
+function summarizeDigest(d: Omit<StagingDigest, "summary" | "parsed">): string {
   // issue #29 用户反馈:不要内部术语(脏包/判定/覆盖目标),写一句人话结论:
   // 转存后检查 → 认出哪几集 / 有几个文件看不出 / 暂时缺哪几集 / 日期拒收说明。
   const parts: string[] = [];

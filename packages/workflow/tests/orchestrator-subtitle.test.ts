@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockLanguageModelV3 } from "ai/test";
-import { runAcquisitionV2 } from "../src/acquisition-v2/orchestrator.js";
+import { runAcquisitionV2, subtitleGateSatisfied } from "../src/acquisition-v2/orchestrator.js";
 import type { ResourceProvider } from "../src/ports.js";
 import type { ResourceSnapshot } from "../src/domain.js";
 import type { AssrtCandidate, AssrtSubtitleFile } from "../src/subtitle-provider.js";
@@ -104,46 +104,77 @@ async function runWithGates(gates: {
   return state.searchCalls;
 }
 
-describe("runAcquisitionV2 subtitle pre-warming gates (capability-based, no brand hardcode)", () => {
-  it("pre-warms when assrtToken set + origin non-CN + executor can land subtitle urls", async () => {
+describe("subtitleGateSatisfied — 字幕三重闸门(纯函数,与品牌字符串无关)", () => {
+  // ⚠️ 2026-09-13 字幕总开关(SUBTITLES_ENABLED)关闭后,整条字幕链在生产上永不触发,
+  // 闸门语义只能在这里覆盖。原来这 7 个用例通过端到端预热次数验证闸门,现在会全部
+  // 塌成 0 次调用、失去区分度 —— 故把判据抽成 orchestrator.ts 的纯函数单独测。
+  // 恢复支持字幕时(开关改回 true),对着这一组用例验收即可。
+
+  it("闸门全过:token 已配 + 已知非 CN origin + 执行器能落字幕", () => {
     expect(
-      await runWithGates({ originCountries: ["US"], storageProvider: "pan115", assrtToken: "fake-token", subtitleCapable: true }),
-    ).toBe(1);
+      subtitleGateSatisfied({ assrtToken: "fake-token", originCountries: ["US"], canLandSubtitleUrls: true }),
+    ).toBe(true);
   });
 
-  it("does NOT pre-warm when origin includes CN", async () => {
+  it("brand 字符串无关:能力探测只看方法存在性 —— 光鸭哪天实现 transferSubtitleUrl 就自动点亮", () => {
+    // 判据签名里根本没有品牌参数,这就是「无关」的结构化表达。
     expect(
-      await runWithGates({ originCountries: ["CN"], storageProvider: "pan115", assrtToken: "fake-token", subtitleCapable: true }),
-    ).toBe(0);
+      subtitleGateSatisfied({ assrtToken: "fake-token", originCountries: ["US"], canLandSubtitleUrls: true }),
+    ).toBe(true);
   });
 
-  it("does NOT pre-warm when assrtToken is undefined", async () => {
-    expect(await runWithGates({ originCountries: ["US"], storageProvider: "pan115", subtitleCapable: true })).toBe(0);
+  it("多 origin 全非 CN 也算过", () => {
+    expect(
+      subtitleGateSatisfied({ assrtToken: "t", originCountries: ["US", "JP"], canLandSubtitleUrls: true }),
+    ).toBe(true);
   });
 
-  it("does NOT pre-warm when the executor lacks transferSubtitleUrl (quark today) — the gate can never disagree with the executor", async () => {
-    expect(
-      await runWithGates({ originCountries: ["US"], storageProvider: "quark", assrtToken: "fake-token", subtitleCapable: false }),
-    ).toBe(0);
+  it("origin 含 CN 即不过", () => {
+    expect(subtitleGateSatisfied({ assrtToken: "t", originCountries: ["CN"], canLandSubtitleUrls: true })).toBe(
+      false,
+    );
   });
 
-  it("brand string is IRRELEVANT: a capable executor pre-warms even under another provider name (光鸭 lights up the day its executor implements the method)", async () => {
+  it("多 origin 里含 CN 也不过", () => {
     expect(
-      await runWithGates({ originCountries: ["US"], storageProvider: "guangya", assrtToken: "fake-token", subtitleCapable: true }),
-    ).toBe(1);
+      subtitleGateSatisfied({ assrtToken: "t", originCountries: ["CN", "US"], canLandSubtitleUrls: true }),
+    ).toBe(false);
   });
 
-  it("does NOT pre-warm when origins include CN alongside others (multi-origin)", async () => {
+  it("token 未配即不过", () => {
+    expect(subtitleGateSatisfied({ originCountries: ["US"], canLandSubtitleUrls: true })).toBe(false);
+  });
+
+  it("token 是空串/纯空白也算未配", () => {
+    expect(subtitleGateSatisfied({ assrtToken: "", originCountries: ["US"], canLandSubtitleUrls: true })).toBe(false);
+    expect(subtitleGateSatisfied({ assrtToken: "   ", originCountries: ["US"], canLandSubtitleUrls: true })).toBe(
+      false,
+    );
+  });
+
+  it("执行器没有 transferSubtitleUrl 即不过(夸克今天如此)—— 闸门永不与执行器实际能力不一致", () => {
     expect(
-      await runWithGates({ originCountries: ["CN", "US"], storageProvider: "pan115", assrtToken: "fake-token", subtitleCapable: true }),
-    ).toBe(0);
+      subtitleGateSatisfied({ assrtToken: "t", originCountries: ["US"], canLandSubtitleUrls: false }),
+    ).toBe(false);
+  });
+
+  it("origin 元数据缺失/为空按**不合格** —— 防 niche 国产短剧每次巡检空烧 assrt 配额(20/min)", () => {
+    expect(subtitleGateSatisfied({ assrtToken: "t", originCountries: [], canLandSubtitleUrls: true })).toBe(false);
+    expect(subtitleGateSatisfied({ assrtToken: "t", canLandSubtitleUrls: true })).toBe(false);
   });
 });
 
-describe("unknown-origin gate (known non-CN required)", () => {
-  it("does NOT pre-warm when origin metadata is missing/empty — niche CN titles lacking TMDB metadata must not burn assrt quota on every patrol", async () => {
+describe("字幕总开关(SUBTITLES_ENABLED=false)—— 生产上整条字幕链休眠", () => {
+  // 端到端只断言一件生产可观测的事:assrt 完全不被调用。
+  // 闸门内部判据由上一组纯函数用例覆盖 —— 开关关闭时端到端会全部塌成 0,没有区分度。
+  it("即使三重闸门全过也不预热(2026-09-13 用户拍板暂不支持字幕)", async () => {
     expect(
-      await runWithGates({ originCountries: [], storageProvider: "pan115", assrtToken: "fake-token", subtitleCapable: true }),
+      await runWithGates({
+        originCountries: ["US"],
+        storageProvider: "pan115",
+        assrtToken: "fake-token",
+        subtitleCapable: true,
+      }),
     ).toBe(0);
   });
 });

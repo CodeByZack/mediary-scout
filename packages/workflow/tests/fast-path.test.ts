@@ -472,6 +472,45 @@ describe("runFastPathAcquisition — the zero-LLM happy path", () => {
     expect(result.coverage.obtained ?? []).not.toContain("S01E19");
   });
 
+  it("2026-09-12 假集号防线在 EP{N}-{K} 连字符形态上同样生效(此前整季惰性)", async () => {
+    // 花儿与少年 S8:TMDB E01=EP1-1。旧校验正则是 /Episode\s*(\d+)/,不匹配 EP1-1 →
+    // tmdbPeriod 为 null → 「filePeriod && tmdbPeriod」合取式短路 → 期号一致性校验
+    // 对整季跳过 → AI 可把「第5期上」硬安成 S08E01 迎合缺集 → 假入库。
+    const { sandbox } = await createSetup({
+      candidates: [{ id: "c1", title: "【综艺】花儿与少年第八季" }],
+      seasons: [8],
+      need: ["S08E01"],
+      title: "花儿与少年",
+      packs: {
+        c1: {
+          files: [
+            { path: "2026.09.20-第5期上.mp4", sizeBytes: 1_000_000_000 },
+            { path: "2026.09.21-第5期下.mp4", sizeBytes: 1_000_000_000 },
+          ],
+        },
+      },
+    });
+    const episodeNames = { S08E01: "EP1-1", S08E02: "EP1-2", S08E03: "EP1-3" };
+    const result = await runFastPathAcquisition({
+      sandbox,
+      model: sequentialModel([
+        '{"mapping":{"2026.09.20-第5期上.mp4":"S08E01"},"unmapped":[],"reasoning":"第5期上映射到 E01"}',
+        '{"action":"abandon","reasoning":"包内无第1期正片"}',
+      ]),
+      target: {
+        ...target,
+        title: "花儿与少年",
+        seasons: [8],
+        missingEpisodes: ["S08E01"],
+        episodeNames,
+      },
+      isChineseNative: true,
+    });
+    // 期号不一致(文件名第5期 ≠ TMDB EP1)→ 映射被拒 → 无覆盖、E01 未入库。
+    expect(result.coverage.coverageMet).toBe(false);
+    expect(result.coverage.obtained ?? []).not.toContain("S08E01");
+  });
+
   it("retries the next candidate when the diagnostic arbitrator says retry_other", async () => {
     const { sandbox, s1, storage } = await createSetup({
       candidates: [
