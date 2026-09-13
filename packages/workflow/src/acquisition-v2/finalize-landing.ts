@@ -210,14 +210,19 @@ export async function finalizeLanding(
         stepLog(sandbox, canonicalTitle, "改名失败", `${source} → ${newName} (${err})`);
       }
     }
-    // ★ 夸克 renameFile 后 file ID 会变,归位必须用 rename 后的当前 ID。
-    //   重读 staging,按新名建 name→currentId 映射,回填 digest 视频的 ID。
+    // 重读 staging,按新名建 name→currentId 映射,回填 digest 视频的 ID。
+    // ⚠️ 当前所有驱动的 rename 都**不换 id**,所以这段现在全是 no-op:
+    //   夸克实测不换 fid(quark-cookie-client.ts:响应体 data={} 不含新 fid,
+    //   run 82a02640 的 34 条入参 fid 全部保留、名字全部变更);
+    //   115 模拟器同样原地改 name 保留 id。
+    // 保留理由:`TaskSandbox` 是驱动无关的。新增执行器若 rename 换 id,归位必须拿
+    // rename 后的当前 id,否则拿改名前的旧 id 去网盘移动 → 文件找不到 → 静默失败。
+    // ⚠️ 2026-09-13 曾在此误判为「夸克 blocker」:旧注释写「夸克 renameFile 后 file ID
+    // 会变」,与 quark-cookie-client.ts 的实测结论矛盾,触发条件其实不存在。
+    // 旧 id → 新 id 一次建好,digest.videos 与解析台账共用 —— 两张表必须同步,
+    // 归位读的是 digest.parsed,只回填前者会让归位拿旧 id。
     const stagingNow = await sandbox.inspectStaging();
     const idByNewName = new Map(stagingNow.map((f) => [basenameOf(f.path), f.id]));
-    // 旧 id → 新 id 一次建好,digest.videos 与解析台账共用。两张表必须同步 ——
-    // 归位读的是 digest.parsed,只回填 digest.videos 会让归位拿着 rename 前的旧 id
-    // 去网盘移动(夸克会换 fid),文件根本找不到,静默移动失败。
-    // fake 执行器 rename 不换 id,这个坑单测抓不到,见「rename 换 id」用例。
     const idRemap = new Map<string, string>();
     for (const video of digest.videos) {
       const expectedRename = renames.find((r) => r.fileId === video.id);
