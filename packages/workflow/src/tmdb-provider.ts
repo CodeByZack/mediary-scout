@@ -813,16 +813,26 @@ function optionalSeasonSummary(value: Record<string, unknown>): {
 function optionalSeasonEpisode(value: Record<string, unknown>): {
   episode_number?: number;
   air_date?: string | null;
+  name?: string;
 } {
   const episode: {
     episode_number?: number;
     air_date?: string | null;
+    name?: string;
   } = {};
   const episodeNumber = optionalNumberValue(value["episode_number"]);
   if (episodeNumber !== undefined) {
     episode.episode_number = episodeNumber;
   }
   episode.air_date = typeof value["air_date"] === "string" ? value["air_date"] : null;
+  // ★ 2026-09-13(花少 S8 案第 3 根因):此前只抽 episode_number/air_date,把 TMDB 的
+  // name 整个丢掉 → prepareTrackingTarget 的 episodeNames 恒为空对象 → 回落 undefined
+  // → 综艺 Part 锚定线上永远拿不到数据。interface 里 name 字段的注释写着「Part 锚定
+  // 数据源」,但本函数从未赋值 —— 接口声明与实现长期不一致,静默失锚。
+  // zh-CN 默认语言下 name 形如「第1期上：王星越喜提首站导游」,直接带期号 + 上/中/下。
+  if (typeof value["name"] === "string" && value["name"].trim() !== "") {
+    episode.name = value["name"];
+  }
   return episode;
 }
 

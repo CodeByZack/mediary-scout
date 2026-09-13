@@ -100,7 +100,106 @@ describe("TmdbMetadataProvider", () => {
           `2026-06-${String(index + 1).padStart(2, "0")}`,
         ]),
       ),
+      // 2026-09-13:集名随目标一起产出 —— 全 24 集(name 不看 air_date,未播集也有名)。
+      // 这张表是综艺 Part 锚定的唯一数据源;此前 optionalSeasonEpisode 只抽
+      // episode_number/air_date,name 被整个丢掉 → 这张表恒空 → 锚定线上永久失武。
+      episodeNames: Object.fromEntries(
+        Array.from({ length: 24 }, (_, index) => [
+          `S01E${String(index + 1).padStart(2, "0")}`,
+          `Episode ${index + 1}`,
+        ]),
+      ),
     });
+  });
+
+  it("extracts TMDB episode name for variety shows (zh-CN 期号 + 上中下) — Part 锚定数据源", async () => {
+    // 2026-09-13 花少 S8 案第 3 根因(optionalSeasonEpisode 丢 name)的回归测试。
+    // fixture 取自线上 TMDB 代理实测(https://tmdb-proxy.mediaryscout.app/tv/121876/season/8?language=zh-CN)。
+    const provider = new TmdbMetadataProvider({
+      readToken: "token",
+      fetchJson: async (url) => {
+        if (url.includes("/tv/121876?")) {
+          return {
+            id: 121876,
+            name: "花儿与少年",
+            original_name: "花儿与少年",
+            first_air_date: "2014-04-25",
+            number_of_episodes: 100,
+            last_episode_to_air: { season_number: 8, episode_number: 3 },
+            seasons: [{ season_number: 8, episode_count: 4 }],
+          };
+        }
+        if (url.includes("/tv/121876/season/8?")) {
+          return {
+            id: 901,
+            season_number: 8,
+            name: "2026",
+            episodes: [
+              { episode_number: 1, name: "第1期上：王星越喜提首站导游", air_date: "2026-09-10" },
+              { episode_number: 2, name: "第1期中：全员感受世界杯氛围", air_date: "2026-09-10" },
+              { episode_number: 3, name: "第1期下：吴君如邓为船头热舞", air_date: "2026-09-11" },
+              { episode_number: 4, name: "第 4 集", air_date: "2026-09-17" },
+            ],
+          };
+        }
+        throw new Error(`Unexpected URL ${url}`);
+      },
+    });
+
+    const target = await prepareTrackingTarget({
+      tmdbId: 121876,
+      mediaType: "tv",
+      seasonNumber: 8,
+      qualityPreference: "4K",
+      metadataProvider: provider,
+    });
+
+    expect(target.episodeNames).toEqual({
+      S08E01: "第1期上：王星越喜提首站导游",
+      S08E02: "第1期中：全员感受世界杯氛围",
+      S08E03: "第1期下：吴君如邓为船头热舞",
+      S08E04: "第 4 集",
+    });
+  });
+
+  it("omits empty episode names instead of storing blank entries", async () => {
+    const provider = new TmdbMetadataProvider({
+      readToken: "token",
+      fetchJson: async (url) => {
+        if (url.includes("/tv/555?")) {
+          return {
+            id: 555,
+            name: "无名剧集",
+            original_name: "无名剧集",
+            first_air_date: "2026-01-01",
+            number_of_episodes: 2,
+            seasons: [{ season_number: 1, episode_count: 2 }],
+          };
+        }
+        if (url.includes("/tv/555/season/1?")) {
+          return {
+            season_number: 1,
+            episodes: [
+              { episode_number: 1, name: "正名", air_date: "2026-01-01" },
+              { episode_number: 2, name: "   ", air_date: "2026-01-02" },
+              { episode_number: 3, air_date: "2026-01-03" },
+            ],
+          };
+        }
+        throw new Error(`Unexpected URL ${url}`);
+      },
+    });
+
+    const target = await prepareTrackingTarget({
+      tmdbId: 555,
+      mediaType: "tv",
+      seasonNumber: 1,
+      qualityPreference: "4K",
+      metadataProvider: provider,
+    });
+
+    // 空串/纯空白/缺字段一律不进表,避免下游把空白当占位符以外的真名。
+    expect(target.episodeNames).toEqual({ S01E01: "正名" });
   });
 
   it("uses aired season episodes when last_episode_to_air is absent or from another season", async () => {
