@@ -16,6 +16,12 @@ import type { EpisodeParseRules } from "../episode-code.js";
 import type { PromptOverrideLookup } from "../ruleset.js";
 import { runMovieFastPathAcquisition } from "../consumption/fast-path/movie.js";
 
+/** ⛔ 字幕总开关 —— 2026-09-13 用户拍板:暂不支持字幕,关掉。
+ *  只关这一个开关(方案 A):门禁、assrt 快照、字幕挑选、网盘转存实现全部原样保留,
+ *  恢复支持改回 true 即可。选它而非全量注释 250+ 处引用的原因:目标是「产品上不支持」,
+ *  清理债与目标不匹配,且要动 ports.ts 接口与 5 个网盘执行器的接口一致性。 */
+const SUBTITLES_ENABLED = false;
+
 /**
  * Phase 6 — the composition root. Given the real provider + executor, a model,
  * a target, and the already-resolved scoped handles, it wires the registry +
@@ -180,7 +186,13 @@ export async function runAcquisitionV2(request: RunAcquisitionV2Request): Promis
   // blocks the video task. When the gates don't pass, the subtitle tools are
   // simply not registered (the agent never knows subtitles were an option).
   const origins = request.originCountries ?? [];
+  // ⛔ 2026-09-13 用户拍板:暂不支持字幕(方案 A —— 只关总闸门,不动执行器实现)。
+  // 影响:assrt 快照不预热、subtitle 工具不注册、快路径 subtitle 阶段不触发、
+  // 字幕不进解析台账的消费分支(buildSeasonMoves 仍查表但永远查不到字幕)。
+  // 5 个网盘执行器的 transferSubtitleUrl 实现原样保留 —— 变成休眠能力。
+  // 恢复支持字幕:把 SUBTITLES_ENABLED 改回 true,三重闸门原样生效。
   const subtitleActive =
+    SUBTITLES_ENABLED &&
     request.assrtToken !== undefined &&
     request.assrtToken.trim() !== "" &&
     origins.length > 0 &&
