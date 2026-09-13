@@ -32,8 +32,8 @@ const SUBTITLES_ENABLED = false;
  *  ⚠️ 能力探测看**方法存在性**而非品牌字符串:光鸭/夸克哪天实现了该方法,字幕自动
  *  点亮,闸门永远不会和执行器实际能做的事不一致(今天只有 115 实现了)。 */
 export function subtitleGateSatisfied(input: {
-  assrtToken: string | undefined;
-  originCountries: string[] | undefined;
+  assrtToken?: string | undefined;
+  originCountries?: string[] | undefined;
   canLandSubtitleUrls: boolean;
 }): boolean {
   const origins = input.originCountries ?? [];
