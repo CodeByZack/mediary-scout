@@ -53,6 +53,44 @@ async function landFile(storage: Storage115Simulator, stagingDirectoryId: string
   return id!;
 }
 
+/** renameFile 换一个全新 file id 的存储 —— 复现夸克 rename 后 fid 变更的行为。
+ *  `Storage115Simulator.renameFile` 是原地改 name、保留同一个 id,所以整套单测
+ *  从来没走过「归位拿到的 id 与改名前不同」这条路。 */
+class IdChangingSimulator extends Storage115Simulator {
+  override async renameFile(input: {
+    directoryId: string;
+    fileId: string;
+    newName: string;
+  }): Promise<void> {
+    const { directoryId, fileId, newName } = input;
+    const [file] = (await this.listTree({ directoryId })).filter((f) => f.id === fileId);
+    if (!file) throw new Error(`SIM_FILE_NOT_FOUND: ${fileId}`);
+    await this.deleteFiles({ directoryId, fileIds: [fileId] });
+    await this.transferSubtitleUrl({
+      url: "http://x/file",
+      filename: newName,
+      intoDirectoryId: directoryId,
+    });
+  }
+}
+
+/** 夸克形态沙盒:rename 换 id。`finalizeLanding` 的归位必须拿 rename 后的当前 id。 */
+async function createIdChangingSandbox(need = ["S01E01", "S01E02"]) {
+  const provider = new FakeResourceProviderV2({ results: {} });
+  const storage = new IdChangingSimulator({ packs: {} });
+  const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
+  const s1 = await storage.createDirectory({ name: "Season 1", parentId: "root" });
+  const sandbox = new TaskSandbox({
+    provider,
+    storage,
+    stagingDirectoryId,
+    targetSeasonDirectoryIds: { 1: s1 },
+    need,
+    canonicalTitle: "狂飙",
+  });
+  return { sandbox, storage, stagingDirectoryId, s1 };
+}
+
 describe("seasonFromEpisodeCode", () => {
   it("reads the season from SxxExx", () => {
     expect(seasonFromEpisodeCode("S01E13")).toBe(1);
@@ -344,10 +382,10 @@ describe("finalizeMovieLanding", () => {
     ]);
   });
 });
-it("功能3+功能2: overrides 喂给 finalize 后 rename 能落地,mark 以真实改名结果为准", async () => {
-    // 落盘 `狂飙 - 01.mkv`:digest 通过 overrides(AI 集数映射)认为它是 S01E01,
-    // 且 finalize 也收到同一份 overrides → rename 用映射 code 改成 `狂飙.S01E01.mkv`
-    // → renamed 非空 → mark S01E01(不是空洞,文件真的规整落位)。
+it("功能3+功能2: AI 映射(overrides)经 digest 固化后 rename 能落地,mark 以真实改名为准", async () => {
+    // 落盘 `狂飙 - 01.mkv`:digestStaging 通过 overrides(AI 集数映射)认为它是 S01E01,
+    // 台账固化 → rename 用映射 code 改成 `狂飙.S01E01.mkv` → renamed 非空 →
+    // mark S01E01(不是空洞,文件真的规整落位)。
     const { sandbox, storage, stagingDirectoryId, s1 } = await createSandbox(["S01E01", "S01E02"]);
     await landFile(storage, stagingDirectoryId, "狂飙 - 01.mkv");
     const digest = digestStaging({
@@ -360,20 +398,44 @@ it("功能3+功能2: overrides 喂给 finalize 后 rename 能落地,mark 以真�
     expect(digest.episodeCodes).toEqual(["S01E01"]);
     expect(digest.passes).toBe(false);
 
-    const result = await finalizeLanding({
-      sandbox,
-      digest,
-      canonicalTitle: "狂飙",
-      seasons: [1],
-      overrides: { "狂飙 - 01.mkv": "S01E01" },
-    });
+    const result = await finalizeLanding({ sandbox, digest, canonicalTitle: "狂飙", seasons: [1] });
     // 映射表让 rename 落地:原名 `狂飙 - 01.mkv` → `狂飙.S01E01.mkv`。
+    // ⛔ 2026-09-13:overrides 只喂 digestStaging 一次,不再喂 finalizeLanding ——
+    // 那是静默 no-op(台账已是权威),曾造成「digest 认、finalize 不认」的分叉。
     expect(result.renamed).toEqual(["狂飙.S01E01.mkv"]);
     expect(result.marked).toEqual(["S01E01"]);
     // 归位到 Season 1(staging 里 rename 后 move 过去)。staging 目录被 wipe 删除,
     // 文件系统里只剩 season 目录里这一份。
     expect(result.discarded.length).toBeGreaterThan(0); // staging wipe:文件+目录 id
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual(["狂飙.S01E01.mkv"]);
+  });
+
+  it("rename 换 id(夸克形态):归位必须拿 rename 后的当前 id,解析台账同步回填", async () => {
+    // ★ 2026-09-13 踩到的回归:单次解析改造后 `buildSeasonMoves` 从 `digest.parsed`
+    // 读 `file.fileId`,而 rename 后的 id 重映射循环只回填 `digest.videos[].id` ——
+    // 两张表分叉。fake 执行器 rename 不换 id,所以此前所有单测都绿,但夸克 rename
+    // 后 fid 会变:归位拿改名前的旧 id 去网盘移动 → 文件找不到 → 静默移动失败,
+    // 用户看到「改名成功、归位 0 件」而结论仍报已入库。
+    const { sandbox, storage, stagingDirectoryId, s1 } = await createIdChangingSandbox(["S01E01"]);
+    const beforeId = await landFile(storage, stagingDirectoryId, "狂飙 - 01.mkv");
+    const digest = digestStaging({
+      files: await sandbox.inspectStaging(),
+      seasons: [1],
+      needCodes: ["S01E01"],
+      overrides: { "狂飙 - 01.mkv": "S01E01" },
+    });
+    expect(digest.parsed.map((f) => f.fileId)).toEqual([beforeId]);
+    expect(digest.parsed[0]?.code).toBe("S01E01");
+
+    const result = await finalizeLanding({ sandbox, digest, canonicalTitle: "狂飙", seasons: [1] });
+    expect(result.renamed).toEqual(["狂飙.S01E01.mkv"]);
+
+    // 关键断言:文件真落到 Season 1。id 没回填就会在这里静默失败(moved 空、mark 空)。
+    const landed = await storage.listTree({ directoryId: s1 });
+    expect(landed.map((f) => f.path)).toEqual(["狂飙.S01E01.mkv"]);
+    expect(result.marked).toContain("S01E01");
+    // rename 确实换了 id —— 若这里仍是原 id,说明用例没造出真实场景,断言是空的。
+    expect(landed[0]?.id).not.toBe(beforeId);
   });
 
   it("空洞校验: 无 overrides 也解析不出 → rename/mark 都保持空(以真实改名为准,不采信 digest)", async () => {

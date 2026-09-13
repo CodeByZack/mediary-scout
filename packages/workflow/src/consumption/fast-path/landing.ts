@@ -582,12 +582,8 @@ export async function closeOutTvLanding(options: {
           seasons,
           skipCodes: [...onDiskCodes],
           onlyCodes: needCodes,
-          ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
-          // ★ 2026-09-13:finalize 也必须有锚定表。缺它这里用机械 E(N) 重解析,
-          // 「第1期上/中/下」全塌成 S08E01 → digest 认 3 集、归位只落 1 个
-          // (花少 S8 实测:移动 1 个文件 / 非缺集跳过 2 件 / 结论却说 3 集已入库)。
-          ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
-          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
+          // ⛔ 单次解析:overrides / episodeNames / episodeAirDates / rules 已在
+          // digestStaging 入口喂过一次、由 digest.parsed 固化 —— 这里再传是静默 no-op。
         });
         const skipNote =
           // 九轮复核:与归位去集号一致——已在库/非缺集跳过的明细都在 args.files。
@@ -694,12 +690,10 @@ export async function closeOutTvLanding(options: {
           digest: landingDigest,
           canonicalTitle: target.title,
           seasons,
-          ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
           skipCodes: [...onDiskCodes],
           onlyCodes: needCodes,
-          ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
-          ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
-          ...(mappingTable ? { overrides: mappingTable } : {}),
+          // ⛔ mappingTable 已在上面的 ram() 喂给 digestStaging(landingDigest 带着它),
+          // 这里再传 overrides 是静默 no-op —— 台账里的 code 已经是映射后的结果。
         });
         const skipNote =
           // 九轮复核:与归位去集号一致——已在库/非缺集跳过的明细都在 args.files。
