@@ -269,6 +269,18 @@ describe("anchorVarietyPeriod — 一期拆多部分的 TMDB 集名形态(en-US 
     expect(episodeCodeFromFileName("2025.08.23-第2期中.mp4", [7], divasS7Zn)).toBe("S07E03");
   });
 
+  it("zh-CN 送机篇(衍生片段)不抢集号:它带「第1期」会在暂存区排在「第1期上」前面," +
+    "digest 同码只留第一个 → 衍生片段抢走 E01、真片被清掉(线上 run 2dad0bab 实测)", () => {
+    expect(episodeCodeFromFileName("2026.09.05-送机篇第1期.mp4", [8], divasS8Zn)).toBeNull();
+    // 同期正片各就各位,不受影响
+    expect(episodeCodeFromFileName("2026.09.10-第1期上.mp4", [8], divasS8Zn)).toBe("S08E01");
+    expect(episodeCodeFromFileName("2026.09.10-第1期中.mp4", [8], divasS8Zn)).toBe("S08E02");
+    expect(episodeCodeFromFileName("2026.09.11-第1期下.mp4", [8], divasS8Zn)).toBe("S08E03");
+    // 同族的其它衍生 token 此前已在黑名单(陪看/超前),一并回归
+    expect(episodeCodeFromFileName("2026.09.04-七福陪看记第1期.mp4", [8], divasS8Zn)).toBeNull();
+    expect(episodeCodeFromFileName("2026.09.09-超前营业第1期.mp4", [8], divasS8Zn)).toBeNull();
+  });
+
   it("zh-CN 无期号集名(地球超新鲜):回退机械 E(N),不错锚", () => {
     expect(episodeCodeFromFileName("2025.07.27-第1期上.mp4", [1], wowS1Zn)).toBe("S01E01");
     expect(episodeCodeFromFileName("2025.07.28-第1期下.mp4", [1], wowS1Zn)).toBe("S01E01");

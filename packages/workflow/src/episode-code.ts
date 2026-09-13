@@ -40,9 +40,12 @@ function isPlausibleEpisodeNumber(n: number): boolean {
 /**
  * 综艺衍生内容 token —— 只给「第N期」规则当黑名单用(见规则 4 注释)。
  * 中文 token 直接子串匹配;英文 token 带词边界(避免 Episode 里的 "ed"、top 里的 "op" 误伤)。
+ * 「送机」是 2026-09-13 补的:花儿与少年「送机篇第1期」是成员送机衍生片段,TMDB 无对应集,
+ * 但它带「第1期」会被解析成 S08E01,在暂存区里排在「第1期上」前面 → digest 同码只留第一个
+ * (:122)→ 衍生片段抢走 E01 槽位、真片被当多余文件清掉(线上 run 2dad0bab 实测)。
  */
 const VARIETY_DERIVATIVE_MARKER =
-  /加更|加长|直拍|手记|纯享|花絮|彩蛋|抢先|超前|幕后|访谈|坦白局|速看|特别企划|衍生|独家|高光|精选|会员|陪看|点评|repo|recap|vlog|bonus|\bpv\b|\bop\b|\bed\b|\bcut\b|\bplus\b/i;
+  /加更|加长|直拍|手记|纯享|花絮|彩蛋|抢先|超前|幕后|访谈|坦白局|速看|特别企划|衍生|独家|高光|精选|会员|陪看|点评|送机|repo|recap|vlog|bonus|\bpv\b|\bop\b|\bed\b|\bcut\b|\bplus\b/i;
 
 /**
  * 从文件名里抽取显式播出日期:`2025.08.29` / `2025-08-29` / `2025-08-29` / `20250829` /
