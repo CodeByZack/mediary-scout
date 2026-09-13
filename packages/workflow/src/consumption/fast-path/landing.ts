@@ -589,6 +589,10 @@ export async function closeOutTvLanding(options: {
           skipCodes: [...onDiskCodes],
           onlyCodes: needCodes,
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+          // ★ 2026-09-13:finalize 也必须有锚定表。缺它这里用机械 E(N) 重解析,
+          // 「第1期上/中/下」全塌成 S08E01 → digest 认 3 集、归位只落 1 个
+          // (花少 S8 实测:移动 1 个文件 / 非缺集跳过 2 件 / 结论却说 3 集已入库)。
+          ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
           ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
         });
         const skipNote =
@@ -700,6 +704,7 @@ export async function closeOutTvLanding(options: {
           skipCodes: [...onDiskCodes],
           onlyCodes: needCodes,
           ...(options.episodeAirDates !== undefined ? { episodeAirDates: options.episodeAirDates } : {}),
+          ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
           ...(mappingTable ? { overrides: mappingTable } : {}),
         });
         const skipNote =

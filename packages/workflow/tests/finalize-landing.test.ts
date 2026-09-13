@@ -90,6 +90,33 @@ describe("buildSeasonMoves", () => {
     const bySeason = Object.fromEntries(moves.map((m) => [m.season!, m.fileIds]));
     expect(bySeason[1]).toEqual(["v1", "v2"]);
   });
+
+  it("bugfix 2026-09-13: 带 TMDB 集名表时「第N期上/中/下」各归其位,不再全塌成同一集号", () => {
+    // 花少 S8 案的最后一层:digest 认出 3 集,但 finalize 此前没有锚定表,
+    // 三个文件都用机械 E(N) 重解析成 S08E01 → 归位只落第一份,其余判「同集重复」丢弃。
+    // 线上表现:「移动 1 个文件 / 非缺集跳过 2 件」,结论却说「S08E01,E08E02,E08E03 已入库」。
+    const files = [
+      { id: "v1", path: "2026.09.10-第1期上.mp4", sizeBytes: 1, isVideo: true, isSubtitle: false },
+      { id: "v2", path: "2026.09.10-第1期中.mp4", sizeBytes: 1, isVideo: true, isSubtitle: false },
+      { id: "v3", path: "2026.09.11-第1期下.mp4", sizeBytes: 1, isVideo: true, isSubtitle: false },
+    ];
+    const digest = digestStaging({ files, seasons: [8], needCodes: ["S08E01", "S08E02", "S08E03"] });
+    const names = {
+      S08E01: "第1期上：王星越喜提首站导游",
+      S08E02: "第1期中：全员感受世界杯氛围",
+      S08E03: "第1期下：吴君如邓为船头热舞",
+    };
+    const bySeason = (moves: ReturnType<typeof buildSeasonMoves>) =>
+      Object.fromEntries(moves.map((m) => [m.season!, m.fileIds]));
+    // 无锚定表(旧行为):三份全塌 S08E01,只归位第一份。
+    expect(bySeason(buildSeasonMoves(digest, [8]))[8]).toEqual(["v1"]);
+    // 有锚定表:三份各归其位。
+    expect(bySeason(buildSeasonMoves(digest, [8], undefined, undefined, { episodeNames: names }))[8]).toEqual([
+      "v1",
+      "v2",
+      "v3",
+    ]);
+  });
 });
 
 describe("finalizeLanding", () => {

@@ -38,6 +38,10 @@ export interface FinalizeLandingOptions {
   /** TMDB 各集播出日(SxxExx→"YYYY-MM-DD")。与 digest 同一份年守卫数据:
    *  文件自带日期与该集播出日矛盾的,finalize 也不落地(不依赖 digest 先行过滤)。 */
   episodeAirDates?: Record<string, string>;
+  /** TMDB 各集原始 name。与 digest 同一张锚定表 —— 缺它 finalize 会用机械 E(N)
+   *  重新解析文件名,综艺「第N期上/中/下」全塌成同一集号:digest 认出 3 集,
+   *  归位只落 1 个(2026-09-13 花少 S8 实测:移动 1 个文件/非缺集跳过 2 件)。 */
+  episodeNames?: Record<string, string>;
   /** issue #44: 可配置集数解析规则。缺省 = 内置正则。 */
   rules?: EpisodeParseRules;
 }
@@ -46,6 +50,7 @@ export interface FinalizeLandingOptions {
 export interface SeasonMoveRestrictions {
   onlyCodes?: string[];
   episodeAirDates?: Record<string, string>;
+  episodeNames?: Record<string, string>;
 }
 
 export interface FinalizeLandingResult {
@@ -107,6 +112,7 @@ export function buildSeasonMoves(
   const skipSet = new Set(skipCodes ?? []);
   const onlySet = restrictions?.onlyCodes ? new Set(restrictions.onlyCodes) : null;
   const airDates = restrictions?.episodeAirDates;
+  const anchorNames = restrictions?.episodeNames;
   const push = (season: number, fileId: string) => {
     const list = bySeason.get(season) ?? [];
     list.push(fileId);
@@ -118,7 +124,7 @@ export function buildSeasonMoves(
     if (junkNames.has(basenameOf(video.path))) continue;
     const base = basenameOf(video.path);
     // issue #53:多季用 episodeCodeFromPath(含路径归季);overrides 先查完整路径(多季 key)再查 basename(单季 key)。
-    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, undefined, rules).code;
+    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, anchorNames, rules).code;
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
@@ -133,7 +139,7 @@ export function buildSeasonMoves(
     if (junkNames.has(basenameOf(subtitle.path))) continue;
     const base = basenameOf(subtitle.path);
     // issue #53:字幕与视频同款路径解析。
-    const code = overridesTable[subtitle.path] ?? overridesTable[base] ?? episodeCodeFromPath(subtitle.path, seasons, undefined, rules).code;
+    const code = overridesTable[subtitle.path] ?? overridesTable[base] ?? episodeCodeFromPath(subtitle.path, seasons, anchorNames, rules).code;
     if (code) {
       const season = seasonFromEpisodeCode(code);
       if (
@@ -155,7 +161,7 @@ export function buildSeasonMoves(
 export async function finalizeLanding(
   options: FinalizeLandingOptions,
 ): Promise<FinalizeLandingResult> {
-  const { sandbox, digest, canonicalTitle, seasons, overrides, skipCodes, onlyCodes, episodeAirDates, rules } = options;
+  const { sandbox, digest, canonicalTitle, seasons, overrides, skipCodes, onlyCodes, episodeAirDates, episodeNames, rules } = options;
   const seasonSet = new Set(seasons);
   const overridesTable = overrides ?? {};
   const skipSet = new Set(skipCodes ?? []);
@@ -177,7 +183,9 @@ export async function finalizeLanding(
     const base = basenameOf(video.path);
     if (junkNames.has(base)) continue;
     // issue #53:多季用 episodeCodeFromPath(含路径归季);overrides 先查完整路径再查 basename。
-    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, undefined, rules).code;
+    // ★ 2026-09-13:锚定表必须与 digest 同一张 —— 缺它这里用机械 E(N) 重解析,
+    // 综艺「第N期上/中/下」全塌成 S08E01:digest 认 3 集,归位只落 1 个。
+    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, episodeNames, rules).code;
     if (!code) continue;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
@@ -252,6 +260,7 @@ export async function finalizeLanding(
   const moves = buildSeasonMoves(digest, seasons, overridesTable, skipCodes, {
     ...(onlyCodes !== undefined ? { onlyCodes } : {}),
     ...(episodeAirDates !== undefined ? { episodeAirDates } : {}),
+    ...(episodeNames !== undefined ? { episodeNames } : {}),
   }, rules);
   // moveToSeason 的返回是「移动后整目录 reread」不是移动清单 —— 真实移动数从这里算。
   const movedCount = moves.reduce((sum, move) => sum + move.fileIds.length, 0);
