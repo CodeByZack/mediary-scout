@@ -499,6 +499,28 @@ export async function closeOutTvLanding(options: {
       ...(options.episodeNames !== undefined ? { episodeNames: options.episodeNames } : {}),
       ...(episodeRules !== undefined ? { rules: episodeRules } : {}),
     });
+    // ★ 2026-09-13:锚定表可见性。综艺「第N期上/中/下」全靠这张 TMDB 原始 name 表,
+    // 空表/占位符会静默退化成机械 E(N),而 digest 的「代码识别出 N 集」和「解析明细」
+    // 在修之前一个真一个假,查了一轮 DB、一轮 TMDB 代理才定位到源头(name 被解析器丢弃)。
+    // 固定打一行,空表也打 —— 让「锚定到底有没有数据」一眼可见,不再靠反推。
+    {
+      const anchorCount = options.episodeNames ? Object.keys(options.episodeNames).length : 0;
+      const anchorSample = options.episodeNames
+        ? Object.entries(options.episodeNames)
+            .slice(0, 3)
+            .map(([code, name]) => `${code}=${name.slice(0, 24)}`)
+            .join(" / ")
+        : "";
+      stepLog(
+        sandbox,
+        target.title,
+        "集名锚定",
+        anchorCount > 0
+          ? `${anchorCount} 集名可用(锚定生效):${anchorSample}`
+          : "空表 → 回退机械 E(N),「第N期上/中/下」会全塌成同一集号",
+        anchorCount > 0 ? "log" : "warn",
+      );
+    }
     // issue #29 用户反馈:activity 人话化——直接复用 summarizeDigest 的人话结论
     // (pass=「转存内容已识别…」/ fail=「识别出…还缺…」),与 args 的 missingCodes 一致,
     // 不再自造「转存内容完整」双源文案(部分覆盖时曾谎报完整,复核揪出)。
@@ -514,7 +536,13 @@ export async function closeOutTvLanding(options: {
     );
     // issue #29:digest 步骤结构化证据(卡片化判定)。videoCount=落盘视频文件数;
     // passes/coveredCodes/missingCodes 给前端红绿判定与「还缺什么」。
-    const parseRows = landingParseRows(transfer.staging, seasons, options.episodeAirDates, episodeRules);
+    const parseRows = landingParseRows(
+      transfer.staging,
+      seasons,
+      options.episodeNames,
+      options.episodeAirDates,
+      episodeRules,
+    );
     // issue #29 用户拍板(九轮):逐文件明细并入 stagingDigest 一张卡——不再单独
     // emit「digestFiles 逐文件识别 N 条」步骤(标题+明细一张卡,无需两个步骤)。
     const argsFiles = pushWithinBudget<string>([], parseRows, 1300);

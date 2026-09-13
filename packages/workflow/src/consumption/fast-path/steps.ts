@@ -239,6 +239,12 @@ const VIDEO_EXT = /\.(mkv|mp4|avi|ts|webm|mov|m4v|wmv|flv|iso)$/i;
 export function landingParseRows(
   files: Array<{ path: string }>,
   seasons: number[],
+  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")。综艺「第N期上/中/下」锚定表。
+   *  ⚠️ 2026-09-13 踩坑:本函数此前把 episodeNames 硬编码成 undefined(steps.ts:251),
+   *  导致「解析明细」永远是**不带锚定**的机械 E(N) 结果,而同一张卡的「代码识别出 N 集」
+   *  用的是带锚定的 digest —— 一行卡里两个数字两套算法,一个真一个假,三轮排查全被误导
+   *  (花少 S8:digest 说 3 集,明细全写 S08E01)。现在与 digestStaging 用同一张表。 */
+  episodeNames?: Record<string, string>,
   episodeAirDates?: Record<string, string>,
   /** issue #44: 可配置集数解析规则。缺省 = 内置正则。 */
   rules?: EpisodeParseRules,
@@ -248,7 +254,7 @@ export function landingParseRows(
     .map((file) => {
       const base = fileBaseName(file.path);
       // issue #53:多季用完整路径解析(含文件夹归季),单季退化为 basename 解析(零回归)。
-      const code = episodeCodeFromPath(file.path, seasons, undefined, rules).code;
+      const code = episodeCodeFromPath(file.path, seasons, episodeNames, rules).code;
       const bare = /^\d{1,3}$/.test(base.replace(/\.[^.]+$/i, ""));
       const shown = base.length > 48 ? base.slice(0, 45) + "…" : base;
       if (!code) return shown + " → 解析失败";
