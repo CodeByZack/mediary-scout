@@ -164,6 +164,7 @@ function anchorVarietyPeriod(
   // 收集该季里期号 == N 的所有集。
   const hits: Array<{ code: string; part: number | null }> = [];
   for (const [code, tmdbName] of Object.entries(episodeNames)) {
+    if (!code.startsWith(`S${seasonLabel}`)) continue;
     if (Number(tmdbPeriodInName(tmdbName)) !== n) continue;
     // 部分号:英文 `Part K` / `-K` 优先,回落中文 `上/中/下`(按 上<中<下 映射)。
     const partNum =

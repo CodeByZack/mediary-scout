@@ -4,6 +4,7 @@ import {
   canonicalMovieFileName,
   cleanTitleForCanonicalName,
   episodeCodeFromFileName,
+  episodeCodeFromPath,
 } from "../src/index.js";
 
 describe("episodeCodeFromFileName", () => {
@@ -153,7 +154,6 @@ describe("episodeCodeFromFileName — 2026-08-19 补齐的命名规则 (§3)", (
     expect(episodeCodeFromFileName("Show.S03E05.mkv", [1, 2])).toBe("S03E05");
     expect(episodeCodeFromFileName("Show.S01E01.mkv", [1, 2])).toBe("S01E01");
   });
-});
 
   it("Part 锚定:pipeline 重建的 episodeNames 含正确 TMDB name 时,第10期上→S02E19(2026-08-31 地球超新鲜案)", () => {
     const episodeNames = {
@@ -173,6 +173,31 @@ describe("episodeCodeFromFileName — 2026-08-19 补齐的命名规则 (§3)", (
       S02E20: "Episode 20",
     };
     expect(episodeCodeFromFileName("2026.08.29_第10期上_4K_60fps.mp4", [2], placeholderNames)).toBe("S02E10");
+  });
+
+  it("Part 锚定按季过滤:多季任务两季同名「第1期上」不得锚到前一季(2026-09-13 bf43a1d1 案)", () => {
+    // 地球超新鲜 S1/S2 两季集名都是「第1期上/第1期下…」、期号每季重置。锚定收了
+    // seasonLabel 但函数体不读它 → 全表扫描后按 VARIETY_PART_ORDER(上=0)取 src[0]
+    // → S1 的行排在 S2 前面 → 永远锚到 S1:Season 2/2026.06.27-第1期上.mp4 被锚成
+    // S01E01(2025 播出)→ 年守卫拒 → 40 集多季包「代码识别 0 集」,S2 全靠 AI 补认。
+    // ⛔ 别删 episodeCodeFromFileName 的 if (singleSeason) 闸门:它是多季流程的
+    // 承重墙,正是它让第一步返回 null、第二步的路径季号才有机会跑;删了会退回全表
+    // 锚定,本 bug 原样复发。
+    const twoSeasons = {
+      S01E01: "第1期上：我和你",
+      S01E02: "第1期下：我和你",
+      S01E03: "第2期上：罗马假日",
+      S02E01: "第1期上：地球团的欢迎仪式",
+      S02E02: "第1期下：初见新西兰",
+      S02E03: "第2期上：Kia ora",
+    };
+    expect(episodeCodeFromPath("staging/Season 2/2026.06.27-第1期上.mp4", [1, 2], twoSeasons)).toMatchObject({ code: "S02E01" });
+    expect(episodeCodeFromPath("staging/Season 2/2026.06.28-第1期下.mp4", [1, 2], twoSeasons)).toMatchObject({ code: "S02E02" });
+    expect(episodeCodeFromPath("staging/Season 2/2026.07.04-第2期上.mp4", [1, 2], twoSeasons)).toMatchObject({ code: "S02E03" });
+    expect(episodeCodeFromPath("staging/Season 1/2025.07.27-第1期上.mp4", [1, 2], twoSeasons)).toMatchObject({ code: "S01E01" });
+    // 无季号文件夹 → 多季不猜季(交仲裁)。本修复不改这个行为。
+    expect(episodeCodeFromPath("staging/2026.06.27-第1期上.mp4", [1, 2], twoSeasons)).toMatchObject({ code: null });
+  });
 });
 
 describe("episodeCodeFromFileName + 可配置规则 (issue #44 Phase 1)", () => {
