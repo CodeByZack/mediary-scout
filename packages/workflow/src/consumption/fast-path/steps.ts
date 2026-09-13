@@ -2,7 +2,8 @@ import type { LanguageModel } from "ai";
 import type { gradeCandidates } from "../../acquisition-v2/candidate-grader.js";
 import type { AgentPhase, AgentToolEvent } from "../../acquisition-v2/activity.js";
 import { getStorageBrand } from "../../storage-brands.js";
-import { episodeCodeFromFileName, episodeCodeFromPath, episodeDateConflict, type EpisodeParseRules } from "../../episode-code.js";
+import type { EpisodeParseRules } from "../../episode-code.js";
+import type { StagingParsedFile } from "../../acquisition-v2/staging-digest.js";
 import type { PromptOverrideLookup } from "../../ruleset.js";
 import type { TaskSandbox } from "../../acquisition-v2/sandbox.js";
 import type { TvAnimeTarget } from "../../acquisition-v2/target-types.js";
@@ -233,35 +234,30 @@ export function candidateTitleEvidence(
   return pushWithinBudget([], rows);
 }
 
-const VIDEO_EXT = /\.(mkv|mp4|avi|ts|webm|mov|m4v|wmv|flv|iso)$/i;
 
 /** L4 证据 payload:落盘视频逐文件集数解析行;⚠ = 裸数字按目标季解释(issue #21 可见层)。 */
-export function landingParseRows(
-  files: Array<{ path: string }>,
-  seasons: number[],
-  /** TMDB 各集原始 name(SxxExx→"Episode 10 (Part 1)")。综艺「第N期上/中/下」锚定表。
-   *  ⚠️ 2026-09-13 踩坑:本函数此前把 episodeNames 硬编码成 undefined(steps.ts:251),
-   *  导致「解析明细」永远是**不带锚定**的机械 E(N) 结果,而同一张卡的「代码识别出 N 集」
-   *  用的是带锚定的 digest —— 一行卡里两个数字两套算法,一个真一个假,三轮排查全被误导
-   *  (花少 S8:digest 说 3 集,明细全写 S08E01)。现在与 digestStaging 用同一张表。 */
-  episodeNames?: Record<string, string>,
-  episodeAirDates?: Record<string, string>,
-  /** issue #44: 可配置集数解析规则。缺省 = 内置正则。 */
-  rules?: EpisodeParseRules,
-): string[] {
-  const rows = files
-    .filter((file) => VIDEO_EXT.test(file.path))
+export function landingParseRows(parsed: StagingParsedFile[]): string[] {
+  // ★ 2026-09-13:直接渲染 digest 的解析台账,不再自己解析。
+  // 此前本函数独立调 episodeCodeFromPath,且把 episodeNames 硬编码成 undefined(steps.ts:251),
+  // 「解析明细」永远是**不带锚定**的机械 E(N) 结果,而同一张卡的「代码识别出 N 集」用的是
+  // 带锚定的 digest —— 一行卡里两个数字两套算法,一个真一个假,三轮排查全被误导
+  // (花少 S8:digest 说 3 集,明细全写 S08E01)。现在明细与判定同源,不可能再分叉。
+  const rows = parsed
+    .filter((file) => file.isVideo)
     .map((file) => {
-      const base = fileBaseName(file.path);
-      // issue #53:多季用完整路径解析(含文件夹归季),单季退化为 basename 解析(零回归)。
-      const code = episodeCodeFromPath(file.path, seasons, episodeNames, rules).code;
+      const base = file.base;
       const bare = /^\d{1,3}$/.test(base.replace(/\.[^.]+$/i, ""));
       const shown = base.length > 48 ? base.slice(0, 45) + "…" : base;
-      if (!code) return shown + " → 解析失败";
-      if (episodeDateConflict(code, base, episodeAirDates)) {
-        return shown + ` → ${code} ⚠(文件日期与该集播出日不符,不采信)`;
+      if (file.junk) {
+        // 附件(sample/广告/花絮)不参与集号解析与入库 —— 明确说出来,
+        // 别写成「→ S01E01」让用户以为它真按那个集号入库了。
+        return shown + " → 附件,不参与入库";
       }
-      return shown + " → " + code + (bare ? " ⚠(裸数字,按目标季解释)" : "");
+      if (!file.code) return shown + " → 解析失败";
+      if (file.dateRejected) {
+        return shown + ` → ${file.code} ⚠(文件日期与该集播出日不符,不采信)`;
+      }
+      return shown + " → " + file.code + (bare ? " ⚠(裸数字,按目标季解释)" : "");
     });
   const kept = pushWithinBudget<string>([], rows, 1850);
   if (kept.length < rows.length) {

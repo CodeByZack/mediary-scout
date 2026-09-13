@@ -8,6 +8,7 @@ import {
   compactMapping,
   landingParseRows,
 } from "../src/consumption/fast-path/steps.js";
+import { digestStaging } from "../src/acquisition-v2/staging-digest.js";
 
 type Graded = ReturnType<typeof gradeCandidates>;
 function fakeGrading(n: number): Graded {
@@ -42,10 +43,24 @@ describe("证据 payload 预算闸(agent-trace-sink MAX_ARGS_JSON=2000 之下)",
     expect(rows.length).toBeGreaterThan(0);
     expect(JSON.stringify({ candidates: rows }).length).toBeLessThan(2000);
   });
+  // ★ 2026-09-13 单次解析:landingParseRows 只吃 digest.parsed 台账,不再自己解析。
+  const stagingFiles = (paths: string[]) =>
+    paths.map((path, i) => ({
+      id: `v${i}`,
+      path,
+      sizeBytes: 1,
+      isVideo: true,
+      isSubtitle: false,
+    }));
   it("落盘解析行:400 个文件 → 预算内 + 溢出提示行", () => {
     const rows = landingParseRows(
-      Array.from({ length: 400 }, (_, i) => ({ path: `/staging/${String(i).padStart(3, "0")}.mp4` })),
-      [1],
+      digestStaging({
+        files: stagingFiles(
+          Array.from({ length: 400 }, (_, i) => `/staging/${String(i).padStart(3, "0")}.mp4`),
+        ),
+        seasons: [1],
+        needCodes: ["S01E01"],
+      }).parsed,
     );
     expect(rows.length).toBeLessThan(400);
     expect(rows.some((row) => row.includes("⚠(裸数字,按目标季解释)"))).toBe(true);
@@ -54,28 +69,35 @@ describe("证据 payload 预算闸(agent-trace-sink MAX_ARGS_JSON=2000 之下)",
   });
   it("小池不触发截断,SxxExx 文件不带 ⚠", () => {
     const rows = landingParseRows(
-      [{ path: "/s/狂飙.S01E01.mkv" }, { path: "/s/狂飙.S01E02.mkv" }],
-      [1],
+      digestStaging({
+        files: stagingFiles(["/s/狂飙.S01E01.mkv", "/s/狂飙.S01E02.mkv"]),
+        seasons: [1],
+        needCodes: ["S01E01", "S01E02"],
+      }).parsed,
     );
     expect(rows).toEqual(["狂飙.S01E01.mkv → S01E01", "狂飙.S01E02.mkv → S01E02"]);
   });
-  it("落盘解析行:带 TMDB 集名表时「第N期上/中/下」按锚定分配 —— 明细必须与 digest 同表", () => {
+  it("落盘解析行:带 TMDB 集名表时「第N期上/中/下」按锚定分配 —— 明细必须与 digest 同源", () => {
     // 2026-09-13 花少 S8 案的排查坑:本函数曾把 episodeNames 硬编码成 undefined(steps.ts:251),
     // 「解析明细」永远是**不带锚定**的机械 E(N) 结果(上/中/下 全塌 S08E01),而同一张卡的
     // 「代码识别出 N 集」用的是带锚定的 digest —— 一行卡里两个数字两套算法,一个真一个假,
-    // 导致三轮排查全被日志误导。现在两处共用同一张表。
+    // 导致三轮排查全被日志误导。单次解析后两处同一张台账,分叉点物理消失。
+    const names = {
+      S08E01: "第1期上：王星越喜提首站导游",
+      S08E02: "第1期中：全员感受世界杯氛围",
+      S08E03: "第1期下：吴君如邓为船头热舞",
+    };
     const rows = landingParseRows(
-      [
-        { path: "/s/2026.09.10-第1期上.mp4" },
-        { path: "/s/2026.09.10-第1期中.mp4" },
-        { path: "/s/2026.09.11-第1期下.mp4" },
-      ],
-      [8],
-      {
-        S08E01: "第1期上：王星越喜提首站导游",
-        S08E02: "第1期中：全员感受世界杯氛围",
-        S08E03: "第1期下：吴君如邓为船头热舞",
-      },
+      digestStaging({
+        files: stagingFiles([
+          "/s/2026.09.10-第1期上.mp4",
+          "/s/2026.09.10-第1期中.mp4",
+          "/s/2026.09.11-第1期下.mp4",
+        ]),
+        seasons: [8],
+        needCodes: ["S08E01", "S08E02", "S08E03"],
+        episodeNames: names,
+      }).parsed,
     );
     expect(rows).toEqual([
       "2026.09.10-第1期上.mp4 → S08E01",
@@ -85,8 +107,11 @@ describe("证据 payload 预算闸(agent-trace-sink MAX_ARGS_JSON=2000 之下)",
   });
   it("落盘解析行:不传集名表时保持旧机械 E(N) 语义(零回归)", () => {
     const rows = landingParseRows(
-      [{ path: "/s/第1期上.mp4" }, { path: "/s/第1期中.mp4" }],
-      [8],
+      digestStaging({
+        files: stagingFiles(["/s/第1期上.mp4", "/s/第1期中.mp4"]),
+        seasons: [8],
+        needCodes: ["S08E01", "S08E02"],
+      }).parsed,
     );
     expect(rows).toEqual(["第1期上.mp4 → S08E01", "第1期中.mp4 → S08E01"]);
   });

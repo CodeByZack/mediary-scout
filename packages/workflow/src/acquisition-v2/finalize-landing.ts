@@ -106,52 +106,37 @@ export function buildSeasonMoves(
   rules?: EpisodeParseRules,
 ): Array<{ season: number; fileIds: string[] }> {
   const seasonSet = new Set(seasons);
-  const junkNames = new Set(digest.junkSignals);
   const bySeason = new Map<number, string[]>();
-  const overridesTable = overrides ?? {};
   const skipSet = new Set(skipCodes ?? []);
   const onlySet = restrictions?.onlyCodes ? new Set(restrictions.onlyCodes) : null;
-  const airDates = restrictions?.episodeAirDates;
-  const anchorNames = restrictions?.episodeNames;
   const push = (season: number, fileId: string) => {
     const list = bySeason.get(season) ?? [];
     list.push(fileId);
     bySeason.set(season, list);
   };
 
+  // ★ 2026-09-13:不再自己解析,全部查 digest 的解析台账(digestStaging 是唯一解析点)。
+  // 旧实现这里裸调 episodeCodeFromPath 两遍(视频 + 字幕),与 digest 的判定是两套独立
+  // 解析;episodeNames 只喂给了 digest、这里漏喂 → 「第1期上/中/下」在 digest 认成 3 集、
+  // 在归位塌成 1 集(线上:移动 1 个文件 / 非缺集跳过 2 件)。台账里 code/dateRejected/junk
+  // 都已算好,overrides 也在 digest 阶段固化,这里只做筛选与分组。
   const acceptedCodes = new Set<string>();
-  for (const video of digest.videos) {
-    if (junkNames.has(basenameOf(video.path))) continue;
-    const base = basenameOf(video.path);
-    // issue #53:多季用 episodeCodeFromPath(含路径归季);overrides 先查完整路径(多季 key)再查 basename(单季 key)。
-    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, anchorNames, rules).code;
-    if (!code) continue;
-    const season = seasonFromEpisodeCode(code);
+  for (const file of digest.parsed) {
+    if (!file.isVideo || file.junk || !file.code || file.dateRejected) continue;
+    const season = seasonFromEpisodeCode(file.code);
     if (season === null || !seasonSet.has(season)) continue;
-    if (skipSet.has(code)) continue;
-    if (episodeDateConflict(code, base, airDates)) continue;
-    if (onlySet && !onlySet.has(code)) continue;
-    if (acceptedCodes.has(code)) continue; // 同集多副本(源包 `(1)` 件),只归位首个
-    acceptedCodes.add(code);
-    push(season, video.id);
+    if (skipSet.has(file.code)) continue;
+    if (onlySet && !onlySet.has(file.code)) continue;
+    if (acceptedCodes.has(file.code)) continue; // 同集多副本(源包 `(1)` 件),只归位首个
+    acceptedCodes.add(file.code);
+    push(season, file.fileId);
   }
-  for (const subtitle of digest.subtitles) {
-    if (junkNames.has(basenameOf(subtitle.path))) continue;
-    const base = basenameOf(subtitle.path);
-    // issue #53:字幕与视频同款路径解析。
-    const code = overridesTable[subtitle.path] ?? overridesTable[base] ?? episodeCodeFromPath(subtitle.path, seasons, anchorNames, rules).code;
-    if (code) {
-      const season = seasonFromEpisodeCode(code);
-      if (
-        season !== null &&
-        seasonSet.has(season) &&
-        !skipSet.has(code) &&
-        !episodeDateConflict(code, base, airDates) &&
-        (!onlySet || onlySet.has(code))
-      ) {
-        push(season, subtitle.id);
-      }
-    }
+  for (const file of digest.parsed) {
+    if (!file.isSubtitle || file.junk || !file.code || file.dateRejected) continue;
+    const season = seasonFromEpisodeCode(file.code);
+    if (season === null || !seasonSet.has(season)) continue;
+    if (skipSet.has(file.code) || (onlySet && !onlySet.has(file.code))) continue;
+    push(season, file.fileId);
   }
 
   return [...bySeason.entries()].map(([season, fileIds]) => ({ season, fileIds }));
@@ -177,16 +162,13 @@ export async function finalizeLanding(
   const renamedPairs: Array<{ from: string; to: string }> = [];
   const skippedOnDisk: string[] = [];
   const skippedNotNeeded: string[] = [];
-  const junkNames = new Set(digest.junkSignals);
   const plannedCodes = new Set<string>();
-  for (const video of digest.videos) {
-    const base = basenameOf(video.path);
-    if (junkNames.has(base)) continue;
-    // issue #53:多季用 episodeCodeFromPath(含路径归季);overrides 先查完整路径再查 basename。
-    // ★ 2026-09-13:锚定表必须与 digest 同一张 —— 缺它这里用机械 E(N) 重解析,
-    // 综艺「第N期上/中/下」全塌成 S08E01:digest 认 3 集,归位只落 1 个。
-    const code = overridesTable[video.path] ?? overridesTable[base] ?? episodeCodeFromPath(video.path, seasons, episodeNames, rules).code;
-    if (!code) continue;
+  // ★ 2026-09-13:改名全部查 digest 的解析台账(digestStaging 是唯一解析点),不再裸解析。
+  // 台账的 code 已含 overrides 优先级,日期守卫结果在 dateRejected 上 —— 与 digest 的
+  // 判定是同一份,不会再出现「digest 认 3 集、改名只认 1 集」的分叉。
+  for (const file of digest.parsed) {
+    if (!file.isVideo || file.junk || !file.code) continue;
+    const { base, code } = file;
     const season = seasonFromEpisodeCode(code);
     if (season === null || !seasonSet.has(season)) continue;
     if (skipSet.has(code)) {
@@ -194,7 +176,7 @@ export async function finalizeLanding(
       skippedOnDisk.push(code);
       continue;
     }
-    if (episodeDateConflict(code, base, episodeAirDates)) {
+    if (file.dateRejected) {
       // 年守卫:文件自带日期与该集播出日矛盾(典型:「1-10季」合集实际是第九季)→
       // 不采信,副本随 wipe 丢弃;与 digest 的 dateRejectedVideos 同一判据。
       skippedNotNeeded.push(`${base}(${code},季份日期不符)`);
@@ -212,7 +194,7 @@ export async function finalizeLanding(
     }
     plannedCodes.add(code);
     const newName = canonicalEpisodeFileName({ title: canonicalTitle, episodeCode: code, sourceName: base });
-    renames.push({ fileId: video.id, newName });
+    renames.push({ fileId: file.fileId, newName });
   }
   if (renames.length > 0) {
     const result = await sandbox.renameVideo({ renames });

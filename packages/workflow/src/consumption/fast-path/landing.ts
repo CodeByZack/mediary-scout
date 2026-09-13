@@ -536,13 +536,7 @@ export async function closeOutTvLanding(options: {
     );
     // issue #29:digest 步骤结构化证据(卡片化判定)。videoCount=落盘视频文件数;
     // passes/coveredCodes/missingCodes 给前端红绿判定与「还缺什么」。
-    const parseRows = landingParseRows(
-      transfer.staging,
-      seasons,
-      options.episodeNames,
-      options.episodeAirDates,
-      episodeRules,
-    );
+    const parseRows = landingParseRows(digest.parsed);
     // issue #29 用户拍板(九轮):逐文件明细并入 stagingDigest 一张卡——不再单独
     // emit「digestFiles 逐文件识别 N 条」步骤(标题+明细一张卡,无需两个步骤)。
     const argsFiles = pushWithinBudget<string>([], parseRows, 1300);

@@ -80,13 +80,21 @@ describe("buildSeasonMoves", () => {
       { id: "v1", path: "[NC-Raws] 狂飙 - 01.mkv", sizeBytes: 1, isVideo: true, isSubtitle: false },
       { id: "v2", path: "Sub.S01E01.zh.ass", sizeBytes: 1, isVideo: false, isSubtitle: true },
     ];
-    const digest = digestStaging({ files, seasons: [1], needCodes: ["S01E01"] });
     // 无 overrides: v1 解析不出 code → 不归位;字幕自己能解析 → 单独归位。
-    const movesWithout = buildSeasonMoves(digest, [1]);
+    const digestWithout = digestStaging({ files, seasons: [1], needCodes: ["S01E01"] });
+    const movesWithout = buildSeasonMoves(digestWithout, [1]);
     const bySeasonWithout = Object.fromEntries(movesWithout.map((m) => [m.season!, m.fileIds]));
     expect(bySeasonWithout[1]).toEqual(["v2"]);
     // 有 overrides: v1 映射为 S01E01 → 归位到 season 1,字幕一起。
-    const moves = buildSeasonMoves(digest, [1], { "[NC-Raws] 狂飙 - 01.mkv": "S01E01" });
+    // ★ 2026-09-13 单次解析:overrides 只在 digestStaging 入口喂一次、由台账固化,
+    // buildSeasonMoves 不再单独接收(单独传 = 又一套解析输入 = 分叉点)。
+    const digest = digestStaging({
+      files,
+      seasons: [1],
+      needCodes: ["S01E01"],
+      overrides: { "[NC-Raws] 狂飙 - 01.mkv": "S01E01" },
+    });
+    const moves = buildSeasonMoves(digest, [1]);
     const bySeason = Object.fromEntries(moves.map((m) => [m.season!, m.fileIds]));
     expect(bySeason[1]).toEqual(["v1", "v2"]);
   });
@@ -100,7 +108,6 @@ describe("buildSeasonMoves", () => {
       { id: "v2", path: "2026.09.10-第1期中.mp4", sizeBytes: 1, isVideo: true, isSubtitle: false },
       { id: "v3", path: "2026.09.11-第1期下.mp4", sizeBytes: 1, isVideo: true, isSubtitle: false },
     ];
-    const digest = digestStaging({ files, seasons: [8], needCodes: ["S08E01", "S08E02", "S08E03"] });
     const names = {
       S08E01: "第1期上：王星越喜提首站导游",
       S08E02: "第1期中：全员感受世界杯氛围",
@@ -109,13 +116,18 @@ describe("buildSeasonMoves", () => {
     const bySeason = (moves: ReturnType<typeof buildSeasonMoves>) =>
       Object.fromEntries(moves.map((m) => [m.season!, m.fileIds]));
     // 无锚定表(旧行为):三份全塌 S08E01,只归位第一份。
-    expect(bySeason(buildSeasonMoves(digest, [8]))[8]).toEqual(["v1"]);
+    const digestNoAnchor = digestStaging({ files, seasons: [8], needCodes: ["S08E01", "S08E02", "S08E03"] });
+    expect(bySeason(buildSeasonMoves(digestNoAnchor, [8]))[8]).toEqual(["v1"]);
     // 有锚定表:三份各归其位。
-    expect(bySeason(buildSeasonMoves(digest, [8], undefined, undefined, { episodeNames: names }))[8]).toEqual([
-      "v1",
-      "v2",
-      "v3",
-    ]);
+    // ★ 2026-09-13 单次解析:episodeNames 只在 digestStaging 入口喂一次,
+    // buildSeasonMoves 从 digest.parsed 台账读,不再单独接收 —— 分叉点物理消失。
+    const digest = digestStaging({
+      files,
+      seasons: [8],
+      needCodes: ["S08E01", "S08E02", "S08E03"],
+      episodeNames: names,
+    });
+    expect(bySeason(buildSeasonMoves(digest, [8]))[8]).toEqual(["v1", "v2", "v3"]);
   });
 });
 
@@ -364,19 +376,24 @@ it("功能3+功能2: overrides 喂给 finalize 后 rename 能落地,mark 以真�
     expect((await storage.listTree({ directoryId: s1 })).map((f) => f.path)).toEqual(["狂飙.S01E01.mkv"]);
   });
 
-  it("功能3 空洞校验: digest 有 code 但无 overrides 时 rename 无法落地 → mark 保持空(不以 digest 为准)", async () => {
-    // 同一文件 `狂飙 - 01.mkv` 但 finalize 没收到 overrides(例如映射未传下来):
-    // digest 说它是 S01E01,但 rename 按裸文件名解析不出 → renamed 空 → mark 空。
+  it("空洞校验: 无 overrides 也解析不出 → rename/mark 都保持空(以真实改名为准,不采信 digest)", async () => {
+    // 2026-09-13 前这里造的是「digest 有 overrides、finalize 没收到」的分叉场景:digest 说
+    // 是 S01E01、rename 却解析不出 → renamed 空 → mark 空。那是为了防「finalize 与 digest
+    // 两套解析分叉」。
+    // 单次解析后(digest.parsed 台账是唯一解析源),那个分叉场景**物理上不存在**了 ——
+    // finalize 看到的 code 就是 digest 看到的那份,不可能一边有一边没有。
+    // 这里保留该用例的**真实目的**:解析不出就宁可不 mark,绝不在 staging 里什么都没落地时
+    // 记 obtained(曾线上踩过:accept 空洞 → mark 假入库 → syncSeasonNeed 把没下到的集数写成已拿到)。
     const { sandbox, storage, stagingDirectoryId, s1 } = await createSandbox(["S01E01", "S01E02"]);
     await landFile(storage, stagingDirectoryId, "狂飙 - 01.mkv");
     const digest = digestStaging({
       files: await sandbox.inspectStaging(),
       seasons: [1],
       needCodes: ["S01E01", "S01E02"],
-      overrides: { "狂飙 - 01.mkv": "S01E01" },
     });
-    // 只覆盖 S01E01,缺 S01E02 → 部分覆盖,passes=false。
+    // 裸文件名解析不出 → 台账 code 全空 → passes=false。
     expect(digest.passes).toBe(false);
+    expect(digest.parsed.every((f) => f.code === null)).toBe(true);
 
     const result = await finalizeLanding({ sandbox, digest, canonicalTitle: "狂飙", seasons: [1] });
     expect(result.renamed).toEqual([]);
