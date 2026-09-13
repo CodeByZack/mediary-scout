@@ -210,34 +210,15 @@ export async function finalizeLanding(
         stepLog(sandbox, canonicalTitle, "改名失败", `${source} → ${newName} (${err})`);
       }
     }
-    // 重读 staging,按新名建 name→currentId 映射,回填 digest 视频的 ID。
-    // ⚠️ 当前所有驱动的 rename 都**不换 id**,所以这段现在全是 no-op:
-    //   夸克实测不换 fid(quark-cookie-client.ts:响应体 data={} 不含新 fid,
-    //   run 82a02640 的 34 条入参 fid 全部保留、名字全部变更);
-    //   115 模拟器同样原地改 name 保留 id。
-    // 保留理由:`TaskSandbox` 是驱动无关的。新增执行器若 rename 换 id,归位必须拿
-    // rename 后的当前 id,否则拿改名前的旧 id 去网盘移动 → 文件找不到 → 静默失败。
-    // ⚠️ 2026-09-13 曾在此误判为「夸克 blocker」:旧注释写「夸克 renameFile 后 file ID
-    // 会变」,与 quark-cookie-client.ts 的实测结论矛盾,触发条件其实不存在。
-    // 旧 id → 新 id 一次建好,digest.videos 与解析台账共用 —— 两张表必须同步,
-    // 归位读的是 digest.parsed,只回填前者会让归位拿旧 id。
-    const stagingNow = await sandbox.inspectStaging();
-    const idByNewName = new Map(stagingNow.map((f) => [basenameOf(f.path), f.id]));
-    const idRemap = new Map<string, string>();
-    for (const video of digest.videos) {
-      const expectedRename = renames.find((r) => r.fileId === video.id);
-      if (expectedRename === undefined) continue;
-      const currentId = idByNewName.get(expectedRename.newName);
-      if (currentId !== undefined) idRemap.set(video.id, currentId);
-    }
-    for (const video of digest.videos) {
-      const currentId = idRemap.get(video.id);
-      if (currentId !== undefined) video.id = currentId;
-    }
-    for (const file of digest.parsed) {
-      const currentId = idRemap.get(file.fileId);
-      if (currentId !== undefined) file.fileId = currentId;
-    }
+    // ⛔ rename 后**不重读 staging**:当前所有驱动的 renameFile 都不换文件 id ——
+    // 夸克实测不换 fid(quark-cookie-client.ts:响应体 data={} 不含新 fid,
+    // run 82a02640 的 34 条入参 fid 全部保留、名字全部变更);115 模拟器原地改 name
+    // 保留 id。digest 台账里的 fileId 因此始终有效,归位直接用,省一次网盘 listTree 调用。
+    // ⚠️ 新增网盘执行器时**必须保证 rename 不换 id**(或改完同步回填 digest.videos
+    // 与 digest.parsed 两张表),否则归位会拿改名前的旧 id 移动 → 静默失败。
+    // 2026-09-13 曾有 idRemap 重映射块 + 一次 inspectStaging,实测为纯 no-op 后删掉;
+    // 那句「夸克 renameFile 后 file ID 会变」的旧注释与 quark-cookie-client.ts 矛盾,
+    // 是同一轮误判成「线上 blocker」的源头。
   }
 
   // 2. 归位 into season directories (subtitles ride with their videos).
