@@ -35,7 +35,6 @@ const cfg = JSON.parse(cfgText);
 const { workerName, tmdbToken, corsOrigins, customDomain, kvNamespace } = cfg;
 
 if (!workerName) { console.error("❌ workerName is required"); process.exit(1); }
-if (!tmdbToken) { console.error("❌ tmdbToken is required"); process.exit(1); }
 
 const cfgArg = "--config " + WRANGLER_CONFIG;
 
@@ -127,7 +126,11 @@ function setSecret(name, value) {
   });
 }
 
-await setSecret("TMDB_READ_TOKEN", tmdbToken);
+if (tmdbToken) {
+  await setSecret("TMDB_READ_TOKEN", tmdbToken);
+} else {
+  console.log("⏭️  TMDB_READ_TOKEN skipped (will use Authorization header)");
+}
 
 if (corsOrigins) {
   await setSecret("CORS_ALLOWED_ORIGINS", corsOrigins);

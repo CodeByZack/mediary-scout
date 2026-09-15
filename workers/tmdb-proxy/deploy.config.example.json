@@ -1,6 +1,6 @@
 {
   "workerName": "media-track-tmdb-proxy",
-  "tmdbToken": "你的TMDB_READ_TOKEN填这里",
+  "tmdbToken": "",
   "corsOrigins": "",
   "customDomain": "",
   "kvNamespace": "TMDB_CACHE"
