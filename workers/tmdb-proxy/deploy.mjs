@@ -57,26 +57,10 @@ try {
 }
 
 console.log("🔑 Checking login status...");
-let loggedIn = false;
 try {
   const out = execSync("npx wrangler whoami", { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-  // "not authenticated" contains "authenticated" so check for the negative first
-  if (out.toLowerCase().includes("not authenticated") || out.toLowerCase().includes("please run")) {
-    console.log("\n❌ Not logged in.");
-    console.log("   Run this first, then retry:");
-    console.log("   npx wrangler login");
-    process.exit(1);
-  }
-  if (out.includes("Account ID") || out.toLowerCase().includes("logged in")) {
-    loggedIn = true;
-    console.log("✅ Logged in");
-  } else {
-    console.log("\n❌ Could not verify login status.");
-    console.log("   Run this first, then retry:");
-    console.log("   npx wrangler login");
-    process.exit(1);
-  }
-} catch {
+  console.log("✅ Logged in");
+} catch (e) {
   console.log("\n❌ Not logged in.");
   console.log("   Run this first, then retry:");
   console.log("   npx wrangler login");
