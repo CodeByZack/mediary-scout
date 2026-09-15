@@ -7,8 +7,9 @@ MediaTrack 的影视元数据（海报、集数、播出日、季集名）全部
 本指南覆盖三件事：
 
 1. 去 TMDB 官网申请一个 read token（免费，约 5 分钟）
-2. 把它填进 MediaTrack 设置页
+2. 确认网络能否直连 TMDB（能直连就跳到第 4 步）
 3. （可选，墙内环境）自建 tmdb-proxy 出海
+4. 把 MediaTrack 指过去
 
 > **English TL;DR.** Grab a free read-only TMDB token from
 > [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api), paste it into
@@ -23,15 +24,13 @@ MediaTrack 的影视元数据（海报、集数、播出日、季集名）全部
 
 - [你需要准备什么](#你需要准备什么)
 - [第 1 步：申请 TMDB read token](#第-1-步申请-tmdb-read-token)
-- [第 2 步：填进 MediaTrack 设置页](#第-2-步填进-mediary-scout-设置页)
+- [第 2 步：确认网络能否直连 TMDB](#第-2-步确认网络能否直连-tmdb)
 - [第 3 步（可选）：大陆网络自建 tmdb-proxy](#第-3-步可选大陆网络自建-tmdb-proxy)
   - [3.1 一键部署脚本](#31-一键部署脚本)
   - [3.2 配置说明](#32-配置说明)
   - [3.3 手动部署（不用脚本）](#33-手动部署不用脚本)
-  - [3.4 把 MediaTrack 指过去](#34-把-mediary-scout-指过去)
+- [第 4 步：把 MediaTrack 指过去](#第-4-步把-mediary-scout-指过去)
 - [验证配置](#验证配置)
-- [常见问题](#常见问题)
-- [与旧版本的差异](#与旧版本的差异)
 
 ---
 
@@ -66,16 +65,19 @@ Token 只读、免费、无流量限制（TMDB 官方限流 800 req/10s，MediaT
 
 ---
 
-## 第 2 步：填进 MediaTrack 设置页
+## 第 2 步：确认网络能否直连 TMDB
 
-**场景 A（网络能直连 TMDB 的环境：墙外服务器、能翻墙的机器）**
+在你的 MediaTrack 所在网络环境跑：
 
-1. 打开 MediaTrack → **设置** 页
-2. 找到 **TMDB 元数据** 卡片
-3. 在 **API Key / Token** 输入框粘贴第 1 步拿到的 token
-4. 点 **保存**
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Authorization: Bearer $YOUR_TOKEN" \
+  "https://api.themoviedb.org/3/movie/278?language=zh-CN"
+```
 
-保存后 UI 会显示「已配置」徽章；不用重启应用，下一次搜索/获取就生效。
+- **`200`** → 直连通，跳到 [第 4 步](#第-4-步把-mediary-scout-指过去)
+- **`000` / `ETIMEDOUT`** → 网络不通，继续 [第 3 步](#第-3-步可选大陆网络自建-tmdb-proxy)
+- **`401`** → token 错或过期，回第 1 步重新申请
 
 ---
 
@@ -94,8 +96,15 @@ KV 缓存 + 出海。部署到你自己的 Cloudflare 账号后，把 MediaTrack
 
 ```bash
 cd workers/tmdb-proxy
-cp deploy.config.example.json deploy.config.json
-# 编辑 deploy.config.json 填入你的配置
+
+# 1. 登录 Cloudflare（会弹出浏览器）
+npx wrangler login
+
+# 2. 复制配置文件并编辑
+cp deploy.config.example.yml deploy.config.yml
+vi deploy.config.yml
+
+# 3. 部署
 node deploy.mjs
 ```
 
@@ -106,29 +115,19 @@ node deploy.mjs
 - 部署 Worker
 - 自动验证（测两个 URL）
 
-> **前提**：先 `npx wrangler login` 登录 Cloudflare（会弹出浏览器）
-
 ### 3.2 配置说明
 
-`deploy.config.json` 各字段说明：
+`deploy.config.yml` 各字段说明：
 
 | 字段 | 必填 | 示例 | 说明 |
 |---|---|---|---|
-| `workerName` | ✅ | `"media-track-tmdb-proxy"` | Worker 名称，CF 全局唯一 |
-| `tmdbToken` | ⚠️ | `"a2fb790c..."` | TMDB read token。留空则不设 CF secret，仅用于验证测试 |
-| `storeSecret` | ❌ | `true` | `true` = 设 CF secret；`false` = 跳过，token 仅用于测试 |
-| `cfApiToken` | ❌ | `""` | Cloudflare API token（可选，浏览器登录也行） |
-| `corsOrigins` | ❌ | `"https://your-landing.com"` | 落地页域名（逗号分隔），跑落地页才需要 |
-| `customDomain` | ❌ | `"tmdb.your-domain.com"` | 自定义域名，留空则用 workers.dev URL |
-| `kvNamespace` | ❌ | `"TMDB_CACHE"` | KV namespace 名称，默认 `TMDB_CACHE` |
-
-**三种 token 模式**：
-
-| `tmdbToken` | `storeSecret` | 行为 |
-|---|---|---|
-| 有值 | `true`（默认） | 设 CF secret + 跑验证测试 |
-| 有值 | `false` | 跳过 secret，仅用于验证测试 |
-| 空 | 任意 | 跳过 secret，验证测试也跳过 |
+| `workerName` | ✅ | `media-track-tmdb-proxy` | Worker 名称，CF 全局唯一 |
+| `tmdbToken` | ⚠️ | `a2fb790c...` | TMDB read token。留空则不设 CF secret，仅用于验证测试 |
+| `storeSecret` | ❌ | `true` | `true` = 设 CF secret（MediaTrack 页面上不用填 token）；`false` = 跳过 secret（MediaTrack 页面上需要填 token） |
+| `cfApiToken` | ❌ | `''` | Cloudflare API token（可选，浏览器登录也行） |
+| `corsOrigins` | ❌ | `https://your-site.com` | 调用方域名（逗号分隔多个），留空则用 workers.dev 默认 CORS |
+| `customDomain` | ❌ | `tmdb.your-domain.com` | 自定义域名，留空则用 workers.dev URL |
+| `kvNamespace` | ❌ | `TMDB_CACHE` | KV namespace 名称，默认 `TMDB_CACHE` |
 
 ### 3.3 手动部署（不用脚本）
 
@@ -150,19 +149,30 @@ npx wrangler kv namespace create TMDB_CACHE
 printf 'YOUR_TOKEN' | npx wrangler secret put TMDB_READ_TOKEN
 
 # 5.（可选）写 CORS origins
-printf 'https://your-landing.com' | npx wrangler secret put CORS_ALLOWED_ORIGINS
+printf 'https://your-site.com' | npx wrangler secret put CORS_ALLOWED_ORIGINS
 
 # 6. 部署
 npx wrangler deploy
 ```
 
-### 3.4 把 MediaTrack 指过去
+---
 
-在 MediaTrack 设置页的 **TMDB 元数据** 卡片，除了填 token，还要填：
+## 第 4 步：把 MediaTrack 指过去
 
-- **API Base URL**（可选字段）：`https://<你刚部署的 proxy URL>`
+打开 MediaTrack → **设置** 页，找到 **TMDB 元数据** 卡片：
 
-保存。现在请求链路变成：
+### 直连 TMDB（第 2 步返回 200）
+
+1. 在 **API Key / Token** 输入框粘贴第 1 步拿到的 token
+2. 点 **保存**
+
+### 自建 proxy（第 3 步部署完成）
+
+1. 在 **API Key / Token** 输入框粘贴 token（如果 `storeSecret: true` 可留空）
+2. 在 **API Base URL** 输入框填 `https://<你刚部署的 proxy URL>`
+3. 点 **保存**
+
+现在请求链路变成：
 
 ```
 MediaTrack → 你的 proxy（CF，出海） → api.themoviedb.org
@@ -203,59 +213,6 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://<你的proxyURL>/movie/278"
 curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $YOUR_TOKEN" \
   "https://<你的proxyURL>/account/x"
 ```
-
----
-
-## 常见问题
-
-**Q：Token 丢了怎么办？**
-重新申请一个。旧的不会自动失效，但既然丢了就是明文暴露过，建议申请新的并覆盖旧的
-（TMDB 后台 → API Keys → 删掉旧的那行）。
-
-**Q：报 `401 Unauthorized`？**
-Token 抄错、过期、或者被 TMDB 封了。回官网重新申请一次。
-
-**Q：报 `All 1 TMDB access(es) failed: TimeoutError`？**
-网络问题。按第 3 步自建 tmdb-proxy。
-
-**Q：能同时配多套 token 做冗余吗？**
-不行。当前设计是**单通道单 key**——填了就只用它。这是刻意的（见下方「与旧版本的差异」）。
-
-**Q：MediaTrack 会用我的 token 做写操作吗？**
-不会。只发 `GET` 请求查元数据，不会创建/修改 TMDB 数据。
-
-**Q：token 存在哪里？**
-MediaTrack 自己的 SQLite 数据库（`account_settings` 表），跟着你的数据目录走。备份数据
-目录前留意它会一并导出。
-
-**Q：deploy.mjs 报错 "Not logged in"？**
-先跑 `npx wrangler login`（会弹出浏览器），登录成功后再跑脚本。
-
-**Q：deploy.mjs 报错 "Could not find KV namespace"？**
-KV namespace 已存在但脚本没找到。手动跑 `npx wrangler kv namespace list` 看输出，
-确认 namespace 名称和 config 里的 `kvNamespace` 一致。
-
----
-
-## 与旧版本的差异
-
-从 v0.0.4 及更早版本升级过来注意：
-
-| 旧行为 | 新行为 |
-|---|---|
-| 不填 key 也能跑，作者公共代理兜底 | **不填 key 启动即失败**，UI 显示引导文案 |
-| `api.themoviedb.org` 不通时自动切到作者代理 | 不再自动切；墙内用户必须自建 tmdb-proxy |
-| 用户请求消耗作者的 TMDB 配额 | 只消耗你自己的配额 |
-| Token 可能藏在 CF Worker secret 里 | Token 只来自 UI 配置，单一真相源 |
-
-**升级步骤**：
-
-1. 先按第 1 步申请好 token
-2. 升级应用
-3. 打开设置页填 token
-4. 墙内环境再补第 3 步
-
-如果升级后立刻发现取元数据失败，多半是漏了第 3 步——不是应用坏了。
 
 ---
 

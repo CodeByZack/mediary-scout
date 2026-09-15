@@ -3,8 +3,8 @@
  * deploy.mjs — One-command deployment for tmdb-proxy.
  *
  * Usage:
- *   cp deploy.config.example.json deploy.config.json
- *   # Edit deploy.config.json with your tokens
+ *   cp deploy.config.example.yml deploy.config.yml
+ *   # Edit deploy.config.yml with your tokens
  *   node deploy.mjs
  *
  * Requires: wrangler (npm i -g wrangler), logged in (wrangler login)
@@ -14,9 +14,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { parse as parseYaml } from "yaml";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, "deploy.config.json");
+const CONFIG_PATH = join(__dirname, "deploy.config.yml");
 const WRANGLER_CONFIG = join(__dirname, "wrangler.jsonc");
 
 // ── Read config ──────────────────────────────────────────────────────────
@@ -25,17 +26,14 @@ let cfgText;
 try {
   cfgText = readFileSync(CONFIG_PATH, "utf8");
 } catch {
-  console.error("❌ deploy.config.json not found.");
-  console.error("   cp deploy.config.example.json deploy.config.json");
+  console.error("❌ deploy.config.yml not found.");
+  console.error("   cp deploy.config.example.yml deploy.config.yml");
   console.error("   Edit it with your tokens, then run again.");
   process.exit(1);
 }
 
-// Strip JSONC comments (// line and /* block */) before parsing
-const cfgClean = cfgText
-  .replace(/\/\/.*$/gm, "")  // line comments
-  .replace(/\/\*[\s\S]*?\*\//g, ""); // block comments
-const cfg = JSON.parse(cfgClean);
+// Parse YAML config (supports comments natively)
+const cfg = parseYaml(cfgText);
 const { workerName, tmdbToken, corsOrigins, customDomain, kvNamespace, storeSecret = true, cfApiToken } = cfg;
 
 if (!workerName) { console.error("❌ workerName is required"); process.exit(1); }

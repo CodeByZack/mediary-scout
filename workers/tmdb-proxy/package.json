@@ -1,0 +1,12 @@
+{
+  "name": "tmdb-proxy-deploy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "node deploy.mjs"
+  },
+  "dependencies": {
+    "yaml": "^2.4.0"
+  }
+}
