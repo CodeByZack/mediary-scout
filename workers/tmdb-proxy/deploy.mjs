@@ -31,7 +31,11 @@ try {
   process.exit(1);
 }
 
-const cfg = JSON.parse(cfgText);
+// Strip JSONC comments (// line and /* block */) before parsing
+const cfgClean = cfgText
+  .replace(/\/\/.*$/gm, "")  // line comments
+  .replace(/\/\*[\s\S]*?\*\//g, ""); // block comments
+const cfg = JSON.parse(cfgClean);
 const { workerName, tmdbToken, corsOrigins, customDomain, kvNamespace, storeSecret = true, cfApiToken } = cfg;
 
 if (!workerName) { console.error("❌ workerName is required"); process.exit(1); }
