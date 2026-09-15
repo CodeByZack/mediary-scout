@@ -103,14 +103,36 @@ try {
     const out = execSync(`npx wrangler kv namespace list ${cfgArg}`, { encoding: "utf8" });
     console.log("Existing namespaces:");
     console.log(out);
-    // Try to find by name or title
-    const lines = out.split("\n");
-    const line = lines.find(l => l.includes(kvNamespace) || l.toLowerCase().includes(kvNamespace.toLowerCase()));
-    if (line) {
-      const match = line.match(/([a-f0-9]{32})/);
-      if (match) {
-        kvId = match[1];
+    // Try JSON parsing first (wrangler outputs JSON)
+    let namespaces = [];
+    try {
+      namespaces = JSON.parse(out);
+    } catch {
+      // Not JSON — try line-by-line
+    }
+    if (namespaces.length > 0) {
+      const ns = namespaces.find(n => n.title === kvNamespace || n.id === kvNamespace);
+      if (ns) {
+        kvId = ns.id;
         console.log(`✅ Found existing namespace: ${kvId}`);
+      }
+    }
+    // Fallback: line-by-line search for hex id near the namespace name
+    if (!kvId) {
+      const lines = out.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes(kvNamespace)) {
+          // Look at this line and the next few for an id
+          for (let j = Math.max(0, i - 2); j < Math.min(lines.length, i + 3); j++) {
+            const match = lines[j].match(/"id":\s*"([a-f0-9]{32})"/);
+            if (match) {
+              kvId = match[1];
+              console.log(`✅ Found existing namespace: ${kvId}`);
+              break;
+            }
+          }
+          if (kvId) break;
+        }
       }
     }
   } catch (listErr) {
