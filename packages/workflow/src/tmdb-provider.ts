@@ -375,7 +375,7 @@ export function createTmdbMetadataProviderFromEnv(
   if (!readToken) {
     throw new Error("TMDB_READ_TOKEN is required to create TmdbMetadataProvider");
   }
-  const baseURL = env.TMDB_BASE_URL || TMDB_DIRECT_BASE_URL;
+  const baseURL = (env.TMDB_BASE_URL || "").trim() || TMDB_DIRECT_BASE_URL;
   return new TmdbMetadataProvider({ readToken, baseURL });
 }
 
@@ -384,7 +384,7 @@ export function createTmdbSearchProviderFromEnv(env: NodeJS.ProcessEnv = process
   if (!readToken) {
     throw new Error("TMDB_READ_TOKEN is required to create TmdbSearchProvider");
   }
-  const baseURL = env.TMDB_BASE_URL || TMDB_DIRECT_BASE_URL;
+  const baseURL = (env.TMDB_BASE_URL || "").trim() || TMDB_DIRECT_BASE_URL;
   return new TmdbSearchProvider({ readToken, baseURL });
 }
 

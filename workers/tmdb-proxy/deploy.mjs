@@ -60,8 +60,16 @@ try {
 
 console.log("🔑 Checking login status...");
 try {
-  const out = execSync("npx wrangler whoami", { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-  console.log("✅ Logged in");
+  // wrangler whoami exits 0 even when not logged in — check stdout content
+  const out = execSync("npx wrangler whoami 2>&1", { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  if (out.includes("Account ID") || out.includes("Email") || out.includes("You are logged in")) {
+    console.log("✅ Logged in");
+  } else {
+    console.log("\n❌ Not logged in.");
+    console.log("   Run this first, then retry:");
+    console.log("   npx wrangler login");
+    process.exit(1);
+  }
 } catch (e) {
   console.log("\n❌ Not logged in.");
   console.log("   Run this first, then retry:");

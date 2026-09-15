@@ -803,10 +803,9 @@ export async function saveTmdbApiKeyAction(apiKey: string, baseUrl?: string): Pr
     if (trimmedKey) {
       await repository.setAccountSetting(accountId, TMDB_API_KEY_SETTING_KEY, trimmedKey);
     }
-    // Save custom base URL if provided
+    // Save custom base URL (empty string clears it)
     if (baseUrl !== undefined) {
-      const trimmedUrl = baseUrl.trim();
-      await repository.setAccountSetting(accountId, TMDB_BASE_URL_SETTING_KEY, trimmedUrl);
+      await repository.setAccountSetting(accountId, TMDB_BASE_URL_SETTING_KEY, baseUrl.trim());
     }
     return { success: true };
   } catch (error) {

@@ -104,7 +104,10 @@ npx wrangler login
 cp deploy.config.example.yml deploy.config.yml
 vi deploy.config.yml
 
-# 3. 部署
+# 3. 安装依赖（首次）
+npm install
+
+# 4. 部署
 node deploy.mjs
 ```
 

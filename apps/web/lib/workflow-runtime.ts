@@ -1069,7 +1069,9 @@ export async function getTmdbAccesses(
   const accesses: TmdbAccess[] = [];
   const userKey = (await repository.getSetting(TMDB_API_KEY_SETTING_KEY))?.trim();
   if (userKey) {
-    // Use custom base URL from settings if provided, otherwise direct TMDB
+    // Priority: user settings > env TMDB_BASE_URL > direct TMDB
+    // User settings take precedence so a user with their own proxy can
+    // override any deployment-level default.
     const customBase = (await repository.getSetting(TMDB_BASE_URL_SETTING_KEY))?.trim();
     const baseURL = customBase || env.TMDB_BASE_URL?.trim() || TMDB_DIRECT_BASE_URL;
     accesses.push({ baseURL, readToken: userKey });
