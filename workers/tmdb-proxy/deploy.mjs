@@ -57,30 +57,42 @@ try {
 // ── Step 1: KV namespace ─────────────────────────────────────────────────
 
 let kvId;
+console.log(`\n📦 Creating KV namespace: ${kvNamespace}...`);
 try {
   const out = execSync(`npx wrangler kv namespace create ${kvNamespace} ${cfgArg}`, {
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
   });
   const match = out.match(/Namespace id:\s*([a-f0-9]+)/i);
-  if (!match) throw new Error("Could not parse namespace id");
+  if (!match) throw new Error("Could not parse namespace id from: " + out);
   kvId = match[1];
   console.log(`✅ KV namespace created: ${kvId}`);
 } catch (e) {
-  // Namespace might already exist — try to find it
+  // Namespace might already exist — list and find it
+  console.log(`⚠️  Create failed, listing existing namespaces...`);
   try {
     const out = execSync(`npx wrangler kv namespace list ${cfgArg}`, { encoding: "utf8" });
-    const line = out.split("\n").find(l => l.includes(kvNamespace));
+    console.log("Existing namespaces:");
+    console.log(out);
+    // Try to find by name or title
+    const lines = out.split("\n");
+    const line = lines.find(l => l.includes(kvNamespace) || l.toLowerCase().includes(kvNamespace.toLowerCase()));
     if (line) {
       const match = line.match(/([a-f0-9]{32})/);
       if (match) {
         kvId = match[1];
-        console.log(`✅ KV namespace exists: ${kvId}`);
+        console.log(`✅ Found existing namespace: ${kvId}`);
       }
     }
-  } catch {}
+  } catch (listErr) {
+    console.error("List also failed:", listErr.message);
+  }
   if (!kvId) {
-    console.error("❌ Could not find or create KV namespace:", e.message);
+    console.error("\n❌ Could not find or create KV namespace.");
+    console.error("   Manual steps:");
+    console.error(`   1. npx wrangler kv namespace list ${cfgArg}`);
+    console.error("   2. Find the id for your namespace");
+    console.error("   3. Set it in wrangler.jsonc manually");
     process.exit(1);
   }
 }
@@ -103,6 +115,7 @@ if (customDomain) {
   updated = updated.replace(/\n\s*"routes":\s*\[[^\]]*\]/, "");
 }
 
+console.log(`\n✏️  Updating wrangler.jsonc...`);
 writeFileSync(WRANGLER_CONFIG, updated);
 console.log(`✅ wrangler.jsonc updated (name: ${workerName}, kv: ${kvId})`);
 
@@ -163,7 +176,8 @@ if (!workerUrl) {
   process.exit(0);
 }
 
-console.log(`\n🔍 Testing ${workerUrl}...\n`);
+console.log(`\n🔍 Verifying deployment...`);
+console.log(`  URL: ${workerUrl}\n`);
 
 function curlStatus(url, headers = {}) {
   const headerStr = Object.entries(headers).map(([k, v]) => `-H "${k}: ${v}"`).join(" ");
@@ -192,4 +206,9 @@ if (tmdbToken) {
 const badPathStatus = curlStatus(`${workerUrl}/account/x`, tmdbToken ? { Authorization: `Bearer ${tmdbToken}` } : {});
 console.log(`  ${badPathStatus === "404" ? "✅" : "❌"} Disallowed path → ${badPathStatus} (expect 404)`);
 
-console.log("\n✅ All done! Worker URL:", workerUrl);
+console.log("\n✅ All done!");
+console.log("   Worker URL:", workerUrl);
+console.log("\n💡 Tips:");
+console.log("   npx wrangler login   - Login with Cloudflare");
+console.log("   npx wrangler logout  - Logout");
+console.log("   npx wrangler whoami  - Check current account");
