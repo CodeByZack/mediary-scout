@@ -148,30 +148,33 @@ try {
   }
 }
 
-// ── Step 2: Update wrangler.jsonc ────────────────────────────────────────
+// ── Step 2: Generate wrangler.jsonc ───────────────────────────────────────
 
-let wranglerJsonc = readFileSync(WRANGLER_CONFIG, "utf8");
-let updated = wranglerJsonc
-  .replace(/"name":\s*"[^"]+"/, `"name": "${workerName}"`)
-  .replace(/"id":\s*"[a-f0-9]+"/, `"id": "${kvId}"`);
+console.log(`\n✏️  Generating wrangler.jsonc...`);
 
-// Add or update routes
-if (customDomain) {
-  if (/\n\s*"routes":/.test(updated)) {
-    // Routes already exist — replace them
-    updated = updated.replace(/\n\s*"routes":\s*\[[^\]]*\]/, `\n  "routes": [{ "pattern": "${customDomain}", "custom_domain": true }]`);
-  } else {
-    // No routes — add after workers_dev (handle existing comma)
-    updated = updated.replace(/"workers_dev":\s*true[,]?/, `"workers_dev": true,\n  "routes": [{ "pattern": "${customDomain}", "custom_domain": true }]`);
+// Build the config object
+const config = {
+  name: workerName,
+  main: "src/index.ts",
+  compatibility_date: "2026-06-01",
+  workers_dev: true,
+  kv_namespaces: [
+    { binding: "TMDB_CACHE", id: kvId }
+  ],
+  triggers: {
+    crons: ["0 22 * * *"]
   }
-} else {
-  // Remove routes if no custom domain
-  updated = updated.replace(/\n\s*"routes":\s*\[[^\]]*\]/, "");
+};
+
+// Add routes if custom domain
+if (customDomain) {
+  config.routes = [{ pattern: customDomain, custom_domain: true }];
 }
 
-console.log(`\n✏️  Updating wrangler.jsonc...`);
-writeFileSync(WRANGLER_CONFIG, updated);
-console.log(`✅ wrangler.jsonc updated (name: ${workerName}, kv: ${kvId})`);
+// Write as pretty JSON (with comments stripped)
+const jsonc = JSON.stringify(config, null, 2) + "\n";
+writeFileSync(WRANGLER_CONFIG, jsonc);
+console.log(`✅ wrangler.jsonc generated (name: ${workerName}, kv: ${kvId})`);
 
 // ── Step 3: Set secrets ──────────────────────────────────────────────────
 
