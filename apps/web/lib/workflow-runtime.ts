@@ -1037,6 +1037,8 @@ export async function getLlmConfig(repository: {
 
 export const TMDB_API_KEY_SETTING_KEY = "tmdb_api_key";
 
+export const TMDB_BASE_URL_SETTING_KEY = "tmdb_base_url";
+
 export const ASSRT_TOKEN_SETTING_KEY = "assrt_token";
 
 /** The user's assrt.net subtitle API token (Settings → 字幕来源). Undefined when
@@ -1056,9 +1058,10 @@ export async function getAssrtToken(
  *  for a tokenless user. The workers.dev URL still serves older releases. */
 export const DEFAULT_TMDB_PROXY_BASE_URL = "https://tmdb-proxy.mediaryscout.app";
 
-/** Ordered TMDB access channels: user's own key (direct) → env token (direct) →
- *  the proxy Worker (always last, no token — the Worker injects the author's).
- *  Each HTTP call tries them in order; a dead user key falls through to the proxy. */
+/** Ordered TMDB access channels: user's own key (direct or custom proxy) →
+ *  env token (direct) → the proxy Worker (always last, no token — the Worker
+ *  injects the author's). Each HTTP call tries them in order; a dead user key
+ *  falls through to the proxy. */
 export async function getTmdbAccesses(
   repository: { getSetting(key: string): Promise<string | null> },
   env: NodeJS.ProcessEnv = process.env,
@@ -1066,7 +1069,10 @@ export async function getTmdbAccesses(
   const accesses: TmdbAccess[] = [];
   const userKey = (await repository.getSetting(TMDB_API_KEY_SETTING_KEY))?.trim();
   if (userKey) {
-    accesses.push({ baseURL: TMDB_DIRECT_BASE_URL, readToken: userKey });
+    // Use custom base URL from settings if provided, otherwise direct TMDB
+    const customBase = (await repository.getSetting(TMDB_BASE_URL_SETTING_KEY))?.trim();
+    const baseURL = customBase || env.TMDB_BASE_URL?.trim() || TMDB_DIRECT_BASE_URL;
+    accesses.push({ baseURL, readToken: userKey });
   }
   const envToken = env.TMDB_READ_TOKEN?.trim();
   if (envToken) {

@@ -792,15 +792,21 @@ export async function testLlmConnectionAction(): Promise<{ ok: boolean; message:
   }
 }
 
-export async function saveTmdbApiKeyAction(apiKey: string): Promise<PushSettingsActionResult> {
+export async function saveTmdbApiKeyAction(apiKey: string, baseUrl?: string): Promise<PushSettingsActionResult> {
   assertNotDemo();
   try {
-    const { getWorkflowRepository, getCurrentAccountId, TMDB_API_KEY_SETTING_KEY } = await import("../lib/workflow-runtime");
+    const { getWorkflowRepository, getCurrentAccountId, TMDB_API_KEY_SETTING_KEY, TMDB_BASE_URL_SETTING_KEY } = await import("../lib/workflow-runtime");
     const repository = getWorkflowRepository();
+    const accountId = await getCurrentAccountId();
     // Blank submit keeps the stored key (the form never echoes it back).
-    const trimmed = apiKey.trim();
-    if (trimmed) {
-      await repository.setAccountSetting(await getCurrentAccountId(), TMDB_API_KEY_SETTING_KEY, trimmed);
+    const trimmedKey = apiKey.trim();
+    if (trimmedKey) {
+      await repository.setAccountSetting(accountId, TMDB_API_KEY_SETTING_KEY, trimmedKey);
+    }
+    // Save custom base URL if provided
+    if (baseUrl !== undefined) {
+      const trimmedUrl = baseUrl.trim();
+      await repository.setAccountSetting(accountId, TMDB_BASE_URL_SETTING_KEY, trimmedUrl);
     }
     return { success: true };
   } catch (error) {
@@ -811,8 +817,10 @@ export async function saveTmdbApiKeyAction(apiKey: string): Promise<PushSettings
 export async function clearTmdbApiKeyAction(): Promise<PushSettingsActionResult> {
   assertNotDemo();
   try {
-    const { getWorkflowRepository, getCurrentAccountId, TMDB_API_KEY_SETTING_KEY } = await import("../lib/workflow-runtime");
-    await getWorkflowRepository().setAccountSetting(await getCurrentAccountId(), TMDB_API_KEY_SETTING_KEY, "");
+    const { getWorkflowRepository, getCurrentAccountId, TMDB_API_KEY_SETTING_KEY, TMDB_BASE_URL_SETTING_KEY } = await import("../lib/workflow-runtime");
+    const accountId = await getCurrentAccountId();
+    await getWorkflowRepository().setAccountSetting(accountId, TMDB_API_KEY_SETTING_KEY, "");
+    await getWorkflowRepository().setAccountSetting(accountId, TMDB_BASE_URL_SETTING_KEY, "");
     return { success: true };
   } catch (error) {
     return { success: false, message: `清除失败：${String(error)}` };
