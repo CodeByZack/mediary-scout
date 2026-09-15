@@ -208,11 +208,14 @@ try {
 
 // ── Step 5: Verify ───────────────────────────────────────────────────────
 
-// Extract Worker URL from deploy output
+// Extract Worker URL — prefer custom domain (what users actually use)
 let workerUrl = null;
-const urlMatch = deployOut.match(/https:\/\/[^\s]+\.workers\.dev/);
-if (urlMatch) workerUrl = urlMatch[0];
-else if (customDomain) workerUrl = `https://${customDomain}`;
+if (customDomain) {
+  workerUrl = `https://${customDomain}`;
+} else {
+  const urlMatch = deployOut.match(/https:\/\/[^\s]+\.workers\.dev/);
+  if (urlMatch) workerUrl = urlMatch[0];
+}
 
 if (!workerUrl) {
   console.log("\n⚠️  Could not determine Worker URL. Test manually with wrangler output.");
