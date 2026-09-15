@@ -32,9 +32,22 @@ try {
 }
 
 const cfg = JSON.parse(cfgText);
-const { workerName, tmdbToken, corsOrigins, customDomain, kvNamespace, storeSecret = true } = cfg;
+const { workerName, tmdbToken, corsOrigins, customDomain, kvNamespace, storeSecret = true, cfApiToken } = cfg;
 
 if (!workerName) { console.error("❌ workerName is required"); process.exit(1); }
+
+// Set CLOUDFLARE_API_TOKEN if provided (required for non-interactive mode)
+const cfToken = cfApiToken || process.env.CLOUDFLARE_API_TOKEN;
+if (!cfToken) {
+  console.log("\n⚠️  CLOUDFLARE_API_TOKEN not set.");
+  console.log("   Add \"cfApiToken\": \"your-token\" to deploy.config.json");
+  console.log("   Get token: https://dash.cloudflare.com/profile/api-tokens");
+  console.log("   Or set env: export CLOUDFLARE_API_TOKEN=your-token\n");
+}
+if (cfToken) {
+  process.env.CLOUDFLARE_API_TOKEN = cfToken;
+  console.log("🔑 CF API token loaded");
+}
 
 const cfgArg = "--config " + WRANGLER_CONFIG;
 
