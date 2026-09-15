@@ -1,0 +1,144 @@
+#!/usr/bin/env node
+/**
+ * deploy.mjs — One-command deployment for tmdb-proxy.
+ *
+ * Usage:
+ *   cp deploy.config.example.json deploy.config.json
+ *   # Edit deploy.config.json with your tokens
+ *   node deploy.mjs
+ *
+ * Requires: wrangler (npm i -g wrangler), logged in (wrangler login)
+ */
+
+import { readFileSync, writeFileSync } from "node:fs";
+import { execSync, spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const CONFIG_PATH = join(__dirname, "deploy.config.json");
+const WRANGLER_CONFIG = join(__dirname, "wrangler.jsonc");
+
+// ── Read config ──────────────────────────────────────────────────────────
+
+let cfgText;
+try {
+  cfgText = readFileSync(CONFIG_PATH, "utf8");
+} catch {
+  console.error("❌ deploy.config.json not found.");
+  console.error("   cp deploy.config.example.json deploy.config.json");
+  console.error("   Edit it with your tokens, then run again.");
+  process.exit(1);
+}
+
+const cfg = JSON.parse(cfgText);
+const { workerName, tmdbToken, corsOrigins, customDomain, kvNamespace } = cfg;
+
+if (!workerName) { console.error("❌ workerName is required"); process.exit(1); }
+if (!tmdbToken) { console.error("❌ tmdbToken is required"); process.exit(1); }
+
+const cfgArg = "--config " + WRANGLER_CONFIG;
+
+// ── Check wrangler ───────────────────────────────────────────────────────
+
+try {
+  execSync("wrangler --version", { stdio: "pipe" });
+} catch {
+  console.error("❌ wrangler not found. Install: npm i -g wrangler");
+  process.exit(1);
+}
+
+try {
+  execSync("wrangler whoami", { stdio: "pipe" });
+} catch {
+  console.error("❌ Not logged in. Run: wrangler login");
+  process.exit(1);
+}
+
+// ── Step 1: KV namespace ─────────────────────────────────────────────────
+
+let kvId;
+try {
+  const out = execSync(`wrangler kv namespace create ${kvNamespace} ${cfgArg}`, {
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const match = out.match(/Namespace id:\s*([a-f0-9]+)/i);
+  if (!match) throw new Error("Could not parse namespace id");
+  kvId = match[1];
+  console.log(`✅ KV namespace created: ${kvId}`);
+} catch (e) {
+  // Namespace might already exist — try to find it
+  try {
+    const out = execSync(`wrangler kv namespace list ${cfgArg}`, { encoding: "utf8" });
+    const line = out.split("\n").find(l => l.includes(kvNamespace));
+    if (line) {
+      const match = line.match(/([a-f0-9]{32})/);
+      if (match) {
+        kvId = match[1];
+        console.log(`✅ KV namespace exists: ${kvId}`);
+      }
+    }
+  } catch {}
+  if (!kvId) {
+    console.error("❌ Could not find or create KV namespace:", e.message);
+    process.exit(1);
+  }
+}
+
+// ── Step 2: Update wrangler.jsonc ────────────────────────────────────────
+
+let wranglerJsonc = readFileSync(WRANGLER_CONFIG, "utf8");
+let updated = wranglerJsonc
+  .replace(/"name":\s*"[^"]+"/, `"name": "${workerName}"`)
+  .replace(/"id":\s*"[a-f0-9]+"/, `"id": "${kvId}"`);
+
+// Add or update routes
+if (customDomain) {
+  if (/\n\s*"routes":/.test(updated)) {
+    updated = updated.replace(/\n\s*"routes":\s*\[[^\]]*\]/, `\n  "routes": [{ "pattern": "${customDomain}", "custom_domain": true }]`);
+  } else {
+    updated = updated.replace(/"workers_dev":\s*true/, `"workers_dev": true,\n  "routes": [{ "pattern": "${customDomain}", "custom_domain": true }]`);
+  }
+} else {
+  updated = updated.replace(/\n\s*"routes":\s*\[[^\]]*\]/, "");
+}
+
+writeFileSync(WRANGLER_CONFIG, updated);
+console.log(`✅ wrangler.jsonc updated (name: ${workerName}, kv: ${kvId})`);
+
+// ── Step 3: Set secrets ──────────────────────────────────────────────────
+
+function setSecret(name, value) {
+  return new Promise((resolve) => {
+    const child = spawn("wrangler", ["secret", "put", name, cfgArg], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stdin.write(value);
+    child.stdin.end();
+    let out = "";
+    child.stdout.on("data", (d) => { out += d; });
+    child.stderr.on("data", (d) => { out += d; });
+    child.on("close", (code) => {
+      if (code === 0) console.log(`✅ Secret ${name} set`);
+      else console.error(`❌ Failed to set secret ${name}:`, out);
+      resolve();
+    });
+  });
+}
+
+await setSecret("TMDB_READ_TOKEN", tmdbToken);
+
+if (corsOrigins) {
+  await setSecret("CORS_ALLOWED_ORIGINS", corsOrigins);
+}
+
+// ── Step 4: Deploy ───────────────────────────────────────────────────────
+
+try {
+  execSync(`wrangler deploy ${cfgArg}`, { stdio: "inherit" });
+  console.log("\n✅ Deployment complete!");
+} catch (e) {
+  console.error("\n❌ Deployment failed:", e.message);
+  process.exit(1);
+}
