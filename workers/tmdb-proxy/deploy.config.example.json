@@ -1,7 +1,7 @@
 {
   "workerName": "media-track-tmdb-proxy",
   "tmdbToken": "",
-  "setSecret": true,
+  "storeSecret": true,
   "corsOrigins": "",
   "customDomain": "",
   "kvNamespace": "TMDB_CACHE"

@@ -32,7 +32,7 @@ try {
 }
 
 const cfg = JSON.parse(cfgText);
-const { workerName, tmdbToken, corsOrigins, customDomain, kvNamespace, setSecret = true } = cfg;
+const { workerName, tmdbToken, corsOrigins, customDomain, kvNamespace, storeSecret = true } = cfg;
 
 if (!workerName) { console.error("❌ workerName is required"); process.exit(1); }
 
@@ -126,10 +126,10 @@ function setSecret(name, value) {
   });
 }
 
-if (tmdbToken && setSecret) {
+if (tmdbToken && storeSecret) {
   await setSecret("TMDB_READ_TOKEN", tmdbToken);
-} else if (tmdbToken && !setSecret) {
-  console.log("⏭️  TMDB_READ_TOKEN skipped (setSecret: false, token used for test only)");
+} else if (tmdbToken && !storeSecret) {
+  console.log("⏭️  TMDB_READ_TOKEN skipped (storeSecret: false, token used for test only)");
 } else {
   console.log("⏭️  TMDB_READ_TOKEN skipped (will use Authorization header)");
 }
