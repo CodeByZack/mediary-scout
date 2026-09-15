@@ -208,22 +208,16 @@ try {
 
 // ── Step 5: Verify ───────────────────────────────────────────────────────
 
-// Extract Worker URL — prefer custom domain (what users actually use)
-let workerUrl = null;
-if (customDomain) {
-  workerUrl = `https://${customDomain}`;
-} else {
-  const urlMatch = deployOut.match(/https:\/\/[^\s]+\.workers\.dev/);
-  if (urlMatch) workerUrl = urlMatch[0];
-}
+// Collect both URLs
+const urls = [];
+if (customDomain) urls.push(`https://${customDomain}`);
+const devMatch = deployOut.match(/https:\/\/[^\s]+\.workers\.dev/);
+if (devMatch) urls.push(devMatch[0]);
 
-if (!workerUrl) {
+if (urls.length === 0) {
   console.log("\n⚠️  Could not determine Worker URL. Test manually with wrangler output.");
   process.exit(0);
 }
-
-console.log(`\n🔍 Verifying deployment...`);
-console.log(`  URL: ${workerUrl}\n`);
 
 function curlStatus(url, headers = {}) {
   const headerStr = Object.entries(headers).map(([k, v]) => `-H "${k}: ${v}"`).join(" ");
@@ -234,26 +228,31 @@ function curlStatus(url, headers = {}) {
   }
 }
 
-const testUrl = `${workerUrl}/movie/278?language=zh-CN`;
+for (const url of urls) {
+  const testUrl = `${url}/movie/278?language=zh-CN`;
+  const label = customDomain && url.includes(customDomain) ? `Custom (${customDomain})` : `Workers.dev`;
+  console.log(`\n🔍 ${label}: ${url}`);
 
-// Test 1: No token → should be 401
-const noTokenStatus = curlStatus(testUrl);
-console.log(`  ${noTokenStatus === "401" ? "✅" : "❌"} No token → ${noTokenStatus} (expect 401)`);
+  // Test 1: No token → should be 401
+  const noTokenStatus = curlStatus(testUrl);
+  console.log(`  ${noTokenStatus === "401" ? "✅" : "❌"} No token → ${noTokenStatus} (expect 401)`);
 
-// Test 2: With token → should be 200
-if (tmdbToken) {
-  const withTokenStatus = curlStatus(testUrl, { Authorization: `Bearer ${tmdbToken}` });
-  console.log(`  ${withTokenStatus === "200" ? "✅" : "❌"} With token → ${withTokenStatus} (expect 200)`);
-} else {
-  console.log(`  ⏭️  With token → skipped (no tmdbToken in config)`);
+  // Test 2: With token → should be 200
+  if (tmdbToken) {
+    const withTokenStatus = curlStatus(testUrl, { Authorization: `Bearer ${tmdbToken}` });
+    console.log(`  ${withTokenStatus === "200" ? "✅" : "❌"} With token → ${withTokenStatus} (expect 200)`);
+  } else {
+    console.log(`  ⏭️  With token → skipped (no tmdbToken in config)`);
+  }
+
+  // Test 3: Disallowed path → should be 404
+  const badPathStatus = curlStatus(`${url}/account/x`, tmdbToken ? { Authorization: `Bearer ${tmdbToken}` } : {});
+  console.log(`  ${badPathStatus === "404" ? "✅" : "❌"} Disallowed path → ${badPathStatus} (expect 404)`);
 }
 
-// Test 3: Disallowed path → should be 404
-const badPathStatus = curlStatus(`${workerUrl}/account/x`, tmdbToken ? { Authorization: `Bearer ${tmdbToken}` } : {});
-console.log(`  ${badPathStatus === "404" ? "✅" : "❌"} Disallowed path → ${badPathStatus} (expect 404)`);
-
 console.log("\n✅ All done!");
-console.log("   Worker URL:", workerUrl);
+console.log("   Worker URLs:");
+for (const u of urls) console.log(`     - ${u}`);
 console.log("\n💡 Tips:");
 console.log("   npx wrangler login   - Login with Cloudflare");
 console.log("   npx wrangler logout  - Logout");
