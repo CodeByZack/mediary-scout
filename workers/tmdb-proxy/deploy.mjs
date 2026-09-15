@@ -42,14 +42,14 @@ const cfgArg = "--config " + WRANGLER_CONFIG;
 // ── Check wrangler ───────────────────────────────────────────────────────
 
 try {
-  execSync("wrangler --version", { stdio: "pipe" });
+  execSync("npx wrangler --version", { stdio: "pipe" });
 } catch {
-  console.error("❌ wrangler not found. Install: npm i -g wrangler");
+  console.error("❌ wrangler not found. Install: npm i -g wrangler (or run with npx)");
   process.exit(1);
 }
 
 try {
-  execSync("wrangler whoami", { stdio: "pipe" });
+  execSync("npx wrangler whoami", { stdio: "pipe" });
 } catch {
   console.error("❌ Not logged in. Run: wrangler login");
   process.exit(1);
@@ -59,7 +59,7 @@ try {
 
 let kvId;
 try {
-  const out = execSync(`wrangler kv namespace create ${kvNamespace} ${cfgArg}`, {
+  const out = execSync(`npx wrangler kv namespace create ${kvNamespace} ${cfgArg}`, {
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -70,7 +70,7 @@ try {
 } catch (e) {
   // Namespace might already exist — try to find it
   try {
-    const out = execSync(`wrangler kv namespace list ${cfgArg}`, { encoding: "utf8" });
+    const out = execSync(`npx wrangler kv namespace list ${cfgArg}`, { encoding: "utf8" });
     const line = out.split("\n").find(l => l.includes(kvNamespace));
     if (line) {
       const match = line.match(/([a-f0-9]{32})/);
@@ -111,7 +111,7 @@ console.log(`✅ wrangler.jsonc updated (name: ${workerName}, kv: ${kvId})`);
 
 function setSecret(name, value) {
   return new Promise((resolve) => {
-    const child = spawn("wrangler", ["secret", "put", name, cfgArg], {
+    const child = spawn("npx", ["wrangler", "secret", "put", name, cfgArg], {
       stdio: ["pipe", "pipe", "pipe"],
     });
     child.stdin.write(value);
@@ -136,7 +136,7 @@ if (corsOrigins) {
 // ── Step 4: Deploy ───────────────────────────────────────────────────────
 
 try {
-  execSync(`wrangler deploy ${cfgArg}`, { stdio: "inherit" });
+  execSync(`npx wrangler deploy ${cfgArg}`, { stdio: "inherit" });
   console.log("\n✅ Deployment complete!");
 } catch (e) {
   console.error("\n❌ Deployment failed:", e.message);
