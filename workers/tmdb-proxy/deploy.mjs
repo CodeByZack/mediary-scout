@@ -164,7 +164,9 @@ console.log(`✅ wrangler.jsonc generated (name: ${workerName}, kv: ${kvId})`);
 
 function setSecret(name, value) {
   return new Promise((resolve) => {
-    const child = spawn("npx", ["wrangler", "secret", "put", name, cfgArg], {
+    // cfgArg is "--config /path" — must split into separate args for spawn
+    const args = ["wrangler", "secret", "put", name, "--config", WRANGLER_CONFIG];
+    const child = spawn("npx", args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
     child.stdin.write(value);
