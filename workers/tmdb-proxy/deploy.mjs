@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CONFIG_PATH = join(__dirname, "deploy.config.json");
+const CONFIG_PATH = join(__dirname, "deploy.config.jsonc");
 const WRANGLER_CONFIG = join(__dirname, "wrangler.jsonc");
 
 // ── Read config ──────────────────────────────────────────────────────────
@@ -25,8 +25,8 @@ let cfgText;
 try {
   cfgText = readFileSync(CONFIG_PATH, "utf8");
 } catch {
-  console.error("❌ deploy.config.json not found.");
-  console.error("   Create deploy.config.json with your config, then run again.");
+  console.error("❌ deploy.config.jsonc not found.");
+  console.error("   Create deploy.config.jsonc with your config, then run again.");
   process.exit(1);
 }
 

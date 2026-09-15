@@ -101,7 +101,7 @@ cd workers/tmdb-proxy
 npx wrangler login
 
 # 2. 创建配置文件并编辑
-vi deploy.config.json
+vi deploy.config.jsonc
 # (内容见下方「配置说明」)
 
 # 3. 部署
@@ -117,7 +117,7 @@ node deploy.mjs
 
 ### 3.2 配置说明
 
-`deploy.config.json` 各字段说明：
+`deploy.config.jsonc` 各字段说明：
 
 | 字段 | 必填 | 示例 | 说明 |
 |---|---|---|---|
