@@ -57,23 +57,19 @@ try {
 }
 
 console.log("🔑 Checking login status...");
-let loggedIn = false;
 try {
-  execSync("npx wrangler whoami", { stdio: "inherit" });
-  loggedIn = true;
-} catch {
-  // Not logged in — try to login via browser
-  console.log("\n🌐 Not logged in. Opening browser for login...");
-  try {
-    execSync("npx wrangler login", { stdio: "inherit" });
-    loggedIn = true;
-  } catch {
-    console.log("\n❌ Login failed. Please run manually:");
-    console.log("   npx wrangler login");
-    process.exit(1);
+  const out = execSync("npx wrangler whoami", { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  if (out.includes("authenticated") || out.includes("Account ID")) {
+    console.log("✅ Logged in");
+  } else {
+    throw new Error("not authenticated");
   }
+} catch {
+  console.log("\n❌ Not logged in.");
+  console.log("   Run this first, then retry:");
+  console.log("   npx wrangler login");
+  process.exit(1);
 }
-if (loggedIn) console.log("✅ Logged in");
 
 // ── Step 1: KV namespace ─────────────────────────────────────────────────
 
