@@ -6,7 +6,5 @@
   "scripts": {
     "deploy": "node deploy.mjs"
   },
-  "dependencies": {
-    "yaml": "^2.4.0"
-  }
+
 }
