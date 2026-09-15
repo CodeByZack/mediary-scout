@@ -36,23 +36,19 @@ const { workerName, tmdbToken, corsOrigins, customDomain, kvNamespace, storeSecr
 
 if (!workerName) { console.error("❌ workerName is required"); process.exit(1); }
 
-// Set CLOUDFLARE_API_TOKEN if provided (required for non-interactive mode)
-const cfToken = cfApiToken || process.env.CLOUDFLARE_API_TOKEN;
-if (!cfToken) {
-  console.log("\n⚠️  CLOUDFLARE_API_TOKEN not set.");
-  console.log("   Add \"cfApiToken\": \"your-token\" to deploy.config.json");
-  console.log("   Get token: https://dash.cloudflare.com/profile/api-tokens");
-  console.log("   Or set env: export CLOUDFLARE_API_TOKEN=your-token\n");
-}
-if (cfToken) {
-  process.env.CLOUDFLARE_API_TOKEN = cfToken;
-  console.log("🔑 CF API token loaded");
+// Use CF API token if provided (optional — browser login also works)
+if (cfApiToken) {
+  process.env.CLOUDFLARE_API_TOKEN = cfApiToken;
+  console.log("🔑 CF API token loaded from config");
+} else if (process.env.CLOUDFLARE_API_TOKEN) {
+  console.log("🔑 CF API token loaded from environment");
 }
 
 const cfgArg = "--config " + WRANGLER_CONFIG;
 
 // ── Check wrangler ───────────────────────────────────────────────────────
 
+console.log("\n🔧 Checking wrangler...");
 try {
   execSync("npx wrangler --version", { stdio: "pipe" });
 } catch {
@@ -60,12 +56,24 @@ try {
   process.exit(1);
 }
 
+console.log("🔑 Checking login status...");
+let loggedIn = false;
 try {
-  execSync("npx wrangler whoami", { stdio: "pipe" });
+  execSync("npx wrangler whoami", { stdio: "inherit" });
+  loggedIn = true;
 } catch {
-  console.error("❌ Not logged in. Run: wrangler login");
-  process.exit(1);
+  // Not logged in — try to login via browser
+  console.log("\n🌐 Not logged in. Opening browser for login...");
+  try {
+    execSync("npx wrangler login", { stdio: "inherit" });
+    loggedIn = true;
+  } catch {
+    console.log("\n❌ Login failed. Please run manually:");
+    console.log("   npx wrangler login");
+    process.exit(1);
+  }
 }
+if (loggedIn) console.log("✅ Logged in");
 
 // ── Step 1: KV namespace ─────────────────────────────────────────────────
 
