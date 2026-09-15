@@ -158,11 +158,14 @@ let updated = wranglerJsonc
 // Add or update routes
 if (customDomain) {
   if (/\n\s*"routes":/.test(updated)) {
+    // Routes already exist — replace them
     updated = updated.replace(/\n\s*"routes":\s*\[[^\]]*\]/, `\n  "routes": [{ "pattern": "${customDomain}", "custom_domain": true }]`);
   } else {
-    updated = updated.replace(/"workers_dev":\s*true/, `"workers_dev": true,\n  "routes": [{ "pattern": "${customDomain}", "custom_domain": true }]`);
+    // No routes — add after workers_dev (handle existing comma)
+    updated = updated.replace(/"workers_dev":\s*true[,]?/, `"workers_dev": true,\n  "routes": [{ "pattern": "${customDomain}", "custom_domain": true }]`);
   }
 } else {
+  // Remove routes if no custom domain
   updated = updated.replace(/\n\s*"routes":\s*\[[^\]]*\]/, "");
 }
 
