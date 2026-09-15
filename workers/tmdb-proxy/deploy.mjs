@@ -138,10 +138,56 @@ if (corsOrigins) {
 
 // ── Step 4: Deploy ───────────────────────────────────────────────────────
 
+let deployOut;
 try {
-  execSync(`npx wrangler deploy ${cfgArg}`, { stdio: "inherit" });
+  deployOut = execSync(`npx wrangler deploy ${cfgArg}`, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  console.log(deployOut);
   console.log("\n✅ Deployment complete!");
 } catch (e) {
   console.error("\n❌ Deployment failed:", e.message);
   process.exit(1);
 }
+
+// ── Step 5: Verify ───────────────────────────────────────────────────────
+
+// Extract Worker URL from deploy output
+let workerUrl = null;
+const urlMatch = deployOut.match(/https:\/\/[^\s]+\.workers\.dev/);
+if (urlMatch) workerUrl = urlMatch[0];
+else if (customDomain) workerUrl = `https://${customDomain}`;
+
+if (!workerUrl) {
+  console.log("\n⚠️  Could not determine Worker URL. Test manually with wrangler output.");
+  process.exit(0);
+}
+
+console.log(`\n🔍 Testing ${workerUrl}...\n`);
+
+function curlStatus(url, headers = {}) {
+  const headerStr = Object.entries(headers).map(([k, v]) => `-H "${k}: ${v}"`).join(" ");
+  try {
+    return execSync(`curl -s -o /dev/null -w "%{http_code}" ${headerStr} "${url}"`, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+  } catch {
+    return "000";
+  }
+}
+
+const testUrl = `${workerUrl}/movie/278?language=zh-CN`;
+
+// Test 1: No token → should be 401
+const noTokenStatus = curlStatus(testUrl);
+console.log(`  ${noTokenStatus === "401" ? "✅" : "❌"} No token → ${noTokenStatus} (expect 401)`);
+
+// Test 2: With token → should be 200
+if (tmdbToken) {
+  const withTokenStatus = curlStatus(testUrl, { Authorization: `Bearer ${tmdbToken}` });
+  console.log(`  ${withTokenStatus === "200" ? "✅" : "❌"} With token → ${withTokenStatus} (expect 200)`);
+} else {
+  console.log(`  ⏭️  With token → skipped (no tmdbToken in config)`);
+}
+
+// Test 3: Disallowed path → should be 404
+const badPathStatus = curlStatus(`${workerUrl}/account/x`, tmdbToken ? { Authorization: `Bearer ${tmdbToken}` } : {});
+console.log(`  ${badPathStatus === "404" ? "✅" : "❌"} Disallowed path → ${badPathStatus} (expect 404)`);
+
+console.log("\n✅ All done! Worker URL:", workerUrl);
