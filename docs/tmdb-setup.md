@@ -100,9 +100,9 @@ cd workers/tmdb-proxy
 # 1. 登录 Cloudflare（会弹出浏览器）
 npx wrangler login
 
-# 2. 复制配置文件并编辑
-cp deploy.config.example.yml deploy.config.yml
+# 2. 创建配置文件并编辑
 vi deploy.config.yml
+# (内容见下方「配置说明」)
 
 # 3. 安装依赖（首次）
 npm install
