@@ -183,12 +183,8 @@ async function SearchResults({
             <TriangleAlert size={22} aria-hidden />
             <strong>TMDB 元数据不可用</strong>
             <span>
-              未配置 TMDB API Key 或网络不通。请在设置页填入 TMDB API Key，
-              或配置自建 tmdb-proxy 的 Base URL。
+              未配置 TMDB API Key 或网络不通。请在设置页填入 TMDB API Key。
             </span>
-            <a className="primary-button" href={`${basePath}/settings`}>
-              去设置
-            </a>
             {searchView.providerError ? (
               <span className="panel-note">{searchView.providerError}</span>
             ) : null}

@@ -813,6 +813,24 @@ export async function saveTmdbApiKeyAction(apiKey: string, baseUrl?: string): Pr
   }
 }
 
+export async function testTmdbConnectionAction(): Promise<PushSettingsActionResult> {
+  assertNotDemo();
+  try {
+    const { getWorkflowRepository, getCurrentAccountId, getTmdbAccesses, TMDB_API_KEY_SETTING_KEY } = await import("../lib/workflow-runtime");
+    const { fetchTmdbList } = await import("@media-track/workflow");
+    const accountId = await getCurrentAccountId();
+    const accesses = await getTmdbAccesses(getWorkflowRepository());
+    if (accesses.length === 0) {
+      return { success: false, message: "未配置 TMDB API Key" };
+    }
+    // Try fetching a simple TMDB endpoint to verify connectivity
+    await fetchTmdbList(accesses, "configuration");
+    return { success: true, message: "连接成功" };
+  } catch (error) {
+    return { success: false, message: `连接失败：${String(error).slice(0, 100)}` };
+  }
+}
+
 export async function clearTmdbApiKeyAction(): Promise<PushSettingsActionResult> {
   assertNotDemo();
   try {

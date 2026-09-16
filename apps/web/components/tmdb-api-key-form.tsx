@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Check, ExternalLink, LoaderCircle, Trash2 } from "lucide-react";
-import { saveTmdbApiKeyAction, clearTmdbApiKeyAction } from "../app/actions";
+import { saveTmdbApiKeyAction, clearTmdbApiKeyAction, testTmdbConnectionAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
 
 export function TmdbApiKeyForm({ apiKeySet, baseUrlSet }: { apiKeySet: boolean; baseUrlSet: boolean }) {
@@ -65,10 +65,26 @@ export function TmdbApiKeyForm({ apiKeySet, baseUrlSet }: { apiKeySet: boolean; 
     });
   };
 
+  const handleTest = () => {
+    startTransition(async () => {
+      const r = await runAction(
+        () => testTmdbConnectionAction(),
+        (msg) => {
+          setResult(`❌ ${msg}`);
+          setTimeout(() => setResult(null), 3000);
+        },
+      );
+      if (!r.ok) return;
+      const res = r.value;
+      setResult(res.success ? `✅ ${res.message ?? "连接成功"}` : `❌ ${res.message ?? "连接失败"}`);
+      setTimeout(() => setResult(null), 5000);
+    });
+  };
+
   return (
     <div className="push-form">
       <p className="panel-note" style={{ marginBottom: 6 }}>
-        你在页面上看到的电影、剧集海报、简介、集数等数据，都来自 The Movie Database (TMDB)。可申请自己的 API Read Token 填入直连你自己的额度。留空不改动已保存的值。
+        影视元数据来源；可填自己的 key 直连，大陆网络可自建 tmdb-proxy
       </p>
       <p className="push-help" style={{ marginBottom: 12 }}>
         了解 TMDB{" "}
@@ -82,6 +98,17 @@ export function TmdbApiKeyForm({ apiKeySet, baseUrlSet }: { apiKeySet: boolean; 
       </p>
       <div className="setting-row" style={{ marginBottom: 8 }}>
         <input
+          type="text"
+          className="setting-control"
+          value={baseUrl}
+          onChange={(event) => setBaseUrl(event.target.value)}
+          placeholder={hasBaseUrl ? "已设置(留空不改)" : "自定义 API Base URL（如 https://tmdb.your-domain.com）"}
+          aria-label="TMDB Base URL"
+          autoComplete="off"
+        />
+      </div>
+      <div className="setting-row" style={{ marginBottom: 12 }}>
+        <input
           type="password"
           className="setting-control"
           value={apiKey}
@@ -90,6 +117,8 @@ export function TmdbApiKeyForm({ apiKeySet, baseUrlSet }: { apiKeySet: boolean; 
           aria-label="TMDB API Key"
           autoComplete="off"
         />
+      </div>
+      <div className="setting-row">
         <button type="button" className="primary-button" onClick={handleSave} disabled={isPending}>
           {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Check size={14} aria-hidden />}
           保存
@@ -100,20 +129,10 @@ export function TmdbApiKeyForm({ apiKeySet, baseUrlSet }: { apiKeySet: boolean; 
             清除
           </button>
         ) : null}
-      </div>
-      <div className="setting-row">
-        <input
-          type="text"
-          className="setting-control"
-          value={baseUrl}
-          onChange={(event) => setBaseUrl(event.target.value)}
-          placeholder={hasBaseUrl ? "已设置(留空不改)" : "自定义 API Base URL（如 https://tmdb.your-domain.com）"}
-          aria-label="TMDB Base URL"
-          autoComplete="off"
-        />
-        <span className="panel-note" style={{ fontSize: 12, marginLeft: 8 }}>
-          大陆网络自建 tmdb-proxy 后填入，留空则直连 TMDB
-        </span>
+        <button type="button" className="secondary-button" onClick={handleTest} disabled={isPending}>
+          {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : null}
+          测试连接
+        </button>
       </div>
       {result ? (
         <p className="panel-note" style={{ marginTop: 10 }}>
