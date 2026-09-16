@@ -130,6 +130,11 @@ function resolveAccesses(options: {
   if (options.accesses && options.accesses.length > 0) {
     return options.accesses.map(normalizeAccess);
   }
+  if (options.accesses && options.accesses.length === 0) {
+    // Empty accesses (no key configured) — return empty array so the provider
+    // fails gracefully with "no TMDB access configured" instead of throwing here.
+    return [];
+  }
   if (options.readToken !== undefined) {
     return [normalizeAccess({ baseURL: options.baseURL ?? TMDB_DIRECT_BASE_URL, readToken: options.readToken })];
   }
