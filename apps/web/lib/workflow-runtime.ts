@@ -1051,17 +1051,9 @@ export async function getAssrtToken(
   return value ? value : undefined;
 }
 
-/** Author-deployed CF Worker that proxies TMDB with the author's key (KV-cached).
- *  env TMDB_PROXY_BASE_URL overrides it (e.g. a user who self-hosts the worker).
- *  Custom domain, NOT the *.workers.dev alias — several mainland ISPs block the
- *  whole workers.dev zone (#83), and this default is the ONLY metadata channel
- *  for a tokenless user. The workers.dev URL still serves older releases. */
-export const DEFAULT_TMDB_PROXY_BASE_URL = "https://tmdb-proxy.mediaryscout.app";
-
 /** Ordered TMDB access channels: user's own key (direct or custom proxy) →
- *  env token (direct) → the proxy Worker (always last, no token — the Worker
- *  injects the author's). Each HTTP call tries them in order; a dead user key
- *  falls through to the proxy. */
+ *  env token (direct). No fallback to author's proxy — if no key is configured,
+ *  TMDB access fails and the UI shows a prompt to configure it. */
 export async function getTmdbAccesses(
   repository: { getSetting(key: string): Promise<string | null> },
   env: NodeJS.ProcessEnv = process.env,
@@ -1080,8 +1072,6 @@ export async function getTmdbAccesses(
   if (envToken) {
     accesses.push({ baseURL: TMDB_DIRECT_BASE_URL, readToken: envToken });
   }
-  const proxyBase = env.TMDB_PROXY_BASE_URL?.trim() || DEFAULT_TMDB_PROXY_BASE_URL;
-  accesses.push({ baseURL: proxyBase });
   return accesses;
 }
 
@@ -1586,10 +1576,8 @@ export async function runScheduledType3(options?: {
 function tmdbSeasonMetadataSync(): SeasonMetadataSync | undefined {
   // 2026-08-31 放开门闩:此前仅 MEDIA_TRACK_SEARCH_PROVIDER=tmdb 才注入 TMDB 播出日
   // 同步。数据源(pansou/prowlarr 等)与 TMDB 元数据是两回事——搜索源决不影响「该季
-  // 各集何时播出」(年守卫数据)。getTmdbAccesses 的 proxy 通道永远保底
-  // (env.TMDB_PROXY_BASE_URL || 默认托管域名),TMDB 元数据恒可用——无需任何环境
-  // 变量闸门;搜索 provider 门闩/环境变量门闩两版都误伤了仅配默认 proxy 的部署
-  // (airDate 全 null、年守卫惰性、Part 锚定无数据)。
+  // 各集何时播出」(年守卫数据)。用户必须配置 TMDB key 才能获取元数据——无 key 时
+  // getTmdbAccesses 返回空数组，TMDB 相关功能（播出日同步、年守卫、Part 锚定）惰性。
   return async ({ tmdbId, seasonNumber }) => {
     const target = await prepareTrackingTarget({
       tmdbId,
