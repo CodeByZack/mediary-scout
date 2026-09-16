@@ -1,0 +1,680 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MediaTrack — 环境变量审计报告</title>
+<style>
+:root {
+  --bg: #0d1117; --fg: #e6edf3; --mut: #8b949e; --line: #21262d;
+  --card: #161b22; --accent: #58a6ff; --warn: #d29922; --danger: #f85149;
+  --ok: #3fb950; --dead: #6e7681; --legacy: #bc8cff;
+  --radius: 10px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 15px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: 32px 40px 80px;
+}
+h1 { font-size: 28px; margin-bottom: 4px; }
+.subtitle { color: var(--mut); font-size: 14px; margin-bottom: 28px; }
+h2 { font-size: 20px; margin: 36px 0 14px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+h3 { font-size: 16px; margin: 20px 0 10px; color: var(--accent); }
+
+.dash { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 8px; }
+.dash .cell {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px 16px; text-align: center;
+}
+.dash .num { font-size: 32px; font-weight: 700; line-height: 1.1; }
+.dash .lbl { font-size: 12px; color: var(--mut); margin-top: 2px; }
+.dash .cell.ok .num { color: var(--ok); }
+.dash .cell.warn .num { color: var(--warn); }
+.dash .cell.dead .num { color: var(--dead); }
+.dash .cell.legacy .num { color: var(--legacy); }
+.dash .cell.total .num { color: var(--accent); }
+
+.tag {
+  display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; line-height: 1.5; white-space: nowrap;
+}
+.tag-ok { background: #1b3320; color: var(--ok); }
+.tag-warn { background: #3a2e10; color: var(--warn); }
+.tag-danger { background: #3a1a17; color: var(--danger); }
+.tag-dead { background: #22262c; color: var(--dead); }
+.tag-legacy { background: #2a1f3d; color: var(--legacy); }
+.tag-build { background: #1a2d4a; color: #79c0ff; }
+.tag-test { background: #2d1f1a; color: #f0883e; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 20px; }
+th { text-align: left; color: var(--mut); font-weight: 600; font-size: 12px;
+     text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 10px;
+     border-bottom: 1px solid var(--line); }
+td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:hover td { background: #1c2129; }
+code, .mono {
+  font-family: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+  font-size: 13px; background: #21262d; padding: 1px 6px; border-radius: 4px;
+  white-space: nowrap;
+}
+.varname { color: var(--accent); font-weight: 600; }
+.desc { color: #c9d1d9; }
+.src { color: var(--mut); font-size: 12px; }
+
+.group {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 18px 20px; margin-bottom: 16px;
+}
+.group-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.group-icon { font-size: 20px; }
+.group-title { font-size: 16px; font-weight: 600; }
+.group-count { font-size: 12px; color: var(--mut); margin-left: auto; }
+
+.issue {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; margin-bottom: 12px; border-left: 4px solid var(--warn);
+}
+.issue.danger { border-left-color: var(--danger); }
+.issue.dead { border-left-color: var(--dead); }
+.issue.legacy { border-left-color: var(--legacy); }
+.issue-title { font-weight: 600; margin-bottom: 4px; }
+.issue-body { color: var(--mut); font-size: 13px; line-height: 1.6; }
+.issue-body code { font-size: 12px; }
+
+footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: center; }
+
+@media (max-width: 600px) {
+  body { padding: 16px 12px; }
+  .dash { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+
+<h1>🔍 MediaTrack 环境变量审计报告</h1>
+<p class="subtitle">
+  仓库：<code>mediary-scout</code> &middot;
+  日期：2026-09-13 &middot;
+  扫描范围：全部 <code>.ts</code> / <code>.tsx</code> / <code>.mjs</code> / <code>.sh</code> / <code>.yml</code> / <code>.env</code> 源文件（排除 <code>node_modules</code>）
+</p>
+
+<div class="dash">
+  <div class="cell total">
+    <div class="num">59</div>
+    <div class="lbl">环境变量总数（清理后）</div>
+  </div>
+  <div class="cell ok">
+    <div class="num">55</div>
+    <div class="lbl">✅ 活跃使用中</div>
+  </div>
+  <div class="cell warn">
+    <div class="num">3</div>
+    <div class="lbl">⚠️ 需关注</div>
+  </div>
+  <div class="cell legacy">
+    <div class="num">0</div>
+    <div class="lbl">🟣 遗留/兼容（已清理）</div>
+  </div>
+  <div class="cell dead">
+    <div class="num">0</div>
+    <div class="lbl">💀 死变量（已清理）</div>
+  </div>
+</div>
+
+<div style="background:#161b22; border:1px solid #21262d; border-radius:10px; padding:14px 18px; margin:12px 0 24px; border-left:4px solid #3fb950;">
+  <strong style="color:#3fb950;">✅ 已执行清理</strong> <span style="color:#8b949e; font-size:13px;">（2026-09-13）</span>
+  <ul style="margin:8px 0 0 20px; font-size:14px; line-height:1.8; color:#c9d1d9;">
+    <li>重写 <code>.env.example</code>：补全 16 个缺项变量，标注弃用项</li>
+    <li>删除死文件 <code>dist/acquisition-v2/agent-loop.js</code>（24KB）</li>
+    <li>删除遗留变量 <code>CLAWD_*</code> / <code>MOVIES_CID</code> / <code>TV_SHOWS_CID</code> / <code>ANIME_CID</code>（4 个，代码已不读取）</li>
+    <li>删除遗留变量 <code>XIAOMI_MIMO_*</code>（3 个，代码已不读取）</li>
+  </ul>
+</div>
+
+<h2>📋 分类总览</h2>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">⚙️</span>
+    <span class="group-title">核心应用配置</span>
+    <span class="group-count">9 个变量 &middot; 全部活跃</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th><th>默认值</th><th>源文件</th></tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_SQLITE_PATH</code></td>
+      <td class="desc">SQLite 数据库文件路径，应用启动时自动建 schema</td>
+      <td class="desc"><span class="tag tag-warn">无默认值</span> 未设则用内存模式</td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_MULTI_USER</code></td>
+      <td class="desc">设为 <code>"1"</code> 启用多用户模式（账号体系、登录、Worker 鉴权）</td>
+      <td class="desc">默认单用户</td>
+      <td class="src">workflow-runtime.ts, proxy.ts, worker-api-guard.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_SESSION_SECRET</code></td>
+      <td class="desc">签名 session cookie 的密钥（未设则自动生成，重启失效）</td>
+      <td class="desc">自动生成</td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_COOKIE_SECURE</code></td>
+      <td class="desc">强制控制 Cookie 的 Secure 标记：<code>"1"</code> 开启 / <code>"0"</code> 关闭 / 不设为按协议自动判定</td>
+      <td class="desc">自动（HTTPS 加、HTTP 不加）</td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_ALLOWED_ORIGINS</code></td>
+      <td class="desc">CSRF 白名单，允许 Server Action 的来源域名（逗号分隔，构建时烘焙进产物）</td>
+      <td class="desc">空（仅同源）</td>
+      <td class="src">next.config.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_AGENT_TOKEN</code></td>
+      <td class="desc">Agent API 的 Bearer Token 鉴权密钥</td>
+      <td class="desc">无默认值（多用户模式必填）</td>
+      <td class="src">agent-api/auth.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_WORKER_SECRET</code></td>
+      <td class="desc">Worker API 守护密钥，防止未授权触发</td>
+      <td class="desc">空（多用户模式必填）</td>
+      <td class="src">worker-api-guard.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_PUBLIC_BASE_URL</code></td>
+      <td class="desc">通知消息中的点击跳转链接用的公开 URL</td>
+      <td class="desc">空（不附加链接）</td>
+      <td class="src">notify.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_INPROCESS_WORKER</code></td>
+      <td class="desc">设为 <code>"0"</code> 可禁用进程内 Worker（外部调度时使用）</td>
+      <td class="desc">默认开启</td>
+      <td class="src">background-worker.ts</td>
+    </tr>
+  </table>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">🔄</span>
+    <span class="group-title">适配器/引擎模式</span>
+    <span class="group-count">7 个变量 &middot; 全部活跃</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th><th>取值</th><th>源文件</th></tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_STORAGE_ADAPTER</code></td>
+      <td class="desc">存储后端模式</td>
+      <td class="desc"><code>"fake"</code> / <code>"115"</code>（<code>"115"</code> 强制 <code>AGENT_ADAPTER=vercel-ai</code>）</td>
+      <td class="src">runtime-policy.ts, workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_WORKFLOW_ADAPTER</code></td>
+      <td class="desc">搜索适配器模式</td>
+      <td class="desc"><code>"fake"</code> / <code>"pansou"</code></td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_AGENT_ADAPTER</code></td>
+      <td class="desc">AI Agent 适配器模式</td>
+      <td class="desc"><code>"fake"</code> / <code>"vercel-ai"</code>（⚠️ <code>"real"</code> 是无效值，启动时报错）</td>
+      <td class="src">runtime-policy.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_SEARCH_PROVIDER</code></td>
+      <td class="desc">搜索数据源</td>
+      <td class="desc"><code>"demo"</code> / <code>"tmdb"</code></td>
+      <td class="src">workflow-runtime.ts, search-page.ts, title-hub.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_DEFAULT_STORAGE_BRAND</code></td>
+      <td class="desc">默认网盘品牌（影响首次连接的默认选择）</td>
+      <td class="desc">默认 <code>"quark"</code></td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_DEMO_SEED</code></td>
+      <td class="desc">设为 <code>"0"</code> 禁用 demo 种子数据（compose 默认关闭）</td>
+      <td class="desc">默认 <code>"1"</code>（启用种子）</td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_DEFAULT_QUALITY</code></td>
+      <td class="desc">搜索关键词中附加的质量偏好（如 <code>"4K"</code>）</td>
+      <td class="desc">默认 <code>"4K"</code></td>
+      <td class="src">workflow-runtime.ts, title-hub.ts</td>
+    </tr>
+  </table>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">☁️</span>
+    <span class="group-title">115 网盘配置</span>
+    <span class="group-count">6 个变量 &middot; 全部活跃</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th><th>说明</th><th>源文件</th></tr>
+    <tr>
+      <td><code class="varname">PAN115_COOKIE</code></td>
+      <td class="desc">115 网盘的认证 Cookie 字符串</td>
+      <td class="desc">必需（真实 115 模式）</td>
+      <td class="src">workflow-runtime.ts, pan115-storage-factory.ts, storage-115-executor.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_115_TEST_ROOT_CID</code></td>
+      <td class="desc">开发/测试根目录 CID（未设 WRITE_SCOPE 时的写权限边界）</td>
+      <td class="desc">开发模式用</td>
+      <td class="src">storage-115-executor.ts, workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_115_WRITE_SCOPE_CIDS</code></td>
+      <td class="desc">显式写权限 CID 列表（逗号分隔，生产用）</td>
+      <td class="desc">与 TEST_ROOT 二选一</td>
+      <td class="src">storage-115-executor.ts, storage-executor-factory.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_115_PROTECTED_CIDS</code></td>
+      <td class="desc">受保护目录 CID 列表（只读，禁止写入）</td>
+      <td class="desc">逗号分隔</td>
+      <td class="src">storage-115-executor.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_115_MIN_DELAY_MS</code></td>
+      <td class="desc">115 API 调用之间的最小间隔（毫秒，防限流）</td>
+      <td class="desc">默认 <code>1200</code></td>
+      <td class="src">pan115-storage-factory.ts, storage-115-executor.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_115_MAX_API_CALLS</code></td>
+      <td class="desc">单次操作的最大 API 调用次数</td>
+      <td class="desc">默认 <code>300</code></td>
+      <td class="src">pan115-storage-factory.ts, storage-115-executor.ts</td>
+    </tr>
+  </table>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">📁</span>
+    <span class="group-title">目录结构配置</span>
+    <span class="group-count">8 个变量 &middot; 全部活跃</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th><th>标签</th><th>源文件</th></tr>
+    <tr>
+      <td><code class="varname">CLAWD_MEDIA_ROOT_CID</code></td>
+      <td class="desc">媒体根目录 CID（旧项目名遗留）</td>
+      <td><span class="tag tag-legacy">遗留命名</span></td>
+      <td class="src">storage-115-executor.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MOVIES_CID</code></td>
+      <td class="desc">电影目录父级 CID（旧项目名遗留）</td>
+      <td><span class="tag tag-legacy">遗留命名</span></td>
+      <td class="src">storage-115-executor.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">TV_SHOWS_CID</code></td>
+      <td class="desc">剧集目录父级 CID（旧项目名遗留）</td>
+      <td><span class="tag tag-legacy">遗留命名</span></td>
+      <td class="src">storage-115-executor.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">ANIME_CID</code></td>
+      <td class="desc">动漫目录父级 CID（旧项目名遗留）</td>
+      <td><span class="tag tag-legacy">遗留命名</span></td>
+      <td class="src">storage-115-executor.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_TV_PARENT_CID</code></td>
+      <td class="desc">剧集目录父级 CID（新命名，优先级高于 CLAWD 旧命名）</td>
+      <td><span class="tag tag-ok">新命名</span></td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_ANIME_PARENT_CID</code></td>
+      <td class="desc">动漫目录父级 CID（新命名，回退到 storageParentDirectoryId）</td>
+      <td><span class="tag tag-ok">新命名</span></td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_MOVIES_PARENT_CID</code></td>
+      <td class="desc">电影目录父级 CID（新命名，回退到 TEST_ROOT）</td>
+      <td><span class="tag tag-ok">新命名</span></td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_DEFAULT_TV_STORAGE_DIRECTORY_ID</code></td>
+      <td class="desc">Type 2 workflow 创建的默认 TV 存储目录 ID（留空则自动建 <code>Season N</code>）</td>
+      <td><span class="tag tag-ok">正常</span></td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+  </table>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">🏷️</span>
+    <span class="group-title">自定义目录名称</span>
+    <span class="group-count">4 个变量 &middot; 全部活跃</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th><th>默认值</th></tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_LIBRARY_ROOT_DIR</code></td>
+      <td class="desc">自定义媒体库根目录名（影响 115/夸克/光鸭所有网盘）</td>
+      <td class="desc">默认 <code>"Mediary Scout"</code></td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_LIBRARY_MOVIES_DIR</code></td>
+      <td class="desc">自定义电影分类目录名</td>
+      <td class="desc">默认 <code>"Movies"</code></td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_LIBRARY_TV_DIR</code></td>
+      <td class="desc">自定义剧集分类目录名</td>
+      <td class="desc">默认 <code>"TV"</code></td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_LIBRARY_ANIME_DIR</code></td>
+      <td class="desc">自定义番剧分类目录名</td>
+      <td class="desc">默认 <code>"Anime"</code></td>
+    </tr>
+  </table>
+  <p class="src" style="font-size:13px; margin-top:8px;">📌 在 <code>customDirNamesFromEnv()</code>（workflow-runtime.ts:433）中统一读取，连接网盘时生效。改后需重连才生效。</p>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">🤖</span>
+    <span class="group-title">AI 模型（LLM）配置</span>
+    <span class="group-count">3 个变量 &middot; 全部活跃</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th><th>优先级</th><th>源文件</th></tr>
+    <tr>
+      <td><code class="varname">AGENT_MODEL_BASE_URL</code></td>
+      <td class="desc">OpenAI 兼容服务的 Base URL（**必填**）</td>
+      <td><span class="tag tag-ok">主</span></td>
+      <td class="src">agent-model.ts, workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">AGENT_MODEL_ID</code></td>
+      <td class="desc">模型名称（**必填**）</td>
+      <td><span class="tag tag-ok">主</span></td>
+      <td class="src">agent-model.ts, workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">AGENT_MODEL_API_KEY</code></td>
+      <td class="desc">API Key（云端必填，本地 ollama/LM Studio 可留空）</td>
+      <td><span class="tag tag-ok">主</span></td>
+      <td class="src">agent-model.ts, workflow-runtime.ts</td>
+    </tr>
+  </table>
+  <p class="src" style="font-size:13px; margin-top:8px;">📌 优先级：DB 设置 > <code>AGENT_MODEL_*</code>。已删除 <code>XIAOMI_MIMO_*</code> 兼容回退（2026-09-13）。</p>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">🌐</span>
+    <span class="group-title">外部服务</span>
+    <span class="group-count">5 个变量 &middot; 全部活跃</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th><th>优先级</th><th>源文件</th></tr>
+    <tr>
+      <td><code class="varname">TMDB_READ_TOKEN</code></td>
+      <td class="desc">TMDB v4 只读 Token（作者代持通道，用户可在设置页用自己的 Key 替代）</td>
+      <td><span class="tag tag-warn">待重构</span> #38</td>
+      <td class="src">workflow-runtime.ts, tmdb-provider.ts, notify.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">TMDB_BASE_URL</code></td>
+      <td class="desc">自定义 TMDB API 代理地址（墙内用户用自建代理时填）</td>
+      <td class="desc">DB 设置 &gt; env &gt; 直连</td>
+      <td class="src">workflow-runtime.ts, tmdb-provider.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">PANSOU_BASE_URL</code></td>
+      <td class="desc">PanSou 搜索聚合器地址（compose 注入自带容器 <code>http://pansou</code>）</td>
+      <td class="desc">DB 设置 &gt; env &gt; 官方公共源</td>
+      <td class="src">pansou-chain.ts, pansou-provider.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">PROWLARR_BASE_URL</code></td>
+      <td class="desc">Prowlarr 索引器地址</td>
+      <td class="desc">DB 设置 &gt; env</td>
+      <td class="src">workflow-runtime.ts, prowlarr-provider.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">PROWLARR_API_KEY</code></td>
+      <td class="desc">Prowlarr API Key</td>
+      <td class="desc">DB 设置 &gt; env</td>
+      <td class="src">workflow-runtime.ts, prowlarr-provider.ts</td>
+    </tr>
+  </table>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">📢</span>
+    <span class="group-title">推送通知</span>
+    <span class="group-count">5 个变量 &middot; 全部活跃</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th><th>说明</th></tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_PUSH_BARK_KEY</code></td>
+      <td class="desc">PushBark 推送 Key</td>
+      <td class="desc">非空即启用</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_PUSH_BARK_BASE_URL</code></td>
+      <td class="desc">PushBark 自定义服务器地址</td>
+      <td class="desc">可选，默认官方</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_PUSH_SERVERCHAN_SENDKEY</code></td>
+      <td class="desc">ServerChan（Server 酱）发送 Key</td>
+      <td class="desc">非空即启用</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_PUSH_WECOM_WEBHOOK</code></td>
+      <td class="desc">企业微信 Webhook URL</td>
+      <td class="desc">非空即启用</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_PUSH_WEBHOOK_URL</code></td>
+      <td class="desc">通用 Webhook URL</td>
+      <td class="desc">非空即启用</td>
+    </tr>
+  </table>
+  <p class="src" style="font-size:13px; margin-top:8px;">📌 优先级：overrideConfig &gt; DB <code>push_*</code> 设置 &gt; env。四种通道可同时启用。</p>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">🎭</span>
+    <span class="group-title">Demo 模式</span>
+    <span class="group-count">2 个变量 &middot; 全部活跃</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th><th>说明</th></tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_DEMO_MODE</code></td>
+      <td class="desc">服务端 Demo 只读门禁（设为 <code>"1"</code> 禁止所有写操作）</td>
+      <td class="desc"><code>demo-mode.ts</code> 的 <code>assertNotDemo()</code> 在 API 路由入口拦截</td>
+    </tr>
+    <tr>
+      <td><code class="varname">NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE</code></td>
+      <td class="desc">客户端 Demo 标志（Next.js 内联到前端 bundle，控制 UI 行为）</td>
+      <td class="desc">Demo 站同时设两个</td>
+    </tr>
+  </table>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">🔀</span>
+    <span class="group-title">HTTP 代理</span>
+    <span class="group-count">4 个变量 &middot; 全部活跃</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th></tr>
+    <tr><td><code class="varname">HTTP_PROXY</code></td><td class="desc">HTTP 出站代理（undici <code>EnvHttpProxyAgent</code>）</td></tr>
+    <tr><td><code class="varname">HTTPS_PROXY</code></td><td class="desc">HTTPS 出站代理</td></tr>
+    <tr><td><code class="varname">http_proxy</code></td><td class="desc">小写变体（兼容）</td></tr>
+    <tr><td><code class="varname">https_proxy</code></td><td class="desc">小写变体（兼容）</td></tr>
+  </table>
+  <p class="src" style="font-size:13px; margin-top:8px;">📌 <code>NO_PROXY</code> 由 undici 内部读取，不在此显式引用。代理是 opt-in，未设任何代理变量则安装空 dispatcher。</p>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">🐳</span>
+    <span class="group-title">Docker / 构建</span>
+    <span class="group-count">8 个变量 &middot; 构建时（非运行时）</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th><th>用在哪</th></tr>
+    <tr>
+      <td><code class="varname">DOCKER_MIRROR</code></td>
+      <td class="desc">Docker Hub 镜像源前缀（墙内必读）</td>
+      <td><code>docker-compose.yml</code> build args, <code>Dockerfile</code></td>
+    </tr>
+    <tr>
+      <td><code class="varname">WEB_PORT</code></td>
+      <td class="desc">Web 容器映射的宿主机端口</td>
+      <td><code>docker-compose.yml</code></td>
+    </tr>
+    <tr>
+      <td><code class="varname">GIT_SHA</code></td>
+      <td class="desc">构建时的 Git commit SHA（烧入镜像用于部署校验）</td>
+      <td><code>docker-compose.yml</code> build args</td>
+    </tr>
+    <tr>
+      <td><code class="varname">PANSOU_IMAGE</code></td>
+      <td class="desc">PanSou 容器镜像（ghcr 不可达时用镜像站）</td>
+      <td><code>docker-compose.yml</code></td>
+    </tr>
+    <tr>
+      <td><code class="varname">CLOUDFLARE_API_TOKEN</code></td>
+      <td class="desc">CF API Token（部署 TMDB Proxy Worker 用）</td>
+      <td><code>workers/tmdb-proxy/deploy.mjs</code></td>
+    </tr>
+    <tr>
+      <td><code class="varname">APPNAME</code></td>
+      <td class="desc">fnOS 应用名（fpk 打包）</td>
+      <td><code>build-fpk.sh</code></td>
+    </tr>
+    <tr>
+      <td><code class="varname">DISPLAY_NAME</code></td>
+      <td class="desc">fnOS 应用显示名（fpk 打包）</td>
+      <td><code>build-fpk.sh</code></td>
+    </tr>
+    <tr>
+      <td><code class="varname">SERVICE_PORT</code></td>
+      <td class="desc">fnOS 服务端口（fpk 打包）</td>
+      <td><code>build-fpk.sh</code></td>
+    </tr>
+  </table>
+</div>
+
+<div class="group">
+  <div class="group-header">
+    <span class="group-icon">⚡</span>
+    <span class="group-title">Next.js 内部</span>
+    <span class="group-count">1 个变量</span>
+  </div>
+  <table>
+    <tr><th>变量</th><th>作用</th></tr>
+    <tr>
+      <td><code class="varname">NEXT_RUNTIME</code></td>
+      <td class="desc">Next.js 运行时标识，<code>instrumentation.ts</code> 检查 <code>!== "nodejs"</code> 时跳过 Worker 启动</td>
+    </tr>
+  </table>
+</div>
+
+<h2>⚠️ 问题与发现</h2>
+
+<div class="issue danger" style="opacity:0.55;">
+  <div class="issue-title">💀 死变量：<code>MEDIA_TRACK_AGENT_LOG</code> <span style="color:#3fb950; font-size:12px; font-weight:400;">✅ 已清理</span></div>
+  <div class="issue-body">
+    <strong>仅在 <code>dist/acquisition-v2/agent-loop.js</code> 中引用</strong>，该文件是旧编译产物，源文件中已无任何 <code>.ts</code> 文件 import <code>agent-loop</code>。
+    即使用户设了此变量也完全无效果。<br>
+    <strong style="color:#3fb950;">已执行：</strong>删除 <code>dist/acquisition-v2/agent-loop.js</code>（24KB）。
+  </div>
+</div>
+
+<div class="issue legacy" style="opacity:0.55;">
+  <div class="issue-title">🟣 遗留命名：<code>CLAWD_MEDIA_ROOT_CID</code> / <code>MOVIES_CID</code> / <code>TV_SHOWS_CID</code> / <code>ANIME_CID</code> <span style="color:#3fb950; font-size:12px; font-weight:400;">✅ 已删除</span></div>
+  <div class="issue-body">
+    源自旧项目名 "Clawd"。<strong style="color:#3fb950;">已执行：</strong>代码中全部引用已删除（<code>storage-115-executor.ts</code> 改用 <code>MEDIA_TRACK_115_PROTECTED_CIDS</code> / <code>MEDIA_TRACK_MOVIES_PARENT_CID</code>），.env.example 已移除。
+  </div>
+</div>
+
+<div class="issue legacy" style="opacity:0.55;">
+  <div class="issue-title">🟣 遗留兼容：<code>XIAOMI_MIMO_*</code>（3 个变量） <span style="color:#3fb950; font-size:12px; font-weight:400;">✅ 已删除</span></div>
+  <div class="issue-body">
+    作为 <code>AGENT_MODEL_*</code> 的回退优先级保留，服务于早期配置了 MiMo 的旧实例。<strong style="color:#3fb950;">已执行：</strong>代码中全部引用已删除（<code>agent-model.ts</code> + <code>workflow-runtime.ts</code>），.env.example 已移除。
+  </div>
+</div>
+
+<div class="issue warn">
+  <div class="issue-title">⚠️ 待重构：<code>TMDB_READ_TOKEN</code>（TODO #38）</div>
+  <div class="issue-body">
+    当前有三通道 fallback（用户 Key → env <code>TMDB_READ_TOKEN</code> → 作者 CF Worker 代理）。
+    <strong>#38 计划</strong>：删掉三通道 fallback，改为单通道 <code>TMDB_API_KEY</code> 必填 fail-fast。
+    <br><strong>状态：</strong>设计稿阶段，未开工，需用户拍板。当前代码仍有效。
+  </div>
+</div>
+
+<div class="issue" style="opacity:0.55; border-left-color:#3fb950;">
+  <div class="issue-title">📋 <code>.env.example</code> 覆盖率不足 <span style="color:#3fb950; font-size:12px; font-weight:400;">✅ 已修复</span></div>
+  <div class="issue-body">
+    <strong style="color:#3fb950;">已执行：</strong>重写 <code>.env.example</code>，从 22 个变量扩展到覆盖所有使用中的变量，按功能分类，标注弃用项。
+  </div>
+</div>
+
+<div class="issue dead">
+  <div class="issue-title">💀 测试专用：<code>MEDIA_TRACK_PATROL_IGNORE_TIME_GATE</code></div>
+  <div class="issue-body">
+    仅在 <code>background-worker.test.ts</code> 中引用（<code>process.env.MEDIA_TRACK_PATROL_IGNORE_TIME_GATE = "1"</code>），
+    非测试代码中无任何引用。此变量仅用于测试时绕过时间门控。
+    <br><strong>建议：</strong>如果确实只用于测试，可不加入 .env.example，或添加注释说明为测试专用。
+  </div>
+</div>
+
+<h2>🏗️ 环境变量优先级模型</h2>
+
+<div class="group" style="border-left: 4px solid var(--accent);">
+  <p style="color:var(--mut); font-size:14px; margin-bottom:12px;">
+    大部分配置项的读取遵循以下优先级（高 → 低）：
+  </p>
+  <pre style="background:#0d1117; padding:14px 18px; border-radius:8px; font-size:13px; line-height:1.8; overflow-x:auto;">
+<span style="color:var(--ok);">┌─────────────────────────────────┐</span>
+<span style="color:var(--ok);">│   DB 设置（设置页持久化）          │</span>  ← 最高优先级
+<span style="color:var(--accent);">├─────────────────────────────────┤</span>
+<span style="color:var(--accent);">│   env 变量（.env / docker-compose）│</span>  ← 部署级配置
+<span style="color:var(--warn);">├─────────────────────────────────┤</span>
+<span style="color:var(--warn);">│   默认值（代码内硬编码）            │</span>  ← 最终回退
+<span style="color:var(--dead);">└─────────────────────────────────┘</span>
+
+<span style="color:var(--mut);">// 示例：PanSou 地址解析</span>
+<span style="color:var(--mut);">PANSOU_BASE_URL =</span>
+  <span style="color:var(--ok);">DB 设置</span> ??
+  <span style="color:var(--accent);">env.PANSOU_BASE_URL</span> ??
+  <span style="color:var(--warn);">"https://so.252035.xyz"</span>
+
+<span style="color:var(--mut);">// 示例：AI 模型配置</span>
+<span style="color:var(--mut);">API Key =</span>
+  <span style="color:var(--ok);">DB 设置（设置页）</span> ??
+  <span style="color:var(--accent);">env.AGENT_MODEL_API_KEY</span>
+  </pre>
+</div>
+
+<footer>
+  审计范围：apps/web/, packages/workflow/src/, deploy/, workers/, 根目录配置文件<br>
+  排除：node_modules/, dist/ (仅标注死文件), 测试文件中的临时赋值
+</footer>

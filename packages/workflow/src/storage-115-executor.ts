@@ -909,7 +909,7 @@ export class Storage115Executor implements StorageExecutor {
     const isMovieNameFallback = parentName === "Movies" && pathNames.length >= 4;
     if (!isMovieLeaf && !isMovieNameFallback) {
       throw new Error(
-        "SAFETY_VIOLATION: flatten target must be a movie leaf under MOVIES_CID " +
+        "SAFETY_VIOLATION: flatten target must be a movie leaf under MEDIA_TRACK_MOVIES_PARENT_CID " +
           "or end with 'Season <number>'; " +
           `path=${joinedPath}`,
       );
@@ -1054,10 +1054,6 @@ export function createProtectedStorage115Executor(
 
   const protectedDirectoryIds = uniqueDirectoryIds([
     testRootDirectoryId,
-    env["CLAWD_MEDIA_ROOT_CID"],
-    env["MOVIES_CID"],
-    env["TV_SHOWS_CID"],
-    env["ANIME_CID"],
     ...directoryIdList(env["MEDIA_TRACK_115_PROTECTED_CIDS"]),
   ]);
 
@@ -1097,7 +1093,7 @@ function optionalExecutorOptions(
   env: Record<string, string | undefined>,
 ): Partial<Storage115ExecutorOptions> {
   const executorOptions: Partial<Storage115ExecutorOptions> = {};
-  const moviesDirectoryId = optionalDirectoryId(env["MOVIES_CID"]);
+  const moviesDirectoryId = optionalDirectoryId(env["MEDIA_TRACK_MOVIES_PARENT_CID"]);
   if (moviesDirectoryId) {
     executorOptions.moviesDirectoryId = moviesDirectoryId;
   }

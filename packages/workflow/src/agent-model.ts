@@ -91,15 +91,14 @@ export function createAgentModel(options: AgentModelOptions = {}): LanguageModel
 }
 
 /**
- * Build the live LanguageModel from env. Reads AGENT_MODEL_* with XIAOMI_MIMO_*
- * as the fallback (back-compat: existing instances that set the legacy keys keep
- * working). Same precedence the web/worker and interrogation use.
+ * Build the live LanguageModel from env. Reads AGENT_MODEL_* only —
+ * there is no fallback to legacy keys. baseURL/modelId must be configured.
  */
 export function createAgentModelFromEnv(env: NodeJS.ProcessEnv = process.env): LanguageModel {
   const options: AgentModelOptions = {};
-  const apiKey = env.AGENT_MODEL_API_KEY ?? env.XIAOMI_MIMO_API_KEY;
-  const baseURL = env.AGENT_MODEL_BASE_URL ?? env.XIAOMI_MIMO_BASE_URL;
-  const modelId = env.AGENT_MODEL_ID ?? env.XIAOMI_MIMO_MODEL_ID;
+  const apiKey = env.AGENT_MODEL_API_KEY;
+  const baseURL = env.AGENT_MODEL_BASE_URL;
+  const modelId = env.AGENT_MODEL_ID;
   if (apiKey !== undefined) options.apiKey = apiKey;
   if (baseURL !== undefined) options.baseURL = baseURL;
   if (modelId !== undefined) options.modelId = modelId;

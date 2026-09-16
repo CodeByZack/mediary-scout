@@ -9,6 +9,26 @@ export interface WorkflowRuntimeEnv extends Record<string, string | undefined> {
 export const VALID_AGENT_ADAPTERS = ["vercel-ai", "fake"] as const;
 const VALID_AGENT_ADAPTER_SET: ReadonlySet<string> = new Set(VALID_AGENT_ADAPTERS);
 
+/** Deprecated env vars: { deprecated: [replacement, note] }. At startup
+ *  `validateRuntimeConfig` logs a warning when any of these are set. */
+const DEPRECATED_VARS: Record<string, { replacement: string; note: string }> = {};
+
+/** Emit a one-time warning for each deprecated env var that is currently set.
+ *  Called at startup by `validateRuntimeConfig`. Safe to call multiple times —
+ *  we deduplicate by process.env key so the warning appears only once. */
+const _deprecatedWarned = new Set<string>();
+export function warnDeprecatedEnvVars(env: WorkflowRuntimeEnv): void {
+  for (const [key, info] of Object.entries(DEPRECATED_VARS)) {
+    if (_deprecatedWarned.has(key)) continue;
+    const val = env[key];
+    if (val === undefined || val === "") continue;
+    _deprecatedWarned.add(key);
+    console.warn(
+      `[media-track] DEPRECATED env var: ${key} — 请迁移到 ${info.replacement}（${info.note}）。当前仍有效但未来版本将移除。`,
+    );
+  }
+}
+
 /**
  * Boot-time + config-time runtime validation. Fail FAST and LOUD on a misconfig
  * (e.g. MEDIA_TRACK_AGENT_ADAPTER=real) instead of silently never draining the
@@ -16,6 +36,7 @@ const VALID_AGENT_ADAPTER_SET: ReadonlySet<string> = new Set(VALID_AGENT_ADAPTER
  * docker-compose.yml — so a bad value can never ship undetected again.
  */
 export function validateRuntimeConfig(env: WorkflowRuntimeEnv): void {
+  warnDeprecatedEnvVars(env);
   const agent = env.MEDIA_TRACK_AGENT_ADAPTER;
   if (agent !== undefined && agent !== "" && !VALID_AGENT_ADAPTER_SET.has(agent)) {
     throw new Error(

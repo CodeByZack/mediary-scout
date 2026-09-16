@@ -2247,19 +2247,18 @@ async function getWorkerStorageParents(
  * passed to each workflow as standing context, not baked into the model instance.
  */
 /** Resolve the live agent model config the SAME way the worker builds it: DB
- *  (pass an account-scoped repo) → .env (AGENT_MODEL_* with XIAOMI_MIMO_* as a
- *  back-compat fallback) → undefined. There is NO built-in default endpoint —
- *  baseURL/modelId must be configured (truly BYO, issue #49). Shared by
- *  getAgentModel and testLlmConnectionAction so the Settings「测试连接」exercises
- *  exactly what acquisitions use. */
+ *  (pass an account-scoped repo) → .env (AGENT_MODEL_*) → undefined. There is
+ *  NO built-in default endpoint — baseURL/modelId must be configured (truly BYO,
+ *  issue #49). Shared by getAgentModel and testLlmConnectionAction so the
+ *  Settings「测试连接」exercises exactly what acquisitions use. */
 export async function resolveAgentModelConfig(
   repository: { getSetting(key: string): Promise<string | null> },
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ apiKey?: string; baseURL?: string; modelId?: string }> {
   const llm = await getLlmConfig(repository);
-  const apiKey = llm.apiKey ?? env.AGENT_MODEL_API_KEY ?? env.XIAOMI_MIMO_API_KEY;
-  const baseURL = llm.baseURL ?? env.AGENT_MODEL_BASE_URL ?? env.XIAOMI_MIMO_BASE_URL;
-  const modelId = llm.modelId ?? env.AGENT_MODEL_ID ?? env.XIAOMI_MIMO_MODEL_ID;
+  const apiKey = llm.apiKey ?? env.AGENT_MODEL_API_KEY;
+  const baseURL = llm.baseURL ?? env.AGENT_MODEL_BASE_URL;
+  const modelId = llm.modelId ?? env.AGENT_MODEL_ID;
   return {
     ...(apiKey === undefined ? {} : { apiKey }),
     ...(baseURL === undefined ? {} : { baseURL }),

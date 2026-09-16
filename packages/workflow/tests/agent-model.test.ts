@@ -112,15 +112,6 @@ describe("agent-model — the live OpenAI-compatible (BYO) LanguageModel factory
     expect((model as { modelId?: string }).modelId).toBe("some-model");
   });
 
-  it("still reads the XIAOMI_MIMO_* env fallback (back-compat for existing instances)", () => {
-    const fallback = createAgentModelFromEnv({
-      XIAOMI_MIMO_API_KEY: "k2",
-      XIAOMI_MIMO_BASE_URL: "https://token-plan-sgp.xiaomimimo.com/v1",
-      XIAOMI_MIMO_MODEL_ID: "mimo-v2.5-pro",
-    } as NodeJS.ProcessEnv);
-    expect((fallback as { modelId?: string }).modelId).toBe("mimo-v2.5-pro");
-  });
-
   it("throws (no silent default) when env configures nothing", () => {
     expect(() => createAgentModelFromEnv({} as NodeJS.ProcessEnv)).toThrow();
   });

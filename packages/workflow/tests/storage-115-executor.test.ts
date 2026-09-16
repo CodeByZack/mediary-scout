@@ -115,8 +115,7 @@ describe("Storage115Executor", () => {
       api: new FakePan115Api(),
       env: {
         MEDIA_TRACK_115_TEST_ROOT_CID: "test_root",
-        CLAWD_MEDIA_ROOT_CID: "media_root",
-        TV_SHOWS_CID: "tv_root",
+        MEDIA_TRACK_115_PROTECTED_CIDS: "media_root,tv_root",
       },
       apiGuardOptions: { minDelayMs: 0 },
     });
@@ -134,8 +133,7 @@ describe("Storage115Executor", () => {
       api: new FakePan115Api(),
       env: {
         MEDIA_TRACK_115_TEST_ROOT_CID: "test_root",
-        CLAWD_MEDIA_ROOT_CID: "media_root",
-        TV_SHOWS_CID: "tv_root",
+        MEDIA_TRACK_115_PROTECTED_CIDS: "media_root,tv_root",
       },
       apiGuardOptions: { minDelayMs: 0 },
     });
