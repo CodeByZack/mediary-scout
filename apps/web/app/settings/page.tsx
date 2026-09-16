@@ -47,6 +47,7 @@ import {
   LLM_MODEL_ID_SETTING_KEY,
   LLM_API_KEY_SETTING_KEY,
   TMDB_API_KEY_SETTING_KEY,
+  TMDB_BASE_URL_SETTING_KEY,
   ASSRT_TOKEN_SETTING_KEY,
   PROWLARR_BASE_URL_SETTING_KEY,
   PROWLARR_API_KEY_SETTING_KEY,
@@ -349,6 +350,7 @@ async function TmdbApiKeySection() {
   await connection();
   const repository = getAccountScopedSettings(await getCurrentAccountId());
   const apiKeySet = Boolean((await repository.getSetting(TMDB_API_KEY_SETTING_KEY))?.trim());
+  const baseUrlSet = Boolean((await repository.getSetting(TMDB_BASE_URL_SETTING_KEY))?.trim());
 
   return (
     <section className="panel" style={{ maxWidth: 720, marginTop: 24 }}>
@@ -358,10 +360,10 @@ async function TmdbApiKeySection() {
             <Clapperboard size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
             TMDB 元数据
           </h2>
-          <p className="panel-note">影视元数据来源；默认走代理兜底，可填自己的 key 直连</p>
+          <p className="panel-note">影视元数据来源；可填自己的 key 直连，大陆网络可自建 tmdb-proxy</p>
         </div>
       </div>
-      <TmdbApiKeyForm apiKeySet={apiKeySet} />
+      <TmdbApiKeyForm apiKeySet={apiKeySet} baseUrlSet={baseUrlSet} />
     </section>
   );
 }

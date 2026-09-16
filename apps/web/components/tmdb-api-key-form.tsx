@@ -5,10 +5,12 @@ import { Check, ExternalLink, LoaderCircle, Trash2 } from "lucide-react";
 import { saveTmdbApiKeyAction, clearTmdbApiKeyAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
 
-export function TmdbApiKeyForm({ apiKeySet }: { apiKeySet: boolean }) {
+export function TmdbApiKeyForm({ apiKeySet, baseUrlSet }: { apiKeySet: boolean; baseUrlSet: boolean }) {
   const [isPending, startTransition] = useTransition();
   const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
   const [hasKey, setHasKey] = useState(apiKeySet);
+  const [hasBaseUrl, setHasBaseUrl] = useState(baseUrlSet);
   const [result, setResult] = useState<string | null>(null);
 
   const handleSave = () => {
@@ -17,7 +19,7 @@ export function TmdbApiKeyForm({ apiKeySet }: { apiKeySet: boolean }) {
       // 不 catch 就是未处理 rejection,界面上什么都不变(见 runAction 注释)。
       // 业务错误(success:false)仍走下方原逻辑;这里只拦异常。
       const r = await runAction(
-        () => saveTmdbApiKeyAction(apiKey),
+        () => saveTmdbApiKeyAction(apiKey, baseUrl),
         (msg) => {
           setResult(`❌ ${msg}`);
           setTimeout(() => setResult(null), 3000);
@@ -26,9 +28,15 @@ export function TmdbApiKeyForm({ apiKeySet }: { apiKeySet: boolean }) {
       if (!r.ok) return;
       const res = r.value;
       setResult(res.success ? "✅ 保存成功" : `❌ ${res.message ?? "保存失败"}`);
-      if (res.success && apiKey.trim()) {
-        setApiKey("");
-        setHasKey(true);
+      if (res.success) {
+        if (apiKey.trim()) {
+          setApiKey("");
+          setHasKey(true);
+        }
+        if (baseUrl.trim()) {
+          setBaseUrl("");
+          setHasBaseUrl(true);
+        }
       }
       setTimeout(() => setResult(null), 3000);
     });
@@ -48,8 +56,11 @@ export function TmdbApiKeyForm({ apiKeySet }: { apiKeySet: boolean }) {
       );
       if (!r.ok) return;
       const res = r.value;
-      setResult(res.success ? "✅ 已清除，改用代理兜底" : `❌ ${res.message ?? "清除失败"}`);
-      if (res.success) setHasKey(false);
+      setResult(res.success ? "✅ 已清除" : `❌ ${res.message ?? "清除失败"}`);
+      if (res.success) {
+        setHasKey(false);
+        setHasBaseUrl(false);
+      }
       setTimeout(() => setResult(null), 3000);
     });
   };
@@ -57,7 +68,7 @@ export function TmdbApiKeyForm({ apiKeySet }: { apiKeySet: boolean }) {
   return (
     <div className="push-form">
       <p className="panel-note" style={{ marginBottom: 6 }}>
-        你在页面上看到的电影、剧集海报、简介、集数等数据，都来自 The Movie Database (TMDB)。默认由作者的代理服务兜底（已缓存、开箱即用，无需任何配置）。想更稳定可申请自己的 API Read Token 填入直连你自己的额度；调不通时会自动回退到代理。留空不改动已保存的值。
+        你在页面上看到的电影、剧集海报、简介、集数等数据，都来自 The Movie Database (TMDB)。可申请自己的 API Read Token 填入直连你自己的额度。留空不改动已保存的值。
       </p>
       <p className="push-help" style={{ marginBottom: 12 }}>
         了解 TMDB{" "}
@@ -69,7 +80,7 @@ export function TmdbApiKeyForm({ apiKeySet }: { apiKeySet: boolean }) {
           获取方法 <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />
         </a>
       </p>
-      <div className="setting-row">
+      <div className="setting-row" style={{ marginBottom: 8 }}>
         <input
           type="password"
           className="setting-control"
@@ -83,12 +94,26 @@ export function TmdbApiKeyForm({ apiKeySet }: { apiKeySet: boolean }) {
           {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Check size={14} aria-hidden />}
           保存
         </button>
-        {hasKey ? (
+        {(hasKey || hasBaseUrl) ? (
           <button type="button" className="secondary-button" onClick={handleClear} disabled={isPending}>
             <Trash2 size={14} aria-hidden />
             清除
           </button>
         ) : null}
+      </div>
+      <div className="setting-row">
+        <input
+          type="text"
+          className="setting-control"
+          value={baseUrl}
+          onChange={(event) => setBaseUrl(event.target.value)}
+          placeholder={hasBaseUrl ? "已设置(留空不改)" : "自定义 API Base URL（如 https://tmdb.your-domain.com）"}
+          aria-label="TMDB Base URL"
+          autoComplete="off"
+        />
+        <span className="panel-note" style={{ fontSize: 12, marginLeft: 8 }}>
+          大陆网络自建 tmdb-proxy 后填入，留空则直连 TMDB
+        </span>
       </div>
       {result ? (
         <p className="panel-note" style={{ marginTop: 10 }}>
