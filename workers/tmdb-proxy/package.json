@@ -5,6 +5,5 @@
   "type": "module",
   "scripts": {
     "deploy": "node deploy.mjs"
-  },
-
+  }
 }
