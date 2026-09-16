@@ -10,19 +10,16 @@ const IMG_PATH_RE = /^t\/p\/(w342|w500)\/[A-Za-z0-9_]+\.(jpg|png)$/;
 // being abusable as a general HTTP proxy. Prefix match after the leading slash.
 const ALLOWED_PREFIXES = ["movie/", "tv/", "search/", "discover/", "find/", "genre/", "configuration", "trending/"];
 
-const CORS_ALLOWED_ORIGINS = new Set([
-  "https://mediaryscout.app",
-  "https://demo.mediaryscout.app",
-  // Old .sbs origins kept during the domain transition (will 301 to mediaryscout.app).
-  "https://mediary.dirtyfancy.sbs",
-  "https://demo.dirtyfancy.sbs",
+/** Local dev defaults. Production deployments add their landing-site origins via
+ *  the `CORS_ALLOWED_ORIGINS` env var (comma-separated). Empty env = only localhost. */
+export const DEFAULT_CORS_ORIGINS = new Set([
   "http://localhost:8788",
   "http://127.0.0.1:8788",
 ]);
 
-function corsHeadersFor(request: Request): Record<string, string> {
+function corsHeadersFor(request: Request, origins: Set<string>): Record<string, string> {
   const origin = request.headers.get("Origin"); // case-insensitive per Fetch spec
-  if (origin !== null && CORS_ALLOWED_ORIGINS.has(origin)) {
+  if (origin !== null && origins.has(origin)) {
     return { "Access-Control-Allow-Origin": origin, Vary: "Origin" };
   }
   // Vary must be emitted for ANY request carrying an Origin, even when no ACAO
@@ -139,6 +136,9 @@ export interface HandleTmdbProxyDeps {
   upstreamTimeoutMs?: number;
   /** Clock (epoch ms) for envelope freshness; injectable for tests. */
   now?: () => number;
+  /** Allowed CORS origins. Defaults to localhost-only; production adds the
+   *  landing-site origins via the `CORS_ALLOWED_ORIGINS` env var. */
+  corsOrigins?: Set<string>;
 }
 
 function pathOf(request: Request): string {
@@ -186,18 +186,19 @@ async function handleImageProxy(
   return new Response(originResponse.body, { status: originResponse.status, headers });
 }
 
-function jsonHeaders(cache: "HIT" | "MISS" | "STALE", request: Request): Record<string, string> {
-  return { "Content-Type": "application/json;charset=utf-8", "X-Cache": cache, ...corsHeadersFor(request) };
+function jsonHeaders(cache: "HIT" | "MISS" | "STALE", request: Request, origins: Set<string>): Record<string, string> {
+  return { "Content-Type": "application/json;charset=utf-8", "X-Cache": cache, ...corsHeadersFor(request, origins) };
 }
 
 export async function handleTmdbProxy(deps: HandleTmdbProxyDeps): Promise<Response> {
   const { request, token } = deps;
   const originFetch = deps.originFetch ?? fetch;
+  const corsOrigins = deps.corsOrigins ?? DEFAULT_CORS_ORIGINS;
 
   if (request.method !== "GET") {
     // CORS on error branches: without ACAO an allowlisted origin sees an opaque
     // CORS TypeError instead of an inspectable 405/404 (debuggability, not caching).
-    return new Response("Method Not Allowed", { status: 405, headers: { ...corsHeadersFor(request), Allow: "GET" } });
+    return new Response("Method Not Allowed", { status: 405, headers: { ...corsHeadersFor(request, corsOrigins), Allow: "GET" } });
   }
 
   const timeoutMs = deps.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS;
@@ -208,7 +209,7 @@ export async function handleTmdbProxy(deps: HandleTmdbProxyDeps): Promise<Respon
     return handleImageProxy(path.slice("img/".length), originFetch, timeoutMs);
   }
   if (!isAllowed(path)) {
-    return new Response("Not Found", { status: 404, headers: corsHeadersFor(request) });
+    return new Response("Not Found", { status: 404, headers: corsHeadersFor(request, corsOrigins) });
   }
 
   const key = cacheKeyFor(request);
@@ -220,7 +221,7 @@ export async function handleTmdbProxy(deps: HandleTmdbProxyDeps): Promise<Respon
       // Legacy raw value (fresh until its own physical TTL) or a fresh envelope.
       return new Response(cached === null ? cachedRaw : cached.body, {
         status: 200,
-        headers: jsonHeaders("HIT", request),
+        headers: jsonHeaders("HIT", request, corsOrigins),
       });
     }
     staleBody = cached.body;
@@ -238,7 +239,7 @@ export async function handleTmdbProxy(deps: HandleTmdbProxyDeps): Promise<Respon
     body = await originResponse.text();
   } catch (error) {
     if (staleBody !== null) {
-      return new Response(staleBody, { status: 200, headers: jsonHeaders("STALE", request) });
+      return new Response(staleBody, { status: 200, headers: jsonHeaders("STALE", request, corsOrigins) });
     }
     // Public endpoint: keep the error contract to a stable enum. The log gets
     // only the path (the querystring carries user search terms) and the error
@@ -249,20 +250,20 @@ export async function handleTmdbProxy(deps: HandleTmdbProxyDeps): Promise<Respon
     const reason = kind === "TimeoutError" ? "timeout" : "network";
     return new Response(JSON.stringify({ error: "tmdb_upstream_unreachable", reason }), {
       status: 504,
-      headers: jsonHeaders("MISS", request),
+      headers: jsonHeaders("MISS", request, corsOrigins),
     });
   }
 
   if (!originResponse.ok) {
     // Outage-shaped statuses degrade to stale; semantic answers (404 …) pass through.
     if (staleBody !== null && (originResponse.status >= 500 || originResponse.status === 429)) {
-      return new Response(staleBody, { status: 200, headers: jsonHeaders("STALE", request) });
+      return new Response(staleBody, { status: 200, headers: jsonHeaders("STALE", request, corsOrigins) });
     }
-    return new Response(body, { status: originResponse.status, headers: jsonHeaders("MISS", request) });
+    return new Response(body, { status: originResponse.status, headers: jsonHeaders("MISS", request, corsOrigins) });
   }
   const ttl = isTrendingFeedRequest(key) ? TRENDING_TTL_SECONDS : ttlForPath(path);
   await deps.kv.put(key, envelopeFor(body, ttl, now()), { expirationTtl: ttl + STALE_TAIL_SECONDS });
-  return new Response(body, { status: 200, headers: jsonHeaders("MISS", request) });
+  return new Response(body, { status: 200, headers: jsonHeaders("MISS", request, corsOrigins) });
 }
 
 export interface RunScheduledRefreshDeps {

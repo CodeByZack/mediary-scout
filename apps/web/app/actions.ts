@@ -792,15 +792,20 @@ export async function testLlmConnectionAction(): Promise<{ ok: boolean; message:
   }
 }
 
-export async function saveTmdbApiKeyAction(apiKey: string): Promise<PushSettingsActionResult> {
+export async function saveTmdbApiKeyAction(apiKey: string, baseUrl?: string): Promise<PushSettingsActionResult> {
   assertNotDemo();
   try {
-    const { getWorkflowRepository, getCurrentAccountId, TMDB_API_KEY_SETTING_KEY } = await import("../lib/workflow-runtime");
+    const { getWorkflowRepository, getCurrentAccountId, TMDB_API_KEY_SETTING_KEY, TMDB_BASE_URL_SETTING_KEY } = await import("../lib/workflow-runtime");
     const repository = getWorkflowRepository();
+    const accountId = await getCurrentAccountId();
     // Blank submit keeps the stored key (the form never echoes it back).
-    const trimmed = apiKey.trim();
-    if (trimmed) {
-      await repository.setAccountSetting(await getCurrentAccountId(), TMDB_API_KEY_SETTING_KEY, trimmed);
+    const trimmedKey = apiKey.trim();
+    if (trimmedKey) {
+      await repository.setAccountSetting(accountId, TMDB_API_KEY_SETTING_KEY, trimmedKey);
+    }
+    // Save custom base URL (empty string clears it)
+    if (baseUrl !== undefined) {
+      await repository.setAccountSetting(accountId, TMDB_BASE_URL_SETTING_KEY, baseUrl.trim());
     }
     return { success: true };
   } catch (error) {
@@ -808,11 +813,31 @@ export async function saveTmdbApiKeyAction(apiKey: string): Promise<PushSettings
   }
 }
 
+export async function testTmdbConnectionAction(): Promise<PushSettingsActionResult> {
+  assertNotDemo();
+  try {
+    const { getWorkflowRepository, getCurrentAccountId, getTmdbAccesses, TMDB_API_KEY_SETTING_KEY } = await import("../lib/workflow-runtime");
+    const { fetchTmdbList } = await import("@media-track/workflow");
+    const accountId = await getCurrentAccountId();
+    const accesses = await getTmdbAccesses(getWorkflowRepository());
+    if (accesses.length === 0) {
+      return { success: false, message: "未配置 TMDB API Key" };
+    }
+    // Try fetching a simple TMDB endpoint to verify connectivity
+    await fetchTmdbList(accesses, "configuration");
+    return { success: true, message: "连接成功" };
+  } catch (error) {
+    return { success: false, message: `连接失败：${String(error).slice(0, 100)}` };
+  }
+}
+
 export async function clearTmdbApiKeyAction(): Promise<PushSettingsActionResult> {
   assertNotDemo();
   try {
-    const { getWorkflowRepository, getCurrentAccountId, TMDB_API_KEY_SETTING_KEY } = await import("../lib/workflow-runtime");
-    await getWorkflowRepository().setAccountSetting(await getCurrentAccountId(), TMDB_API_KEY_SETTING_KEY, "");
+    const { getWorkflowRepository, getCurrentAccountId, TMDB_API_KEY_SETTING_KEY, TMDB_BASE_URL_SETTING_KEY } = await import("../lib/workflow-runtime");
+    const accountId = await getCurrentAccountId();
+    await getWorkflowRepository().setAccountSetting(accountId, TMDB_API_KEY_SETTING_KEY, "");
+    await getWorkflowRepository().setAccountSetting(accountId, TMDB_BASE_URL_SETTING_KEY, "");
     return { success: true };
   } catch (error) {
     return { success: false, message: `清除失败：${String(error)}` };

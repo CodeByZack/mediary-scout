@@ -176,23 +176,15 @@ async function SearchResults({
       {searchView.state === "empty" ? (
         <TrendingRow activeKind={activeTrending} basePath={basePath} />
       ) : searchView.state === "provider_error" ? (
-        // Every TMDB access (direct + proxy) is unreachable from this deployment —
-        // a GFW-blocked network without a proxy (issue #134). Degrade with
-        // actionable guidance instead of letting the server component 500.
+        // TMDB access failed — either no key configured or network unreachable.
+        // Show actionable guidance instead of crashing the page.
         <section className="search-results" aria-label="搜索结果">
           <div className="quiet-state compact" role="alert">
             <TriangleAlert size={22} aria-hidden />
-            <strong>搜索暂时不可用：连不上元数据服务（TMDB）</strong>
+            <strong>TMDB 元数据不可用</strong>
             <span>
-              当前部署环境连不上 TMDB，内置代理也不通。国内网络未配置代理时常见——
-              给部署主机（或容器）配置可访问外网的代理后重试。
+              未配置 TMDB API Key 或网络不通。请在设置页填入 TMDB API Key。
             </span>
-            {/* Deliberately a full-reload <a>, not <Link>: retry must re-run the
-                server render (re-probe TMDB). A client-side navigation to the
-                SAME URL can be served from the router cache as a no-op. */}
-            <a className="primary-button" href={`${basePath}?q=${encodeURIComponent(searchView.query)}`}>
-              重试
-            </a>
             {searchView.providerError ? (
               <span className="panel-note">{searchView.providerError}</span>
             ) : null}

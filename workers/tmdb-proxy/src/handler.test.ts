@@ -153,10 +153,11 @@ describe("handleTmdbProxy — upstream flap absorption (timeout + stale fallback
     const started = Date.now();
     const res = await handleTmdbProxy({
       request: new Request("https://w.example/search/multi?query=bebop", {
-        headers: { Origin: "https://mediaryscout.app" },
+        headers: { Origin: "https://landing.example" },
       }),
       kv: fakeKv(),
       token: "k",
+      corsOrigins: new Set(["https://landing.example"]),
       originFetch: hangingFetch,
       upstreamTimeoutMs: 20,
     });
@@ -166,7 +167,7 @@ describe("handleTmdbProxy — upstream flap absorption (timeout + stale fallback
     // detail (a public endpoint must not leak internal runtime strings).
     expect(await res.json()).toEqual({ error: "tmdb_upstream_unreachable", reason: "timeout" });
     // The failure must stay debuggable from the landing site (CORS on error branch).
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://mediaryscout.app");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://landing.example");
     // Server-side log keeps the failing endpoint + a coarse error kind, and
     // NEVER query values or the raw error string (some runtimes embed the full
     // request URL — and thus user search terms — in error messages).
@@ -490,29 +491,31 @@ describe("poster image proxy", () => {
 });
 
 describe("CORS for the landing site", () => {
+  const testOrigins = new Set(["https://landing.example", "https://app.example"]);
+  const trendingKey = "trending/movie/week?language=zh-CN";
+  const trendingKv = fakeKv({ [trendingKey]: '{"ok":1}' });
+
   it("echoes an allowlisted Origin and sets Vary: Origin", async () => {
-    // build deps exactly like neighboring tests do, with KV pre-seeded:
-    // key "trending/movie/week?language=zh-CN" -> "{\"ok\":1}"
-    const kv = fakeKv({ "trending/movie/week?language=zh-CN": '{"ok":1}' });
     const res = await handleTmdbProxy({
-      request: new Request("https://w.example/trending/movie/week?language=zh-CN", {
-        headers: { Origin: "https://mediary.dirtyfancy.sbs" },
+      request: new Request(`https://w.example/${trendingKey}`, {
+        headers: { Origin: "https://landing.example" },
       }),
-      kv,
+      kv: trendingKv,
       token: "t",
+      corsOrigins: testOrigins,
     });
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://mediary.dirtyfancy.sbs");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://landing.example");
     expect(res.headers.get("Vary")).toBe("Origin");
   });
 
   it("does NOT set CORS for an unknown Origin, but still varies on Origin", async () => {
-    const kv = fakeKv({ "trending/movie/week?language=zh-CN": '{"ok":1}' });
     const res = await handleTmdbProxy({
-      request: new Request("https://w.example/trending/movie/week?language=zh-CN", {
+      request: new Request(`https://w.example/${trendingKey}`, {
         headers: { Origin: "https://evil.example" },
       }),
-      kv,
+      kv: trendingKv,
       token: "t",
+      corsOrigins: testOrigins,
     });
     expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
     // CORS spec: caches must be told the response varies by Origin even when
@@ -522,23 +525,24 @@ describe("CORS for the landing site", () => {
 
   it("sets CORS on the MISS path too (cold KV, allowlisted Origin)", async () => {
     const res = await handleTmdbProxy({
-      request: new Request("https://w.example/trending/movie/week?language=zh-CN", {
-        headers: { Origin: "https://mediary.dirtyfancy.sbs" },
+      request: new Request(`https://w.example/${trendingKey}`, {
+        headers: { Origin: "https://landing.example" },
       }),
       kv: fakeKv(),
       token: "t",
+      corsOrigins: testOrigins,
       originFetch: async () => new Response('{"ok":1}', { status: 200 }),
     });
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://mediary.dirtyfancy.sbs");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://landing.example");
     expect(res.headers.get("Vary")).toBe("Origin");
   });
 
   it("sets neither ACAO nor Vary when the request has no Origin header", async () => {
-    const kv = fakeKv({ "trending/movie/week?language=zh-CN": '{"ok":1}' });
     const res = await handleTmdbProxy({
-      request: new Request("https://w.example/trending/movie/week?language=zh-CN"),
-      kv,
+      request: new Request(`https://w.example/${trendingKey}`),
+      kv: trendingKv,
       token: "t",
+      corsOrigins: testOrigins,
     });
     expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
     expect(res.headers.get("Vary")).toBeNull();
@@ -548,42 +552,44 @@ describe("CORS for the landing site", () => {
     const res = await handleTmdbProxy({
       request: new Request("https://w.example/movie/278", {
         method: "POST",
-        headers: { Origin: "https://mediary.dirtyfancy.sbs" },
+        headers: { Origin: "https://landing.example" },
       }),
       kv: fakeKv(),
       token: "t",
+      corsOrigins: testOrigins,
       originFetch: async () => new Response("{}"),
     });
     expect(res.status).toBe(405);
     expect(res.headers.get("Allow")).toBe("GET");
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://mediary.dirtyfancy.sbs");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://landing.example");
     expect(res.headers.get("Vary")).toBe("Origin");
   });
 
   it("echoes ACAO + Vary on the 404 branch for an allowlisted Origin hitting a non-allowlisted path", async () => {
     const res = await handleTmdbProxy({
       request: new Request("https://w.example/account/secret", {
-        headers: { Origin: "https://mediary.dirtyfancy.sbs" },
+        headers: { Origin: "https://landing.example" },
       }),
       kv: fakeKv(),
       token: "t",
+      corsOrigins: testOrigins,
       originFetch: async () => new Response("{}"),
     });
     expect(res.status).toBe(404);
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://mediary.dirtyfancy.sbs");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://landing.example");
     expect(res.headers.get("Vary")).toBe("Origin");
   });
 
-  it("echoes ACAO for the new mediaryscout.app origin (domain migration)", async () => {
-    const kv = fakeKv({ "trending/movie/week?language=zh-CN": '{"ok":1}' });
+  it("allows localhost:8788 by default without passing corsOrigins", async () => {
     const res = await handleTmdbProxy({
-      request: new Request("https://w.example/trending/movie/week?language=zh-CN", {
-        headers: { Origin: "https://mediaryscout.app" },
+      request: new Request(`https://w.example/${trendingKey}`, {
+        headers: { Origin: "http://localhost:8788" },
       }),
-      kv,
+      kv: trendingKv,
       token: "t",
+      // no corsOrigins → defaults to DEFAULT_CORS_ORIGINS (localhost)
     });
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://mediaryscout.app");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:8788");
     expect(res.headers.get("Vary")).toBe("Origin");
   });
 
@@ -592,6 +598,7 @@ describe("CORS for the landing site", () => {
       request: new Request("https://w.example/account/secret"),
       kv: fakeKv(),
       token: "t",
+      corsOrigins: testOrigins,
       originFetch: async () => new Response("{}"),
     });
     expect(res.status).toBe(404);

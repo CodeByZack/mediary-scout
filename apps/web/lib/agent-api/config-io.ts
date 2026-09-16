@@ -17,6 +17,7 @@ import {
   PROWLARR_BASE_URL_SETTING_KEY,
   PROWLARR_API_KEY_SETTING_KEY,
   TMDB_API_KEY_SETTING_KEY,
+  TMDB_BASE_URL_SETTING_KEY,
 } from "../workflow-runtime";
 
 const PUSH_CHANNEL_KEYS = ["bark", "serverchan", "wecom", "webhook"] as const;
@@ -30,6 +31,7 @@ export interface AgentConfigView {
   pansouBaseUrl: string | null;
   prowlarr: { baseURL: string; apiKey: string | null } | null;
   tmdbApiKey: string | null;
+  tmdbBaseUrl: string | null;
   push: Partial<Record<PushChannelKey, string>>;
   storages: Array<{ id: string; brand: string; name: string | null }>;
 }
@@ -61,6 +63,7 @@ export async function readAgentConfig(accountId: string): Promise<AgentConfigVie
   ]);
   const pansou = (await settings.getSetting(PANSOU_BASE_URL_SETTING_KEY))?.trim() || null;
   const tmdbKey = (await settings.getSetting(TMDB_API_KEY_SETTING_KEY))?.trim() || null;
+  const tmdbBaseUrl = (await settings.getSetting(TMDB_BASE_URL_SETTING_KEY))?.trim() || null;
 
   const push: Partial<Record<PushChannelKey, string>> = {};
   for (const key of PUSH_CHANNEL_KEYS) {
@@ -87,6 +90,7 @@ export async function readAgentConfig(accountId: string): Promise<AgentConfigVie
       ? { baseURL: prowlarr.baseURL, apiKey: maskSecret(prowlarr.apiKey) }
       : null,
     tmdbApiKey: maskSecret(tmdbKey),
+    tmdbBaseUrl,
     push,
     storages: storageRows.map((row) => ({
       id: row.id,
@@ -104,6 +108,7 @@ export interface AgentConfigWriteInput {
   pansouBaseUrl?: string;
   prowlarr?: { baseURL?: string; apiKey?: string };
   tmdbApiKey?: string;
+  tmdbBaseUrl?: string;
   push?: Partial<Record<PushChannelKey, string>>;
 }
 
@@ -235,6 +240,10 @@ export async function writeAgentConfig(
   if (input.tmdbApiKey !== undefined) {
     await setAccount(TMDB_API_KEY_SETTING_KEY, input.tmdbApiKey.trim());
     updated.push("tmdbApiKey");
+  }
+  if (input.tmdbBaseUrl !== undefined) {
+    await setAccount(TMDB_BASE_URL_SETTING_KEY, input.tmdbBaseUrl.trim());
+    updated.push("tmdbBaseUrl");
   }
 
   if (input.push) {

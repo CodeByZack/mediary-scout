@@ -1,0 +1,492 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>候选链接 → 季数/集数识别 全流程</title>
+<style>
+  :root {
+    --bg: #0d1117; --fg: #e6edf3; --mut: #8b949e; --line: #21262d;
+    --card: #161b22; --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+    --yellow: #d29922; --purple: #bc8cff; --orange: #d29922;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    padding: 32px 24px 80px; font: 15px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  p.lede { margin: 0 0 24px; color: var(--mut); max-width: 72ch; }
+  .flow { display: flex; flex-direction: column; gap: 14px; max-width: 1080px; margin: 0 auto; }
+  .stage {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+    padding: 16px 18px; position: relative;
+  }
+  .stage::before {
+    content: attr(data-step); position: absolute; top: -10px; left: 16px;
+    background: var(--bg); padding: 0 8px; font-size: 11px; color: var(--mut); letter-spacing: 1px;
+  }
+  .stage-title { font-weight: 600; margin: 0 0 8px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px;
+    border-radius: 4px; vertical-align: middle;
+  }
+  .badge-src { background: #1f3a5f; color: var(--accent); }
+  .badge-code { background: #1a3d1a; color: var(--green); }
+  .badge-ai { background: #2d1b4e; color: var(--purple); }
+  .badge-guard { background: #4e3b00; color: var(--yellow); }
+  .badge-rule { background: #1a3d1a; color: var(--green); }
+  .badge-guard2 { background: #4e1b1b; color: var(--red); }
+  .badge-custom { background: #2d1b4e; color: var(--purple); }
+  .stage p, .stage ul { margin: 0 0 6px; color: #c9d1d9; font-size: 13.5px; }
+  .stage ul { padding-left: 18px; }
+  .stage li { margin-bottom: 3px; }
+  code {
+    font-family: var(--mono); font-size: 12.5px;
+    background: #21262d; padding: 1px 5px; border-radius: 3px; color: #ffa657;
+  }
+  .arrow { text-align: center; color: var(--mut); font-size: 18px; line-height: 1; margin: -4px 0; }
+  .arrow-down::after { content: "▼"; }
+  .arrow-skip::after { content: "▼（条件不满足时跳过）"; font-size: 11px; color: var(--mut); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+  .callout {
+    border-left: 3px solid var(--accent); background: #0d2240;
+    padding: 8px 12px; margin: 8px 0; font-size: 13px; border-radius: 0 6px 6px 0;
+  }
+  .callout.warn { border-color: var(--yellow); background: #2d2200; }
+  .callout.red { border-color: var(--red); background: #2d1010; }
+  .callout.green { border-color: var(--green); background: #0a2d0a; }
+  .callout strong { color: var(--fg); }
+  table.rules {
+    width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0;
+  }
+  table.rules th, table.rules td {
+    padding: 5px 8px; border: 1px solid var(--line); text-align: left;
+  }
+  table.rules th { background: #21262d; font-weight: 600; }
+  table.rules code { font-size: 11.5px; padding: 0 3px; }
+  .pill { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .pill-a { background: #0a3d0a; color: var(--green); }
+  .pill-b { background: #1a2d3d; color: var(--accent); }
+  .pill-c { background: #3d2d1a; color: var(--orange); }
+  .pill-d { background: #3d1a1a; color: var(--red); }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .sub-box {
+    border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+    background: #0d1117; font-size: 13px;
+  }
+  .sub-box h4 { margin: 0 0 4px; font-size: 13px; color: var(--accent); }
+  .sub-box ul { margin: 0; padding-left: 16px; }
+  .sub-box li { margin-bottom: 2px; }
+  .tag { display: inline-block; font-size: 10px; padding: 0 5px; border-radius: 3px; background: #30363d; color: var(--mut); margin-left: 4px; vertical-align: middle; }
+</style>
+
+<h1>候选链接 → 季数/集数识别 全流程</h1>
+<p class="lede">MediaTrack fast path 从 PanSou 搜索到落盘归位，每一步的季/集数识别逻辑、优先级与守卫机制。</p>
+
+<div class="flow">
+
+  <!-- ═══ STAGE 1 ═══ -->
+  <div class="stage" data-step="STAGE 1">
+    <div class="stage-title">候选获取 <span class="badge badge-src">PanSou API</span></div>
+    <p>用目标剧名（或别名兜底）搜 PanSou，返回 <code>候选列表</code>：每条 = <code>{id, title, url}</code>。</p>
+    <p>兜底：裸标题无结果 → 依次用 <code>aliases[]</code>（英文原名 → 繁体 → 简体）重搜，最多 3 轮（<code>MAX_FALLBACK_SEARCHES</code>）。</p>
+  </div>
+  <div class="arrow arrow-down"></div>
+
+  <!-- ═══ STAGE 2 ═══ -->
+  <div class="stage" data-step="STAGE 2">
+    <div class="stage-title">A/B/C/D 评分 <span class="badge badge-code">纯代码，零 LLM</span></div>
+    <p>逐条候选按 <code>candidate-grader.ts</code> 的纯函数评分，四条规则链：</p>
+    <table class="rules">
+      <tr><th style="width:60px">等级</th><th>条件</th><th>含义</th></tr>
+      <tr><td><span class="pill pill-d">D</span></td><td>标题不匹配（normalize 后无交集）</td><td>永不尝试</td></tr>
+      <tr><td><span class="pill pill-c">C</span></td><td>命中目标但带 <code>电影版/真人版/OVA/特别篇</code>（同名异作）</td><td>疑似同名异作</td></tr>
+      <tr><td><span class="pill pill-c">C</span></td><td>季号不匹配：标题里的季号 ∉ 任务季范围</td><td>别季包，不尝试</td></tr>
+      <tr><td><span class="pill pill-b">B</span></td><td>标题命中 + 季号对，但缺 <code>中字</code> 标记或缺集数/全集证据</td><td>可疑但可能</td></tr>
+      <tr><td><span class="pill pill-a">A</span></td><td>标题命中 + 季号对 + 中字 OK + 有集数/季号/全集证据</td><td>top 是 A → 代码按分数直选，零 LLM（PR #45：多个 A 也不走仲裁）</td></tr>
+    </table>
+    <div class="callout warn">
+      <strong>季号识别 5 种形态：</strong>
+      <code>第N季</code> / <code>Sxx</code> / <code>Season N</code> /
+      <code>3.全集</code>（隐形季号，紧贴「全集/合集/完结」） /
+      <code>1-10季</code>（范围，只降级不给 A 级证据）。
+      范围不含目标季 → C；含目标季 → 维持 B。
+    </div>
+    <div class="callout">
+      <strong>集数证据标记：</strong> <code>SxxExx</code> 或 <code>第N集/期</code> → 有具体覆盖证据 → 加分。
+      <code>全集/complete/更新至</code> → 全集标记 → 加分。
+    </div>
+  </div>
+  <div class="arrow arrow-down"></div>
+
+  <!-- ═══ STAGE 3 ═══ -->
+  <div class="stage" data-step="STAGE 3">
+    <div class="stage-title">选片决策</div>
+    <p>评分结果只有两种分支：</p>
+    <div class="two-col">
+      <div class="sub-box">
+        <h4 style="color:var(--green)">top 是 A 级 → 代码直选（零 LLM）</h4>
+        <ul>
+          <li><code>uniqueTopGrade = graded[0].grade === "A"</code></li>
+          <li><strong>PR #45</strong>：多个 A 不触发仲裁，代码按分数（base + 中字 + 画质 + 季号）取最高</li>
+          <li>直接转存该候选；转存失败（未覆盖/死链）再换下一个 A</li>
+        </ul>
+      </div>
+      <div class="sub-box">
+        <h4 style="color:var(--purple)">无 A 级（top 是 B/C/D）→ AI 仲裁</h4>
+        <ul>
+          <li>升级 <strong>AI 选片仲裁</strong> <span class="badge badge-ai">arbitrator</span></li>
+          <li>AI 可在 ≤3 个候选中多选或放弃</li>
+          <li>兜底池：≤1 次 AI 挑选</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="arrow arrow-down"></div>
+
+  <!-- ═══ STAGE 4 ═══ -->
+  <div class="stage" data-step="STAGE 4">
+    <div class="stage-title">转存落盘 <span class="badge badge-code">transferCandidate</span></div>
+    <p>选定候选后调用网盘执行器（115 / 夸克 / 光鸭 / 天翼 / 123），把资源转存到暂存目录。</p>
+    <p>返回：<code>staging[]</code> = 落盘后的文件列表，每条含 <code>{id, path, isVideo, isSubtitle, sizeBytes}</code>。</p>
+    <p>死链：0 个落盘文件 → 不计入转存预算，直接换下一候选（≤10 次死链探测）。</p>
+  </div>
+  <div class="arrow arrow-down"></div>
+
+  <!-- ═══ STAGE 5 ═══ -->
+  <div class="stage" data-step="STAGE 5 — 核心">
+    <div class="stage-title">暂存区解析 <code>digestStaging()</code> <span class="badge badge-code">单次解析台账</span></div>
+    <p>这是 <strong>唯一的解析入口</strong>（2026-09-13 重构）：所有下游（归位、改名、日志）都查 <code>digest.parsed</code> 台账，不再各自裸解析。</p>
+
+    <div class="callout green">
+      <strong>2026-09-13 之前：</strong>入库链有 5 处独立调用 <code>episodeCodeFromPath</code>，
+      漏传 <code>episodeNames</code> 导致 digest 认 3 集、归位只落 1 集、解析明细全写同一集号
+      （花儿与少年 S8 四次实测）。现在分叉点物理消失。
+    </div>
+
+    <p style="margin-top:10px"><strong>逐文件流程：</strong></p>
+    <ol style="margin:0;padding-left:20px">
+      <li><strong>附件判定：</strong> basename 命中 <code>sample/花絮/预告/广告/making/MV/OST</code> → <code>junk=true</code>，不参与集号解析</li>
+      <li><strong>覆盖表优先：</strong> 查 <code>overrides[video.path]</code> 或 <code>overrides[base]</code>（AI 映射结果）</li>
+      <li><strong>裸解析：</strong> 无覆盖 → <code>episodeCodeFromPath(path, seasons, episodeNames, rules)</code></li>
+      <li><strong>年守卫：</strong> 解析出 code 后 → <code>episodeDateConflict(code, fileName, airDates)</code>：文件名内嵌日期与 TMDB 播出日差 &gt;45 天 → 不采信</li>
+    </ol>
+
+    <p style="margin-top:10px"><strong>覆盖判定：</strong></p>
+    <ul>
+      <li><code>episodeCodes[]</code> = 去重后的解析结果</li>
+      <li><code>coveredCodes[]</code> = 解析结果 ∩ <code>needCodes[]</code></li>
+      <li><code>missingCodes[]</code> = <code>needCodes[] − episodeCodes[]</code></li>
+      <li><code>outOfSeasonCodes[]</code> = 解析出但季号不在任务范围内</li>
+      <li><strong>passes = 全量覆盖缺集</strong>（issue #44：部分覆盖不再收尾）</li>
+    </ul>
+  </div>
+  <div class="arrow arrow-down"></div>
+
+  <!-- ═══ STAGE 5.1 ═══ -->
+  <div class="stage" data-step="STAGE 5.1 — 核心">
+    <div class="stage-title">集数解析 <code>episodeCodeFromPath()</code></div>
+    <p>两级解析，优先 basename，其次路径归季：</p>
+
+    <div class="two-col" style="margin-bottom:10px">
+      <div class="sub-box">
+        <h4>① 直接解析 basename</h4>
+        <p>调用 <code>episodeCodeFromFileName(basename, seasons, episodeNames, rules)</code></p>
+        <p>自带季号的规则（SxxExx/变体/1×01）始终可用；无季号规则仅单季可用。</p>
+        <p style="color:var(--green)">→ 命中 → <code>{code, seasonSource: "basename"}</code></p>
+      </div>
+      <div class="sub-box">
+        <h4>② 多季：路径归季</h4>
+        <p><strong>仅多季任务</strong>（<code>seasons.length &gt; 1</code>）才走此路。</p>
+        <p><code>seasonFromPathSegments()</code> 扫描目录 segment：</p>
+        <ul>
+          <li><code>Season N</code> / <code>S0N</code> / <code>S N</code></li>
+          <li><code>第N季</code> / <code>N季</code>（含中文数字）</li>
+          <li><code>01/</code> 纯数字（仅当在任务季范围内）</li>
+        </ul>
+        <p>找到后以该季为单季上下文重新解析 basename。</p>
+        <p style="color:var(--green)">→ 命中 → <code>{code, seasonSource: "path"}</code></p>
+      </div>
+    </div>
+  </div>
+  <div class="arrow arrow-down"></div>
+
+  <!-- ═══ STAGE 5.2 ═══ -->
+  <div class="stage" data-step="STAGE 5.2 — 核心">
+    <div class="stage-title">文件名解析优先级 <code>episodeCodeFromFileName()</code></div>
+    <p>6 条内置规则 + 自定义规则，按顺序执行，<strong>首个命中即返回</strong>。</p>
+
+    <table class="rules">
+      <tr>
+        <th style="width:24px">#</th>
+        <th style="width:130px">规则名</th>
+        <th style="width:60px">自带季?</th>
+        <th style="width:90px">单季限定?</th>
+        <th>正则示例</th>
+        <th>示例</th>
+      </tr>
+      <tr>
+        <td>0</td>
+        <td><code>SxxExx</code></td>
+        <td><span class="pill pill-a">是</span></td>
+        <td>否</td>
+        <td><code>[Ss](\d{1,2})[Ee](\d{1,4})</code></td>
+        <td><code>狂飙.S01E01.1080p</code></td>
+      </tr>
+      <tr>
+        <td>1</td>
+        <td><code>变体</code></td>
+        <td><span class="pill pill-a">是</span></td>
+        <td>否</td>
+        <td><code>[Ss](\d{1,2})\s*[. ]\s*[Ee](\d{1,4})(?!\d)</code></td>
+        <td><code>S01.E01</code> / <code>s01 e01</code></td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td><code>1×01</code></td>
+        <td><span class="pill pill-a">是</span></td>
+        <td>否</td>
+        <td><code>(?:^|[^A-Za-z0-9])(\d{1,2})\s*[x×]\s*(\d{1,4})</code></td>
+        <td><code>01x01</code> / <code>1×03</code></td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td><code>E01 / EP01</code></td>
+        <td><span class="pill pill-d">否</span></td>
+        <td><span class="pill pill-a">是</span></td>
+        <td><code>[Ee][Pp]?\.?\s*(\d{1,4})</code></td>
+        <td><code>Ep.12</code> / <code>E03</code></td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td><code>第N集/话/期</code></td>
+        <td><span class="pill pill-d">否</span></td>
+        <td><span class="pill pill-a">是</span></td>
+        <td><code>第\s*(\d{1,4})\s*(?:集|话|話|期)</code></td>
+        <td><code>第01集</code> / <code>第8话</code></td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td><code>纯数字</code></td>
+        <td><span class="pill pill-d">否</span></td>
+        <td><span class="pill pill-a">是</span></td>
+        <td><code>^(\d{1,3})$</code>（剥扩展名后整名）</td>
+        <td><code>01.mp4</code> / <code>15.mkv</code></td>
+      </tr>
+      <tr>
+        <td>6</td>
+        <td><code>自定义规则</code></td>
+        <td>取决于 role</td>
+        <td>取决于 role</td>
+        <td><code>用户配置的正则</code></td>
+        <td><span class="tag">issue #44</span></td>
+      </tr>
+    </table>
+
+    <div class="callout warn">
+      <strong>多季任务禁用规则 3/4/5：</strong>
+      无季号规则（E01 / 第N集 / 纯数字）在 <code>seasons.length &gt; 1</code> 时<strong>全部禁用</strong> —— 季不明不猜，交给仲裁。
+      这正是 <code>if (singleSeason)</code> 闸门：多季流程的第一步（全表解析）返回 null，
+      第二步 <code>episodeCodeFromPath</code> 的路径归季才有机会跑。
+      ⛔ 删了会退回全表锚定 → 多季包「代码识别 0 集」复发。
+    </div>
+
+    <div class="callout">
+      <strong>数字守卫 <code>isPlausibleEpisodeNumber()</code>：</strong>
+      合理范围 1–999；排除分辨率（1080 / 2160 / 4320 / 720）；纯数字规则额外排除年份 1900–2099。
+      长篇动漫允许 4 位集号（One Piece 1000+ 集）。
+    </div>
+  </div>
+  <div class="arrow arrow-down"></div>
+
+  <!-- ═══ STAGE 5.3 ═══ -->
+  <div class="stage" data-step="STAGE 5.3 — 综艺特殊">
+    <div class="stage-title">综艺「第N期」Part 锚定 <span class="badge badge-code">anchorVarietyPeriod</span></div>
+    <p>综艺一期在 TMDB 可能拆多集（第10期 = Episode 10 (Part 1) + (Part 2)），机械 <code>E(N)</code> 会系统性错位。</p>
+
+    <p><strong>锚定流程：</strong></p>
+    <ol style="margin:0;padding-left:20px">
+      <li>文件名命中 <code>第N期</code> → 提取期号 <code>N</code></li>
+      <li>提取文件名部分标记：<code>第N期上</code> → <code>上</code>、<code>第N期（中）</code> → <code>中</code>、<code>第N期下</code> → <code>下</code></li>
+      <li>查 <code>episodeNames</code>（TMDB 各集原始 name）找期号 = N 的所有集</li>
+      <li>从 TMDB 名提取部分号：英文 <code>(Part 1)</code> / <code>-1</code>、中文 <code>第N期上</code></li>
+      <li>按 <code>上=0, 中=1, 下=2</code> 排序，文件名标记按下标对齐</li>
+    </ol>
+
+    <p style="margin-top:8px"><strong>TMDB 集名六种真实形态（2026-09-13 线上实测）：</strong></p>
+    <table class="rules">
+      <tr><th>语言</th><th>形态</th><th>示例</th></tr>
+      <tr><td>en-US</td><td><code>Episode 1 (Part 1)</code></td><td>地球超新鲜 S1/S2</td></tr>
+      <tr><td>en-US</td><td><code>EP1-2</code></td><td>花儿与少年 S8（一期三部分）</td></tr>
+      <tr><td>en-US</td><td><code>EP1</code></td><td>花儿与少年 S7（不分）</td></tr>
+      <tr><td>en-US</td><td><code>Episode 1</code></td><td>中餐厅（无部分）</td></tr>
+      <tr><td>zh-CN</td><td><code>第1期上：王星越…</code></td><td>花少 S8 一期三部分</td></tr>
+      <tr><td>zh-CN</td><td><code>第1期：龚俊…</code></td><td>花少 S7 不分与拆分混用</td></tr>
+    </table>
+
+    <div class="callout red">
+      <strong>zh-CN 是 TMDB 默认语言：</strong>只认英文 <code>EP1-1</code> 会让锚定在线上整季失锚
+      （2026-09-13 花少 S8 案：DB 里存的是「第1期上：…」，老正则 <code>/ep…\d/</code> 一个都匹配不到）。
+    </div>
+
+    <div class="callout warn">
+      <strong>衍生内容黑名单（规则 4 专属）：</strong>
+      「第N期」命中 <code>加更/直拍/手记/纯享/花絮/坦白局/送机/PV/bonus/cut</code> 等 token →
+      不给集号（衍生内容不计入覆盖）。黑名单只跟「期」走；挡「期」后回退再测「集/话」防误伤。
+    </div>
+  </div>
+  <div class="arrow arrow-down"></div>
+
+  <!-- ═══ STAGE 5.4 ═══ -->
+  <div class="stage" data-step="STAGE 5.4 — 守卫">
+    <div class="stage-title">年守卫 <code>episodeDateConflict()</code> <span class="badge badge-guard">45 天容差</span></div>
+    <p>文件名内嵌完整日期（<code>2025.08.29</code> / <code>2025-08-29</code> / <code>20250829</code> / <code>2025年8月29日</code>）
+      与该集 TMDB 播出日（<code>episode_states.air_date</code>）差 >45 天 → 不采信这个集数。</p>
+
+    <div class="callout">
+      <strong>典型场景：</strong>「1-10季」合集包实际落的是第九季（2025 日期）的文件，
+      在 S10 单季任务下被解析成 S10Exx —— 号码对、季份错。
+      文件日期 2025 vs TMDB 播出日 2024 → 差 >45 天 → 拒收。
+    </div>
+
+    <p><strong>惰性规则：</strong>文件名无日期 → 守卫不触发；该集播出日未知（TMDB 未返回）→ 守卫不触发。</p>
+  </div>
+  <div class="arrow arrow-down"></div>
+
+  <!-- ═══ STAGE 6 ═══ -->
+  <div class="stage" data-step="STAGE 6">
+    <div class="stage-title">覆盖判定与收尾</div>
+
+    <div class="grid2">
+      <div class="sub-box">
+        <h4 style="color:var(--green)">✅ digest.passes = true</h4>
+        <p><strong>全量覆盖缺集</strong> → 直接 <code>finalizeLanding()</code>：</p>
+        <ul>
+          <li>改名：<code>Title.SxxExx.ext</code>（内置正则，不走台账）</li>
+          <li>归位：移动到 <code>Season N/</code> 目录</li>
+          <li>标记：<code>episode_states</code> 已入库</li>
+          <li>清理暂存区</li>
+        </ul>
+        <p style="color:var(--green)">→ 零 LLM，fast path 收尾</p>
+      </div>
+
+      <div class="sub-box">
+        <h4 style="color:var(--yellow)">⚠️ digest.passes = false</h4>
+        <p><strong>未全量覆盖</strong> → 升级 <code>AI 集数映射</code> <span class="badge badge-ai">arbitrator</span></p>
+        <ul>
+          <li>把<strong>全部落盘视频</strong>减衍生内容交 AI</li>
+          <li>AI 只给 <code>fileName → SxxExx</code> 映射</li>
+          <li>代码校验：文件名存在 / 集号不重复 / 期号一致</li>
+          <li>通过 → 重建 digest → finalize</li>
+          <li>不通过 → 清暂存，换下一候选</li>
+        </ul>
+      </div>
+    </div>
+
+    <p style="margin-top:10px"><strong>换候选后的兜底链：</strong></p>
+    <ol style="margin:0;padding-left:20px">
+      <li>primary 池代码路径转存（≤10 次）</li>
+      <li>primary 池 AI 挑选（≤3 次，独立子预算）</li>
+      <li>别名兜底重搜（≤3 轮关键词，仅 primary 无 A 时启动）</li>
+      <li>兜底池代码路径转存（≤5 次）</li>
+      <li>兜底池 AI 挑选（≤1 次）</li>
+      <li>尾部重转：两池耗尽后按覆盖数降序重转 top-3（防分享过期轮换）</li>
+      <li>pending 收尾 → 或诚实报告 <code>reportNoCoverage</code>，下次巡检再来</li>
+    </ol>
+
+    <!-- ═══ PENDING ACCUMULATION ═══ -->
+    <div style="margin-top:14px">
+      <div class="stage-title">pending 积累与多季互补 <span class="badge badge-code">retry_other → onPartial</span></div>
+      <p>每次 <code>digest.passes = false</code>（未全量覆盖）时，wipe staging 之前先把已识别的集数搬到 <strong>pending 目录</strong>（<code>ctx.pendingEntries</code> Map）。所有候选试完后，pending 里攒的集数统一 <code>finalizeFromPending()</code> 落库。</p>
+
+      <div class="grid2">
+        <div class="sub-box">
+          <h4 style="color:var(--green)">新主力（count &gt; bestCount）</h4>
+          <p>新候选覆盖集数比之前最多 → 换主力：</p>
+          <ul>
+            <li><strong>多季互补（2026-09-12）：</strong>只删除 pending 中<strong>与新候选撞码</strong>的旧条目</li>
+            <li>不撞码的旧条目保留（不同候选覆盖不同季）</li>
+            <li>新候选的覆盖集写入 pending + <code>moveToPending()</code> 搬文件</li>
+          </ul>
+          <p style="color:var(--green)">旧逻辑无条件清空所有旧条目 → 多季任务 40 集只落 20</p>
+        </div>
+        <div class="sub-box">
+          <h4 style="color:var(--accent)">补充（count ≤ bestCount）</h4>
+          <p>新候选覆盖集数没超过主力 → 只补唯一码：</p>
+          <ul>
+            <li>pending 里已有的 code → 跳过</li>
+            <li>pending 里没有的 code → 新增条目 + <code>moveToPending()</code></li>
+            <li>日志：<code>补充: N 集</code></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout" style="margin-top:8px">
+        <strong>finalizeFromPending（pending 收尾）：</strong>所有候选试完后，<code>ctx.pendingEntries.size &gt; 0</code> →
+        调用 <code>finalizeFromPending()</code>，对每个 pending 条目执行 <strong>rename → 归位 → mark</strong>，
+        一次性入库。失败 → 降级到 <code>reportNoCoverage</code>。
+        <br><strong>已知 gap（2026-09-13 run bf43a1d1）：</strong>多季 pending 积累最优候选可能丢 —— 候选 3 识别出 20 集但 pending 三行日志全无，20 集被丢。机制未定位，别在没查清前改 tv.ts onPartial。
+      </div>
+    </div>
+  </div>
+  <div class="arrow arrow-down"></div>
+
+  <!-- ═══ SUMMARY ═══ -->
+  <div class="stage" data-step="关键架构原则">
+    <div class="stage-title">设计原则速查</div>
+    <table class="rules">
+      <tr><th style="width:200px">原则</th><th>说明</th></tr>
+      <tr>
+        <td><strong>文件名可见性契约</strong></td>
+        <td>文件是否"可见为一集"<strong>只看文件名</strong>——路径上下文移动后不存在。归位的文件必须把集数写在名字里。</td>
+      </tr>
+      <tr>
+        <td><strong>单季按目标季解析</strong></td>
+        <td>S03 任务里 <code>01.mkv</code> → <code>S03E01</code>。整个流程从搜索/选候选已锁定目标季，文件名解析沿用同一上下文。</td>
+      </tr>
+      <tr>
+        <td><strong>多季不猜</strong></td>
+        <td>无季号规则全部禁用。路径含季信息（<code>Season 2/</code>）时可归季；否则交仲裁，绝不瞎猜。</td>
+      </tr>
+      <tr>
+        <td><strong>单次解析台账</strong></td>
+        <td><code>digestStaging.parsed</code> 是唯一解析点。下游改名/归位/日志全部查表，不再各自裸解析。新增共享输入只改一处。</td>
+      </tr>
+      <tr>
+        <td><strong>年守卫</strong></td>
+        <td>文件名内嵌日期与 TMDB 播出日矛盾 → 不采信。惰性：任一侧无日期即跳过。</td>
+      </tr>
+      <tr>
+        <td><strong>全量覆盖才算 pass</strong></td>
+        <td>issue #44：部分覆盖不再收尾。缺任集 → AI 映射 → 不通过 → 换候选。从不降级落盘。换候选前已识别集数搬入 pending，全部候选试完后统一 finalizeFromPending 落库。</td>
+      </tr>
+      <tr>
+        <td><strong>规则可配置（issue #44）</strong></td>
+        <td>6 条内置正则可被 UI 覆盖。内置恒在只读；自定义规则追加；损坏自动回退内置。捕获组数量静态校验。</td>
+      </tr>
+    </table>
+  </div>
+
+</div>
+
+<script>
+// 自动检测系统主题
+const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+if (prefersLight) {
+  document.documentElement.style.setProperty('--bg', '#fff');
+  document.documentElement.style.setProperty('--fg', '#14171a');
+  document.documentElement.style.setProperty('--mut', '#5d6b7a');
+  document.documentElement.style.setProperty('--line', '#e3e8ef');
+  document.documentElement.style.setProperty('--card', '#f7f9fb');
+  document.documentElement.style.setProperty('--accent', '#0969da');
+  document.documentElement.style.setProperty('--green', '#1a7f37');
+  document.documentElement.style.setProperty('--red', '#cf222e');
+  document.documentElement.style.setProperty('--yellow', '#9a6700');
+  document.documentElement.style.setProperty('--purple', '#8250df');
+  document.documentElement.style.setProperty('--orange', '#9a6700');
+  // 修正深色专用背景
+  document.querySelectorAll('.stage::before').forEach(() => {});
+}
+</script>
+</body>
+</html>

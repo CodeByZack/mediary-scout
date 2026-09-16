@@ -130,6 +130,11 @@ function resolveAccesses(options: {
   if (options.accesses && options.accesses.length > 0) {
     return options.accesses.map(normalizeAccess);
   }
+  if (options.accesses && options.accesses.length === 0) {
+    // Empty accesses (no key configured) — return empty array so the provider
+    // fails gracefully with "no TMDB access configured" instead of throwing here.
+    return [];
+  }
   if (options.readToken !== undefined) {
     return [normalizeAccess({ baseURL: options.baseURL ?? TMDB_DIRECT_BASE_URL, readToken: options.readToken })];
   }
@@ -375,7 +380,8 @@ export function createTmdbMetadataProviderFromEnv(
   if (!readToken) {
     throw new Error("TMDB_READ_TOKEN is required to create TmdbMetadataProvider");
   }
-  return new TmdbMetadataProvider({ readToken });
+  const baseURL = (env.TMDB_BASE_URL || "").trim() || TMDB_DIRECT_BASE_URL;
+  return new TmdbMetadataProvider({ readToken, baseURL });
 }
 
 export function createTmdbSearchProviderFromEnv(env: NodeJS.ProcessEnv = process.env): TmdbSearchProvider {
@@ -383,7 +389,8 @@ export function createTmdbSearchProviderFromEnv(env: NodeJS.ProcessEnv = process
   if (!readToken) {
     throw new Error("TMDB_READ_TOKEN is required to create TmdbSearchProvider");
   }
-  return new TmdbSearchProvider({ readToken });
+  const baseURL = (env.TMDB_BASE_URL || "").trim() || TMDB_DIRECT_BASE_URL;
+  return new TmdbSearchProvider({ readToken, baseURL });
 }
 
 export async function prepareTrackingTarget(input: TvTrackingTargetInput): Promise<PreparedTrackingTarget> {
