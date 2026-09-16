@@ -350,7 +350,8 @@ async function TmdbApiKeySection() {
   await connection();
   const repository = getAccountScopedSettings(await getCurrentAccountId());
   const apiKeySet = Boolean((await repository.getSetting(TMDB_API_KEY_SETTING_KEY))?.trim());
-  const baseUrlSet = Boolean((await repository.getSetting(TMDB_BASE_URL_SETTING_KEY))?.trim());
+  const baseUrl = (await repository.getSetting(TMDB_BASE_URL_SETTING_KEY))?.trim() ?? "";
+  const baseUrlSet = Boolean(baseUrl);
 
   return (
     <section className="panel" style={{ maxWidth: 720, marginTop: 24 }}>
@@ -363,7 +364,7 @@ async function TmdbApiKeySection() {
           <p className="panel-note">影视元数据来源；可填自己的 key 直连，大陆网络可自建 tmdb-proxy</p>
         </div>
       </div>
-      <TmdbApiKeyForm apiKeySet={apiKeySet} baseUrlSet={baseUrlSet} />
+      <TmdbApiKeyForm apiKeySet={apiKeySet} baseUrlSet={baseUrlSet} currentBaseUrl={baseUrl} />
     </section>
   );
 }

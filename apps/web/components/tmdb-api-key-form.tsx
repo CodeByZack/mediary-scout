@@ -5,10 +5,10 @@ import { Check, ExternalLink, LoaderCircle, Trash2 } from "lucide-react";
 import { saveTmdbApiKeyAction, clearTmdbApiKeyAction, testTmdbConnectionAction } from "../app/actions";
 import { runAction } from "../lib/run-action";
 
-export function TmdbApiKeyForm({ apiKeySet, baseUrlSet }: { apiKeySet: boolean; baseUrlSet: boolean }) {
+export function TmdbApiKeyForm({ apiKeySet, baseUrlSet, currentBaseUrl }: { apiKeySet: boolean; baseUrlSet: boolean; currentBaseUrl?: string }) {
   const [isPending, startTransition] = useTransition();
   const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
+  const [baseUrl, setBaseUrl] = useState(currentBaseUrl ?? "");
   const [hasKey, setHasKey] = useState(apiKeySet);
   const [hasBaseUrl, setHasBaseUrl] = useState(baseUrlSet);
   const [result, setResult] = useState<string | null>(null);
@@ -83,9 +83,6 @@ export function TmdbApiKeyForm({ apiKeySet, baseUrlSet }: { apiKeySet: boolean; 
 
   return (
     <div className="push-form">
-      <p className="panel-note" style={{ marginBottom: 6 }}>
-        影视元数据来源；可填自己的 key 直连，大陆网络可自建 tmdb-proxy
-      </p>
       <p className="push-help" style={{ marginBottom: 12 }}>
         了解 TMDB{" "}
         <a href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer">
@@ -102,7 +99,7 @@ export function TmdbApiKeyForm({ apiKeySet, baseUrlSet }: { apiKeySet: boolean; 
           className="setting-control"
           value={baseUrl}
           onChange={(event) => setBaseUrl(event.target.value)}
-          placeholder={hasBaseUrl ? "已设置(留空不改)" : "自定义 API Base URL（如 https://tmdb.your-domain.com）"}
+          placeholder="自定义 API Base URL（如 https://tmdb.your-domain.com）"
           aria-label="TMDB Base URL"
           autoComplete="off"
         />
