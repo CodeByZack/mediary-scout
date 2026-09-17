@@ -13,20 +13,16 @@ vi.mock("../../../../lib/workflow-runtime", () => ({
 import { GET, POST } from "./route";
 import { runScheduledType3 } from "../../../../lib/workflow-runtime";
 
-function request(method: "GET" | "POST", options?: { secret?: string; force?: boolean }) {
+function request(method: "GET" | "POST", options?: { force?: boolean }) {
   const url = new URL("http://localhost/api/workflows/run-type3");
   if (options?.force) url.searchParams.set("force", "1");
-  return new NextRequest(url, {
-    method,
-    ...(options?.secret ? { headers: { "x-media-track-worker-secret": options.secret } } : {}),
-  });
+  return new NextRequest(url, { method });
 }
 
 describe("/api/workflows/run-type3", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("MEDIA_TRACK_DEMO_MODE", "");
-    vi.stubEnv("MEDIA_TRACK_WORKER_SECRET", "");
   });
 
   afterEach(() => vi.unstubAllEnvs());
@@ -40,26 +36,22 @@ describe("/api/workflows/run-type3", () => {
     expect(runScheduledType3).not.toHaveBeenCalled();
   });
 
-  it("rejects a mismatched configured worker secret", async () => {
-    vi.stubEnv("MEDIA_TRACK_WORKER_SECRET", "expected");
-
-    const response = await POST(request("POST", { secret: "wrong" }));
-
-    expect(response.status).toBe(401);
-    expect(runScheduledType3).not.toHaveBeenCalled();
-  });
-
-  it("accepts a configured worker secret and preserves the force flag", async () => {
-    vi.stubEnv("MEDIA_TRACK_WORKER_SECRET", "expected");
-
-    const response = await GET(request("GET", { secret: "expected", force: true }));
+  it("runs patrol with force=true", async () => {
+    const response = await GET(request("GET", { force: true }));
 
     expect(response.status).toBe(200);
     expect(runScheduledType3).toHaveBeenCalledWith({ force: true });
   });
 
-  it("preserves secretless single-user cron compatibility", async () => {
+  it("runs patrol with force=false by default", async () => {
     const response = await GET(request("GET"));
+
+    expect(response.status).toBe(200);
+    expect(runScheduledType3).toHaveBeenCalledWith({ force: false });
+  });
+
+  it("runs patrol on POST", async () => {
+    const response = await POST(request("POST"));
 
     expect(response.status).toBe(200);
     expect(runScheduledType3).toHaveBeenCalledWith({ force: false });

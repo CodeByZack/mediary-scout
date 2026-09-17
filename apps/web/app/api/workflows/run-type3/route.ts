@@ -1,11 +1,8 @@
 import { connection, NextResponse, type NextRequest } from "next/server";
-import { workerApiGuard } from "../../../../lib/worker-api-guard";
 import { runScheduledType3 } from "../../../../lib/workflow-runtime";
 
 export async function POST(request: NextRequest) {
   await connection();
-  const denied = workerApiGuard(request);
-  if (denied) return denied;
 
   // `?force=1` bypasses the daily-time gate for an on-demand "sweep now"; without
   // it the sweep runs at most once per Beijing day, only after the configured

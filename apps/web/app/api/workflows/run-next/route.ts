@@ -1,11 +1,8 @@
 import { connection, NextResponse, type NextRequest } from "next/server";
-import { workerApiGuard } from "../../../../lib/worker-api-guard";
 import { runNextQueuedWorkflow } from "../../../../lib/workflow-runtime";
 
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   await connection();
-  const denied = workerApiGuard(request);
-  if (denied) return denied;
 
   const result = await runNextQueuedWorkflow();
   return NextResponse.json(result);

@@ -13,10 +13,9 @@ vi.mock("../../../../lib/workflow-runtime", () => ({
 import { GET, POST } from "./route";
 import { runNextQueuedWorkflow } from "../../../../lib/workflow-runtime";
 
-function request(method: "GET" | "POST", secret?: string) {
+function request(method: "GET" | "POST") {
   return new NextRequest("http://localhost/api/workflows/run-next", {
     method,
-    ...(secret ? { headers: { "x-media-track-worker-secret": secret } } : {}),
   });
 }
 
@@ -24,7 +23,6 @@ describe("/api/workflows/run-next", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("MEDIA_TRACK_DEMO_MODE", "");
-    vi.stubEnv("MEDIA_TRACK_WORKER_SECRET", "");
   });
 
   afterEach(() => vi.unstubAllEnvs());
@@ -38,26 +36,15 @@ describe("/api/workflows/run-next", () => {
     expect(runNextQueuedWorkflow).not.toHaveBeenCalled();
   });
 
-  it("rejects a mismatched configured worker secret", async () => {
-    vi.stubEnv("MEDIA_TRACK_WORKER_SECRET", "expected");
-
-    const response = await POST(request("POST", "wrong"));
-
-    expect(response.status).toBe(401);
-    expect(runNextQueuedWorkflow).not.toHaveBeenCalled();
-  });
-
-  it("accepts the configured worker secret", async () => {
-    vi.stubEnv("MEDIA_TRACK_WORKER_SECRET", "expected");
-
-    const response = await POST(request("POST", "expected"));
+  it("runs the worker on GET", async () => {
+    const response = await GET(request("GET"));
 
     expect(response.status).toBe(200);
     expect(runNextQueuedWorkflow).toHaveBeenCalledOnce();
   });
 
-  it("preserves secretless single-user cron compatibility", async () => {
-    const response = await GET(request("GET"));
+  it("runs the worker on POST", async () => {
+    const response = await POST(request("POST"));
 
     expect(response.status).toBe(200);
     expect(runNextQueuedWorkflow).toHaveBeenCalledOnce();

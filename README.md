@@ -122,7 +122,7 @@ flowchart LR
 
 ## Agent API (agent-first control)
 
-The web app exposes a local HTTP API that lets any coding agent (Claude Code, Codex, opencode, …) operate Mediary Scout without opening the GUI — change settings, trigger acquisitions, check progress. Set `MEDIA_TRACK_AGENT_TOKEN` to enable it.
+The web app exposes a local HTTP API that lets any coding agent (Claude Code, Codex, opencode, …) operate Mediary Scout without opening the GUI — change settings, trigger acquisitions, check progress. The desktop app auto-generates a Bearer token on first launch (persisted in `app_settings`); use the `Authorization: Bearer <token>` header to authenticate.
 
 | Method | Path | Purpose |
 |---|---|---|

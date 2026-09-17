@@ -138,7 +138,7 @@ flowchart LR
 
 ## Agent API:让 AI agent 替你操作
 
-应用暴露一套本地 HTTP API,Claude Code / Codex / opencode 等任何 coding agent 不开 GUI 也能操作:改设置、触发获取、查进度。设置环境变量 `MEDIA_TRACK_AGENT_TOKEN` 即启用。
+应用暴露一套本地 HTTP API,Claude Code / Codex / opencode 等任何 coding agent 不开 GUI 也能操作:改设置、触发获取、查进度。桌面端首次启动时自动生成 Bearer Token(持久化在 `app_settings` 中),请求头加 `Authorization: Bearer <token>` 即可鉴权。
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
