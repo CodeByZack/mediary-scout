@@ -164,13 +164,13 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
     <tr>
       <td><code class="varname">MEDIA_TRACK_AGENT_TOKEN</code></td>
       <td class="desc">Agent API 的 Bearer Token 鉴权密钥</td>
-      <td class="desc">无默认值（多用户模式必填）</td>
+      <td class="desc">无默认值（未设则不鉴权）</td>
       <td class="src">agent-api/auth.ts</td>
     </tr>
     <tr>
       <td><code class="varname">MEDIA_TRACK_WORKER_SECRET</code></td>
       <td class="desc">Worker API 守护密钥，防止未授权触发</td>
-      <td class="desc">空（多用户模式必填）</td>
+      <td class="desc">空（未设则不鉴权）</td>
       <td class="src">worker-api-guard.ts</td>
     </tr>
     <tr>
