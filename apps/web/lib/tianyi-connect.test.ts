@@ -44,15 +44,12 @@ class FakeTianyiQrLoginClient {
   }
 }
 
-const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
-
 /** Boot workflow-runtime against a fresh :memory: SQLite repo with the network
  *  login client stubbed. `failProvision` additionally makes the insert branch's
  *  directory provisioning throw (createExecutorForBrand → throw) WITHOUT any
  *  network, to test the "provision fails → still store the connection" contract. */
 const boot = async (opts: { failProvision?: boolean } = {}) => {
   process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-  delete process.env.MEDIA_TRACK_MULTI_USER; // single-user → getCurrentAccountId() = acct_default
   vi.resetModules();
   vi.doMock("@media-track/workflow", async () => {
     const actual = await vi.importActual<typeof import("@media-track/workflow")>("@media-track/workflow");
@@ -74,7 +71,6 @@ const boot = async (opts: { failProvision?: boolean } = {}) => {
 afterEach(() => {
   vi.doUnmock("@media-track/workflow");
   delete process.env.MEDIA_TRACK_SQLITE_PATH;
-  if (prevMultiUser !== undefined) process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
   vi.resetModules();
 });
 

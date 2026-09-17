@@ -1,5 +1,3 @@
-import { randomBytes } from "node:crypto";
-import { cache } from "react";
 import {
   checkLoginAllowed,
   recordLoginFailure,
@@ -64,7 +62,6 @@ import {
   pickWorkspaceStorageId,
   resolveQueueStorageChoice,
   resolveWorkspaceFromParam,
-  type Account,
   type WorkflowScope,
   type MediaSearchCandidate,
   type MediaTitle,
@@ -87,7 +84,6 @@ import {
 } from "./pansou-chain";
 import { findDemoCandidateById, findDemoCandidateByTmdbId } from "./demo-candidates";
 import { seedDemoWorkflowRepository } from "./demo-workflow";
-import { resolveRegistration, deriveBootstrapState, canManageAccounts } from "./account-bootstrap";
 import { isDemoMode } from "./demo-mode";
 
 export type CandidateTrackingRequestResult =
@@ -147,64 +143,14 @@ async function createLoginSession(accountId: string): Promise<string> {
   return signSession(sessionId, await getSessionSecret());
 }
 
-/**
- * Register a local account (multi-user). v1: open registration (self-host — the
- * operator controls who can reach the instance; login exists to separate data,
- * not to defend a public endpoint). The first account created is the owner, for
- * future group/admin features. Returns a signed session cookie (auto-login).
- */
-export async function registerAccount(username: string, password: string): Promise<AuthOutcome> {
-  const trimmed = username.trim();
-  if (trimmed.length < 2 || password.length < 6) {
-    return { ok: false, error: "用户名至少 2 位、密码至少 6 位。" };
-  }
-  const repository = getWorkflowRepository();
-  const passwordHash = await hashPassword(password);
-  const decision = resolveRegistration(await repository.listAccounts());
-  try {
-    if (decision.kind === "adopt-default") {
-      // First user on an unclaimed instance: claim acct_default in place so the
-      // existing library + drives stay theirs (is_owner already true on seed).
-      await repository.adoptDefaultAccount({ username: trimmed, passwordHash });
-      return {
-        ok: true,
-        accountId: DEFAULT_ACCOUNT_ID,
-        signedCookie: await createLoginSession(DEFAULT_ACCOUNT_ID),
-      };
-    }
-    const account: Account = {
-      id: `acct_${randomBytes(12).toString("hex")}`,
-      username: trimmed,
-      passwordHash,
-      groupId: null,
-      isOwner: false,
-      createdAt: new Date().toISOString(),
-    };
-    await repository.createAccount(account);
-    return { ok: true, accountId: account.id, signedCookie: await createLoginSession(account.id) };
-  } catch (error) {
-    if (error instanceof DuplicateUsernameError) {
-      return { ok: false, error: "用户名已存在。" };
-    }
-    throw error;
-  }
-}
-
-/** Authenticate username+password and start a session. Throttled against brute force. */
+/** Authenticate password and start a session. Throttled against brute force. */
 export async function loginAccount(
-  username: string,
+  _username: string,
   password: string,
   throttleKey?: string,
 ): Promise<AuthOutcome> {
-  // 无显式 throttleKey 时（库级调用，无请求上下文）退化为仅按身份。
-  // 单用户模式忽略用户名（永远是 acct_default），故身份用常量——否则换个
-  // 用户名就换一个桶，限流可被直接绕过。
-  // 多用户不做 toLowerCase()：账号查询是精确匹配，折叠大小写会让不同账号共用一个桶。
-  // 一律过 normalizeThrottleKey()——显式传入的 key 也必须有界，否则调用方
-  // 传超长键就能撑大内存。
-  const key = normalizeThrottleKey(
-    throttleKey ?? (isMultiUserEnabled() ? username : DEFAULT_ACCOUNT_ID),
-  );
+  // 限流身份用常量——单用户模式永远登录 acct_default，不按用户名分桶。
+  const key = normalizeThrottleKey(throttleKey ?? DEFAULT_ACCOUNT_ID);
   const now = Date.now();
   const verdict = checkLoginAllowed(key, now);
   if (!verdict.allowed) {
@@ -215,11 +161,9 @@ export async function loginAccount(
   const DUMMY_HASH =
     "scrypt:a2448ef076990b889ef0540720bccce2:4fdc41afebb4560f4a638b4225d8325904894d18d2df1c7a95c50a65c141b926dc252e99b63e681e15e2d6e008acc845b02c9a2fc99a4888749226ab262c6978";
 
-  // 单用户模式：只认 acct_default（「只输密码」，用户名忽略），且必须已设密码。
+  // 只认 acct_default（「只输密码」，用户名忽略），且必须已设密码。
   const repo = getWorkflowRepository();
-  const account = isMultiUserEnabled()
-    ? await repo.getAccountByUsername(username.trim())
-    : await repo.getAccountById(DEFAULT_ACCOUNT_ID);
+  const account = await repo.getAccountById(DEFAULT_ACCOUNT_ID);
 
   const hash = account?.passwordHash || DUMMY_HASH;
   const valid = await verifyPassword(password, hash);
@@ -227,7 +171,7 @@ export async function loginAccount(
     recordLoginFailure(key, now);
     return {
       ok: false,
-      error: isMultiUserEnabled() ? "用户名或密码不正确。" : "密码不正确。",
+      error: "密码不正确。",
     };
   }
   // 先建 session 再清限流桶：建 session 可能抛（DB 故障、取密钥失败），
@@ -288,112 +232,6 @@ export async function clearSingleUserPassword(): Promise<void> {
   await repo.deleteSessionsForAccount(DEFAULT_ACCOUNT_ID);
 }
 
-/** Self-service password change. Verifies the current password, sets the new hash,
- *  and revokes ALL of the account's sessions (incl. the caller's → must re-login). */
-export async function changeOwnPassword(
-  accountId: string,
-  currentPassword: string,
-  newPassword: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (newPassword.length < 6) {
-    return { ok: false, error: "新密码至少 6 位。" };
-  }
-  const repo = getWorkflowRepository();
-  const acct = await repo.getAccountById(accountId);
-  const valid = Boolean(acct && acct.passwordHash.length > 0 && (await verifyPassword(currentPassword, acct.passwordHash)));
-  if (!acct || !valid) {
-    return { ok: false, error: "当前密码不正确。" };
-  }
-  await repo.setAccountPassword(accountId, await hashPassword(newPassword));
-  await repo.deleteSessionsForAccount(accountId);
-  return { ok: true };
-}
-
-/** Owner-only reset of another account's password (no current-password needed).
- *  Server-enforced owner check — NOT just hidden UI. Revokes the target's sessions. */
-export async function resetUserPassword(
-  ownerAccountId: string,
-  targetAccountId: string,
-  newPassword: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const repo = getWorkflowRepository();
-  const owner = await repo.getAccountById(ownerAccountId);
-  if (!canManageAccounts(owner)) {
-    return { ok: false, error: "无权限。" };
-  }
-  if (newPassword.length < 6) {
-    return { ok: false, error: "新密码至少 6 位。" };
-  }
-  const target = await repo.getAccountById(targetAccountId);
-  if (!target) {
-    return { ok: false, error: "账号不存在。" };
-  }
-  await repo.setAccountPassword(targetAccountId, await hashPassword(newPassword));
-  await repo.deleteSessionsForAccount(targetAccountId);
-  return { ok: true };
-}
-
-/** Bootstrap state for the /login claim screen: is the instance unclaimed, and does
- *  the default account already own a library (→ "接管" vs "创建" copy). */
-export async function getBootstrapState(): Promise<{ needsClaim: boolean; hasExistingLibrary: boolean }> {
-  const repo = getWorkflowRepository();
-  const accounts = await repo.listAccounts();
-  const library = await repo.listTrackedSeasonStates(DEFAULT_ACCOUNT_ID);
-  return deriveBootstrapState(accounts, library.length);
-}
-
-/** Current account's display summary for the sidebar identity block — NEVER the
- *  password hash. Null when there's no real account (unauthenticated sentinel).
- *
- *  Per-request memoized via `cache()`: the identity loader renders twice on
- *  multi-user pages (desktop footer + mobile top-bar copy) and both call this —
- *  `cache()` dedupes the `getAccountById` DB read within a single request so we
- *  only hit the DB once even with two mounted loaders. (Next.js / React.cache
- *  per-request memoization pattern.) */
-export const getCurrentAccountSummary = cache(
-  async (): Promise<{ username: string; isOwner: boolean } | null> => {
-    const acct = await getWorkflowRepository().getAccountById(await getCurrentAccountId());
-    return acct ? { username: acct.username, isOwner: acct.isOwner } : null;
-  },
-);
-
-export interface ManagedAccount {
-  id: string;
-  username: string;
-  isOwner: boolean;
-  createdAt: string;
-  driveCount: number;
-}
-
-/** Owner-only: sanitized account list for the 账号管理 panel (no password hashes).
- *  Returns null for non-owners — server-side gate, not just hidden UI. */
-export async function listManagedAccounts(ownerAccountId: string): Promise<ManagedAccount[] | null> {
-  const repo = getWorkflowRepository();
-  const owner = await repo.getAccountById(ownerAccountId);
-  if (!canManageAccounts(owner)) {
-    return null;
-  }
-  const accounts = await repo.listAccounts();
-  const summaries: ManagedAccount[] = [];
-  for (const account of accounts) {
-    const drives = await repo.listConnectedStorages(account.id);
-    summaries.push({
-      id: account.id,
-      username: account.username,
-      isOwner: account.isOwner,
-      createdAt: account.createdAt,
-      driveCount: drives.length,
-    });
-  }
-  return summaries;
-}
-
-/** §7 P1: multi-user mode gates the login/register UI + session enforcement.
- *  Default OFF → single-user, no login, everything is the implicit default
- *  account (P0 behavior, zero-change). */
-export function isMultiUserEnabled(): boolean {
-  return process.env.MEDIA_TRACK_MULTI_USER === "1";
-}
 
 export const SESSION_COOKIE_NAME = "mt_session";
 
@@ -638,10 +476,8 @@ export function isRemoteRequest(hdrs: Headers): boolean {
  *
  * `"unknown"`（状态读取失败）同样无需特判：远程本来就要 session，局域网本来就放行。
  *
- * 远程放行只认 `acct_default`：同一个库可能残留多用户时期的账号
- * （`MEDIA_TRACK_MULTI_USER` 是运行时开关，可来回切），那些账号的 session
- * 不该在单用户模式下被当作站主，况且改密/清密只会吊销 `acct_default` 的 session，
- * 吊销不掉它们。
+ * 远程放行只认 `acct_default`：同一个库可能残留多用户时期的账号，
+ * 那些账号的 session 不该被当作站主。
  *
  * 抽成纯函数是为了能确定性覆盖全部「内外 × 有无 session」组合——
  * Emby/Jellyfin 的事故正是内外判定出错，这段逻辑必须可被精确测试。
@@ -660,47 +496,32 @@ export function resolveSingleUserAccount(opts: {
 }
 
 export async function getCurrentAccountId(): Promise<string> {
-  if (!isMultiUserEnabled()) {
-    // 注意：这里**不能**因为「没设密码」就提前返回 acct_default。那正是被移除的
-    // 公网洞——未设密码的实例会对隧道来的匿名访客全开放。密码状态只作为参数
-    // 传给 resolveSingleUserAccount()，由它统一按「LAN 开放 / 远程需 session」判定。
-    const hasPassword = await hasLoginPassword();
-    // 无论是否设过密码，都要看请求来自哪里
-    let hdrs: Headers;
-    let sessionCookie: string | undefined;
-    try {
-      const { cookies, headers } = await import("next/headers");
-      hdrs = await headers();
-      sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
-    } catch {
-      // 无请求上下文（in-process worker）：视为本地直通——采集任务不认 cookie。
-      return DEFAULT_ACCOUNT_ID;
-    }
-    if (!isRemoteRequest(hdrs)) return DEFAULT_ACCOUNT_ID; // LAN → 开放
-    // 已确认是远程：此后任何读取失败都必须 fail-closed，不能退回开放默认值
-    let sessionAccountId: string | null = null;
-    if (sessionCookie) {
-      try {
-        sessionAccountId = await resolveSessionAccountId(sessionCookie);
-      } catch {
-        return UNAUTHENTICATED_ACCOUNT_ID;
-      }
-    }
-    return resolveSingleUserAccount({ hasPassword, isRemote: true, sessionAccountId });
-  }
+  // 注意：这里**不能**因为「没设密码」就提前返回 acct_default。那正是被移除的
+  // 公网洞——未设密码的实例会对隧道来的匿名访客全开放。密码状态只作为参数
+  // 传给 resolveSingleUserAccount()，由它统一按「LAN 开放 / 远程需 session」判定。
+  const hasPassword = await hasLoginPassword();
+  // 无论是否设过密码，都要看请求来自哪里
+  let hdrs: Headers;
+  let sessionCookie: string | undefined;
   try {
-    const { cookies } = await import("next/headers");
-    const store = await cookies();
-    const raw = store.get(SESSION_COOKIE_NAME)?.value;
-    if (!raw) {
-      return UNAUTHENTICATED_ACCOUNT_ID;
-    }
-    return (await resolveSessionAccountId(raw)) ?? UNAUTHENTICATED_ACCOUNT_ID;
+    const { cookies, headers } = await import("next/headers");
+    hdrs = await headers();
+    sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
   } catch {
-    // No request scope (the in-process worker) — it resolves credentials per
-    // claimed run.accountId, not via the request cookie.
+    // 无请求上下文（in-process worker）：视为本地直通——采集任务不认 cookie。
     return DEFAULT_ACCOUNT_ID;
   }
+  if (!isRemoteRequest(hdrs)) return DEFAULT_ACCOUNT_ID; // LAN → 开放
+  // 已确认是远程：此后任何读取失败都必须 fail-closed，不能退回开放默认值
+  let sessionAccountId: string | null = null;
+  if (sessionCookie) {
+    try {
+      sessionAccountId = await resolveSessionAccountId(sessionCookie);
+    } catch {
+      return UNAUTHENTICATED_ACCOUNT_ID;
+    }
+  }
+  return resolveSingleUserAccount({ hasPassword, isRemote: true, sessionAccountId });
 }
 
 /**

@@ -17,15 +17,11 @@ import type { NextRequest } from "next/server";
 
 // 本套件断言的是单用户行为。必须显式关掉多用户开关：若被 runner 设置或从
 // 别的测试文件泄漏进来，proxy 会走「处处门禁」分支，断言就在悄悄测另一件事。
-const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
 beforeAll(() => {
-  delete process.env.MEDIA_TRACK_MULTI_USER;
 });
 afterAll(() => {
   if (prevMultiUser !== undefined) {
-    process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
   } else {
-    delete process.env.MEDIA_TRACK_MULTI_USER;
   }
 });
 
@@ -116,14 +112,12 @@ describe("proxy gate — single-user mode (multi-user off)", () => {
 
 describe("proxy gate — multi-user mode", () => {
   it("多用户：无 session 一律重定向，与来源和任何残留 cookie 无关", () => {
-    process.env.MEDIA_TRACK_MULTI_USER = "1";
     try {
       expect(redirectsToLogin(makeRequest({}))).toBe(true); // LAN 也要登录
       expect(redirectsToLogin(makeRequest({ cf: true }))).toBe(true);
       expect(redirectsToLogin(makeRequest({ staleAuthCookie: true }))).toBe(true);
       expect(redirectsToLogin(makeRequest({ session: true }))).toBe(false);
     } finally {
-      delete process.env.MEDIA_TRACK_MULTI_USER;
     }
   });
 });

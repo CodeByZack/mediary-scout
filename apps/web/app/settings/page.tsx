@@ -23,7 +23,6 @@ import { DailySweepForm } from "../../components/daily-sweep-form";
 import { PatrolNowButton } from "../../components/patrol-now-button";
 import { SettingsTabs } from "../../components/settings-tabs";
 import { PasswordChangeForm } from "../../components/password-change-form";
-import { AccountAdminPanel } from "../../components/account-admin-panel";
 import { GitHubNameplate } from "../../components/github-nameplate";
 import { SettingsActionInbox } from "../../components/settings-action-inbox";
 import { loadSettingsAttentionSummary, markSettingsAttentionSeen } from "../../lib/settings-attention-server";
@@ -32,9 +31,6 @@ import {
   getAccountConnectedStorages,
   getAccountScopedSettings,
   getCurrentAccountId,
-  getCurrentAccountSummary,
-  isMultiUserEnabled,
-  listManagedAccounts,
   getDailySweepTimes,
   MAX_DAILY_SWEEP_TIMES,
   LAST_SWEEP_COMPLETED_AT_SETTING_KEY,
@@ -186,50 +182,6 @@ async function SettingsAttentionSection({
   // createdAt <= the seen_at written here → never badges the page it was shown on.
   await markSettingsAttentionSeen();
   return <SettingsActionInbox items={summary.items} />;
-}
-
-async function PasswordChangeSection() {
-  // connection() FIRST: cacheComponents would otherwise prerender this at build time
-  // (multi-user off) and bake it as null → never shows in production multi-user.
-  await connection();
-  if (!isMultiUserEnabled()) return null;
-  return (
-    <section id="password" className="panel" style={{ maxWidth: 720, marginTop: 24 }}>
-      <div className="panel-header">
-        <div>
-          <h2 className="panel-title">
-            <KeyRound size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
-            修改密码
-          </h2>
-          <p className="panel-note">修改后所有登录会话失效，需用新密码重新登录</p>
-        </div>
-      </div>
-      <PasswordChangeForm />
-    </section>
-  );
-}
-
-async function AccountManagementSection() {
-  await connection();
-  if (!isMultiUserEnabled()) return null;
-  const me = await getCurrentAccountSummary();
-  if (!me?.isOwner) return null;
-  const accounts = await listManagedAccounts(await getCurrentAccountId());
-  if (!accounts) return null;
-  return (
-    <section id="accounts" className="panel" style={{ maxWidth: 720, marginTop: 24 }}>
-      <div className="panel-header">
-        <div>
-          <h2 className="panel-title">
-            <Users size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
-            账号管理
-          </h2>
-          <p className="panel-note">作为站主，你可以为忘记密码的用户重置密码（不影响他们的网盘和媒体库）</p>
-        </div>
-      </div>
-      <AccountAdminPanel accounts={accounts} />
-    </section>
-  );
 }
 
 async function PreferredLanguageSection() {

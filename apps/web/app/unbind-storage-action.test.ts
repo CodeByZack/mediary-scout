@@ -10,7 +10,6 @@ vi.mock("next/cache", () => ({
 }));
 
 const prevDemo = process.env.MEDIA_TRACK_DEMO_MODE;
-const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
 const prevPan115 = process.env.PAN115_COOKIE;
 
 function pan115Drive(over: Partial<UpsertConnectedStorageInput> = {}): UpsertConnectedStorageInput {
@@ -94,7 +93,6 @@ describe("unbindStorageAction (B4)", () => {
 
   beforeEach(async () => {
     delete process.env.MEDIA_TRACK_DEMO_MODE;
-    delete process.env.MEDIA_TRACK_MULTI_USER;
     delete process.env.PAN115_COOKIE;
     repo = new InMemoryWorkflowRepository();
     vi.resetModules();
@@ -116,8 +114,6 @@ describe("unbindStorageAction (B4)", () => {
     vi.resetModules();
     if (prevDemo !== undefined) process.env.MEDIA_TRACK_DEMO_MODE = prevDemo;
     else delete process.env.MEDIA_TRACK_DEMO_MODE;
-    if (prevMultiUser !== undefined) process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
-    else delete process.env.MEDIA_TRACK_MULTI_USER;
     if (prevPan115 !== undefined) process.env.PAN115_COOKIE = prevPan115;
     else delete process.env.PAN115_COOKIE;
   });

@@ -7,7 +7,6 @@ vi.mock("./workflow-runtime", () => ({
   getCurrentAccountId: vi.fn(async () => "acct_default"),
   getLlmConfig: vi.fn(async () => ({ baseURL: "https://llm.example", modelId: "m" })),
   getWorkflowRepository: vi.fn(),
-  isMultiUserEnabled: vi.fn(() => false),
   PANSOU_BASE_URL_SETTING_KEY: "pansou_base_url",
   PANSOU_HEALTH_SETTING_KEY: "pansou_last_probe",
   UNAUTHENTICATED_ACCOUNT_ID: "acct_unauthenticated",
@@ -25,7 +24,6 @@ import {
   getCurrentAccountId,
   getLlmConfig,
   getWorkflowRepository,
-  isMultiUserEnabled,
 } from "./workflow-runtime";
 
 const UPDATE_BEHIND = {
@@ -69,7 +67,6 @@ beforeEach(() => {
     modelId: "m",
   });
   (loadDeploymentUpdateState as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-  (isMultiUserEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
   // clearAllMocks 会连声明处的实现一起清掉,这里补回默认值:没配自建搜索源。
   (getAccountScopedSettings as ReturnType<typeof vi.fn>).mockReturnValue({
     getSetting: async () => null,
@@ -145,7 +142,6 @@ describe("loadSettingsAttentionSummary — per-account state", () => {
     });
     expect(single.items.some((i) => i.kind === "update_available")).toBe(true);
 
-    (isMultiUserEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (getCurrentAccountId as ReturnType<typeof vi.fn>).mockResolvedValue("acct_bob");
     makeRepository([], { acct_bob: { isOwner: false } });
     const member = await loadSettingsAttentionSummary({ origin: "https://o.example" });
@@ -182,7 +178,6 @@ describe("loadSettingsAttentionSummary — per-account state", () => {
 
   it("non-owners never trigger the update probe (badge polls every 8s; the probe can block 5s cold)", async () => {
     (loadDeploymentUpdateState as ReturnType<typeof vi.fn>).mockResolvedValue(UPDATE_BEHIND);
-    (isMultiUserEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (getCurrentAccountId as ReturnType<typeof vi.fn>).mockResolvedValue("acct_bob");
 
     makeRepository([], { acct_bob: { isOwner: false } });

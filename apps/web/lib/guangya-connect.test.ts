@@ -31,13 +31,10 @@ class FakeGuangYaClient {
   }
 }
 
-const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
-
 /** Boot workflow-runtime against a fresh :memory: SQLite repo with the network
  *  login client + executor factory stubbed (no HTTP anywhere). */
 const boot = async () => {
-  process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-  delete process.env.MEDIA_TRACK_MULTI_USER; // single-user → getCurrentAccountId() = acct_default
+  process.envMEDIA_TRACK_SQLITE_PATH = ":memory:";
   vi.resetModules();
   vi.doMock("@media-track/workflow", async () => {
     const actual = await vi.importActual<typeof import("@media-track/workflow")>("@media-track/workflow");
@@ -57,7 +54,6 @@ const boot = async () => {
 afterEach(() => {
   vi.doUnmock("@media-track/workflow");
   delete process.env.MEDIA_TRACK_SQLITE_PATH;
-  if (prevMultiUser !== undefined) process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
   vi.resetModules();
 });
 

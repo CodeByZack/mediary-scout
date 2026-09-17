@@ -26,7 +26,6 @@ describe("/api/workflows/run-type3", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("MEDIA_TRACK_DEMO_MODE", "");
-    vi.stubEnv("MEDIA_TRACK_MULTI_USER", "");
     vi.stubEnv("MEDIA_TRACK_WORKER_SECRET", "");
   });
 
@@ -38,15 +37,6 @@ describe("/api/workflows/run-type3", () => {
     const response = await GET(request("GET", { force: true }));
 
     expect(response.status).toBe(403);
-    expect(runScheduledType3).not.toHaveBeenCalled();
-  });
-
-  it("fails closed in multi-user mode when no worker secret is configured", async () => {
-    vi.stubEnv("MEDIA_TRACK_MULTI_USER", "1");
-
-    const response = await POST(request("POST"));
-
-    expect(response.status).toBe(401);
     expect(runScheduledType3).not.toHaveBeenCalled();
   });
 

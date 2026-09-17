@@ -11,11 +11,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  *  - 属于别的账号的有效 session 不得落进单用户路径
  */
 
-const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
-
 const boot = async () => {
   process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-  delete process.env.MEDIA_TRACK_MULTI_USER; // 单用户
   vi.resetModules();
   return import("./workflow-runtime");
 };
@@ -34,9 +31,7 @@ const mockRemoteRequest = (cookieValue?: string) => {
 afterEach(() => {
   delete process.env.MEDIA_TRACK_SQLITE_PATH;
   if (prevMultiUser !== undefined) {
-    process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
   } else {
-    delete process.env.MEDIA_TRACK_MULTI_USER;
   }
   vi.doUnmock("next/headers");
   vi.resetModules();
@@ -116,8 +111,7 @@ describe("single-user gate wiring (failure paths)", () => {
   it(
     "远程 + 属于别的账号的有效 session → 不得落进单用户路径",
     async () => {
-      // 同一个库可能有多用户时期遗留的账号（MEDIA_TRACK_MULTI_USER 是运行时开关，
-      // 可以再切回单用户）。那些账号的 session 不该在单用户模式下被认作站主。
+            // 可以再切回单用户）。那些账号的 session 不该在单用户模式下被认作站主。
       const rt = await boot();
       // 纯函数层面就应该钉死：只有 acct_default 才算数
       expect(

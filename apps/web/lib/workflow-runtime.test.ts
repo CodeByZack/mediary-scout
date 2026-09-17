@@ -19,7 +19,6 @@ import {
   TMDB_BASE_URL_SETTING_KEY,
 } from "./workflow-runtime";
 
-
 function repoWith(value: string | null) {
   return { getSetting: async () => value };
 }
@@ -586,24 +585,19 @@ describe("workerHasConfiguredDrive (C1: any account's drive counts)", () => {
 });
 
 describe("requireAuthenticatedAccountId (C2: refuse acct_unauthenticated writes)", () => {
-  const prevMulti = process.env.MEDIA_TRACK_MULTI_USER;
 
   afterEach(() => {
-    if (prevMulti === undefined) delete process.env.MEDIA_TRACK_MULTI_USER;
-    else process.env.MEDIA_TRACK_MULTI_USER = prevMulti;
     vi.resetModules();
     vi.doUnmock("next/headers");
   });
 
   it("single-user → returns acct_default (unchanged)", async () => {
-    delete process.env.MEDIA_TRACK_MULTI_USER;
     vi.resetModules();
     const { requireAuthenticatedAccountId } = await import("./workflow-runtime");
     expect(await requireAuthenticatedAccountId()).toBe("acct_default");
   });
 
   it("multi-user + no session cookie → throws UnauthenticatedAccountError", async () => {
-    process.env.MEDIA_TRACK_MULTI_USER = "1";
     vi.resetModules();
     vi.doMock("next/headers", () => ({
       cookies: async () => ({ get: () => undefined }),
@@ -616,7 +610,6 @@ describe("requireAuthenticatedAccountId (C2: refuse acct_unauthenticated writes)
   });
 
   it("queue/reserve write paths refuse multi-user unauthenticated as unsupported", async () => {
-    process.env.MEDIA_TRACK_MULTI_USER = "1";
     vi.resetModules();
     vi.doMock("next/headers", () => ({
       cookies: async () => ({ get: () => undefined }),

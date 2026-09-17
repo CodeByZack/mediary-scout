@@ -4,7 +4,7 @@ import { NextResponse, type NextRequest } from "next/server";
  * §7 P1 auth gate (Next 16 "proxy" convention, formerly middleware).
  *
  * 两种门禁形态：
- *  - 多用户（`MEDIA_TRACK_MULTI_USER=1`）：处处需要 session（现状不变）。
+ *  - 远程：需要 session（单用户模式）。
  *  - 单用户：**凡是经隧道来的远程请求都门禁**，与是否设过密码无关；局域网直通，零摩擦。
  *
  * 远程门禁不再看 `mt_auth_required`。旧规则是 `passwordSet && isRemote`，于是一台
@@ -87,8 +87,7 @@ function isRemoteRequest(request: NextRequest): boolean {
 export function proxy(request: NextRequest): NextResponse {
   const forwardedHeaders = serverActionForwardedHeaders(request);
 
-  const multiUser = process.env.MEDIA_TRACK_MULTI_USER === "1";
-  const gated = multiUser || isRemoteRequest(request);
+  const gated = isRemoteRequest(request);
   if (!gated) {
     return passThrough(forwardedHeaders);
   }

@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
-
 const boot = async () => {
   process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-  delete process.env.MEDIA_TRACK_MULTI_USER; // 单用户
   vi.resetModules();
   return import("./workflow-runtime");
 };
@@ -13,9 +10,7 @@ afterEach(() => {
   delete process.env.MEDIA_TRACK_SQLITE_PATH;
   // 原值为 undefined 时必须删除而非跳过，否则会把值泄漏给后续测试文件
   if (prevMultiUser !== undefined) {
-    process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
   } else {
-    delete process.env.MEDIA_TRACK_MULTI_USER;
   }
   vi.resetModules();
 });
