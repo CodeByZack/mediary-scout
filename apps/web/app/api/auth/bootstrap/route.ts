@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { hasLoginPassword } from "../../../lib/workflow-runtime";
+import { hasLoginPassword } from "../../../../lib/workflow-runtime";
 
 /**
  * Returns whether the single-user password has been set.
