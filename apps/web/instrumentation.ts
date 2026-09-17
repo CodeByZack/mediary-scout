@@ -22,6 +22,12 @@ export async function register(): Promise<void> {
   // instead of booting a worker that can never drain the queue. Throwing here
   // aborts startup with a clear reason.
   const { validateRuntimeConfig } = await import("@media-track/workflow");
+
+  // Resolve MEDIA_TRACK_MODE → legacy adapter/demo env vars BEFORE validation.
+  // All downstream code reads the legacy vars; the resolver is a thin translation layer.
+  const { applyRuntimeMode } = await import("./lib/runtime-mode");
+  applyRuntimeMode(process.env);
+
   validateRuntimeConfig(process.env);
 
   console.log("[instrumentation] register() — running startup migrations + worker");

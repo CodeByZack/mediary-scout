@@ -74,13 +74,8 @@ services:
       # Bundled PanSou via the compose service name (override per-instance in 设置).
       PANSOU_BASE_URL: http://pansou
       MEDIA_TRACK_SEARCH_PROVIDER: tmdb
-      MEDIA_TRACK_WORKFLOW_ADAPTER: pansou
-      MEDIA_TRACK_STORAGE_ADAPTER: "115"
-      # Live trio: pansou + 115 REQUIRE the vercel-ai agent (assertWorkflowAgentAdapterPolicy).
-      # "real" is not a valid value — it fails the policy and the worker can never drain the
-      # queue (获取 stuck "排队", category dirs never provisioned). Must be vercel-ai.
-      MEDIA_TRACK_AGENT_ADAPTER: vercel-ai
-      MEDIA_TRACK_DEMO_SEED: "0"
+      # 运行模式：normal=真实 LLM+真实网盘（默认）；fake=stub+假网盘；demo=只读演示
+      MEDIA_TRACK_MODE: normal
       # 可观测性:完整有序的 agent 逐步轨迹始终落 agent_steps 表(查库即可复盘)。
       # 额外把每一步打到 stdout(docker compose logs web)是 OPT-IN —— 它会把工具参数
       # (搜索关键词 / 候选 id / 文件 id)写进容器日志与日志聚合器,默认不开。需要排障时

@@ -84,16 +84,14 @@ case "${FPK_MODE}" in
 esac
 echo "==> fpk mode: ${FPK_MODE} (appname=${APPNAME}, service_port=${SERVICE_PORT})"
 
-# ---- 0.8 运行模式：FPK_RUNTIME（live 真 LLM+真网盘 | fake stub+假网盘，免费跑通流程）----
-# fake 模式与 preview（3100 全 fake）一致：不设 MEDIA_TRACK_AGENT_ADAPTER →
-# workflow 默认 fake/stub 确定性脚本（不调 LLM）；不设 MEDIA_TRACK_STORAGE_ADAPTER →
-# 默认 FakeStorageExecutor（假文件，不碰真网盘）；补 MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark
-# 避免夸克候选被类型过滤滤光（同 preview 配置）。其余（真 PanSou 搜索、真 TMDB 元数据、
-# 改名/入库/标记）走同一套真实代码，零费用。live 模式全量写回正式 env（防残留污染）。
-FPK_RUNTIME="${FPK_RUNTIME:-live}"
+# ---- 0.8 运行模式：FPK_RUNTIME（normal 真 LLM+真网盘 | fake stub+假网盘 | demo 只读演示）----
+# fake 模式与 preview（3100 全 fake）一致：stub LLM + 假网盘 + 假搜索，零费用。
+# demo 模式：fake 数据 + 只读门禁 + 种子数据。
+# normal（默认）：全量真实配置。
+FPK_RUNTIME="${FPK_RUNTIME:-normal}"
 case "${FPK_RUNTIME}" in
-    live|fake) ;;
-    *) echo "FPK_RUNTIME 必须是 live 或 fake，收到: ${FPK_RUNTIME}" >&2; exit 1 ;;
+    normal|fake|demo) ;;
+    *) echo "FPK_RUNTIME 必须是 normal、fake 或 demo，收到: ${FPK_RUNTIME}" >&2; exit 1 ;;
 esac
 echo "==> fpk runtime: ${FPK_RUNTIME}"
 
@@ -220,25 +218,24 @@ else
 fi
 
 # ---- 2.9 cmd/main 运行时环境随 FPK_RUNTIME 改写 ----
-# fake：注释掉真 LLM/真网盘两行（不设即走 stub + FakeStorageExecutor），补 quark 默认盘；
-# live：全量写回正式 env（含删掉可能残留的 quark 行），与 2.7/2.8 同样"每次全量写回"防残留。
+# 统一设 MEDIA_TRACK_MODE，运行时由 instrumentation.ts 解析为具体 adapter/demo 变量。
 CMD_MAIN="${FPK_DIR}/cmd/main"
 if [ -f "${CMD_MAIN}" ]; then
-    if [ "${FPK_RUNTIME}" = "fake" ]; then
-        # 1) 注释掉 vercel-ai / 115 两行（幂等：已注释的跳过，防止重复加 #）
-        sed -i "s/^export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/# export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/" "${CMD_MAIN}"
-        sed -i "s/^export MEDIA_TRACK_STORAGE_ADAPTER=115/# export MEDIA_TRACK_STORAGE_ADAPTER=115/" "${CMD_MAIN}"
-        # 2) 确保 quark 默认盘存在（幂等：已有则跳过）
-        if ! grep -q "^export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark" "${CMD_MAIN}"; then
-            sed -i "s/^# export MEDIA_TRACK_STORAGE_ADAPTER=115.*/&\\nexport MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark        # fake 模式默认盘，避免夸克候选被滤光（同 preview）/" "${CMD_MAIN}"
-        fi
-        echo "    cmd/main 已改为 fake 运行模式（stub agent + fake 网盘 + quark 默认盘）"
+    # 确保 cmd/main 里有 MEDIA_TRACK_MODE 行（幂等）
+    if grep -q "^export MEDIA_TRACK_MODE=" "${CMD_MAIN}"; then
+        sed -i "s/^export MEDIA_TRACK_MODE=.*/export MEDIA_TRACK_MODE=${FPK_RUNTIME}/" "${CMD_MAIN}"
     else
-        # live：恢复正式 env（幂等）
-        sed -i "s/^# export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/" "${CMD_MAIN}"
-        sed -i "s/^# export MEDIA_TRACK_STORAGE_ADAPTER=115/export MEDIA_TRACK_STORAGE_ADAPTER=115/" "${CMD_MAIN}"
+        echo "export MEDIA_TRACK_MODE=${FPK_RUNTIME}" >> "${CMD_MAIN}"
+    fi
+    # fake 模式补 quark 默认盘
+    if [ "${FPK_RUNTIME}" = "fake" ]; then
+        if ! grep -q "^export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark" "${CMD_MAIN}"; then
+            echo "export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark        # fake 模式默认盘" >> "${CMD_MAIN}"
+        fi
+        echo "    cmd/main 已改为 ${FPK_RUNTIME} 运行模式（stub agent + fake 网盘 + quark 默认盘）"
+    else
         sed -i "/^export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark/d" "${CMD_MAIN}"
-        echo "    cmd/main 已改为 live 运行模式（vercel-ai agent + 115 网盘）"
+        echo "    cmd/main 已改为 ${FPK_RUNTIME} 运行模式"
     fi
 else
     echo "    cmd/main 不存在，跳过 runtime 改写"
@@ -262,11 +259,11 @@ else
 fi
 # issue #29 用户拍板(十轮):产物名带版本号——mediary-scout-<VERSION>-<ARCH>.fpk,
 # 与 manifest version / package.json 同步(CI 传 tag 去 v 前缀;本地缺省读 package.json)。
-if [ "${FPK_RUNTIME}" = "fake" ]; then
-    FPK_NAME="${FPK_BASE}-${VERSION}-fake-${ARCH}.fpk"
-else
-    FPK_NAME="${FPK_BASE}-${VERSION}-${ARCH}.fpk"
-fi
+case "${FPK_RUNTIME}" in
+    fake)  FPK_NAME="${FPK_BASE}-${VERSION}-fake-${ARCH}.fpk" ;;
+    demo)  FPK_NAME="${FPK_BASE}-${VERSION}-demo-${ARCH}.fpk" ;;
+    *)     FPK_NAME="${FPK_BASE}-${VERSION}-${ARCH}.fpk" ;;
+esac
 
 rm -rf "${DIST_DIR}"
 mkdir -p "${DIST_DIR}"
