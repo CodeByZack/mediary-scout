@@ -96,7 +96,7 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
 
 <div class="dash">
   <div class="cell total">
-    <div class="num">58</div>
+    <div class="num">56</div>
     <div class="lbl">环境变量总数（清理后）</div>
   </div>
   <div class="cell ok">
@@ -160,18 +160,6 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
       <td class="desc">CSRF 白名单，允许 Server Action 的来源域名（逗号分隔，构建时烘焙进产物）</td>
       <td class="desc">空（仅同源）</td>
       <td class="src">next.config.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_AGENT_TOKEN</code></td>
-      <td class="desc">Agent API 的 Bearer Token 鉴权密钥</td>
-      <td class="desc">无默认值（未设则不鉴权）</td>
-      <td class="src">agent-api/auth.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_WORKER_SECRET</code></td>
-      <td class="desc">Worker API 守护密钥，防止未授权触发</td>
-      <td class="desc">空（未设则不鉴权）</td>
-      <td class="src">worker-api-guard.ts</td>
     </tr>
     <tr>
       <td><code class="varname">MEDIA_TRACK_PUBLIC_BASE_URL</code></td>
