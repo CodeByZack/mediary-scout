@@ -549,7 +549,7 @@ describe("workerHasConfiguredDrive (C1: any account's drive counts)", () => {
     expect(await rt.workerHasConfiguredDrive()).toBe(false);
   });
 
-  it("drive on a non-default account → true (multi-user must not starve the queue)", async () => {
+  it("drive on a non-default account → true (must not starve the queue)", async () => {
     const rt = await boot();
     const repo = rt.getWorkflowRepository();
     await repo.createAccount({
@@ -597,9 +597,10 @@ describe("requireAuthenticatedAccountId (C2: refuse acct_unauthenticated writes)
     expect(await requireAuthenticatedAccountId()).toBe("acct_default");
   });
 
-  it("multi-user + no session cookie → throws UnauthenticatedAccountError", async () => {
+  it("remote + no session cookie → throws UnauthenticatedAccountError", async () => {
     vi.resetModules();
     vi.doMock("next/headers", () => ({
+      headers: async () => new Headers({ "cf-ray": "x" }),
       cookies: async () => ({ get: () => undefined }),
     }));
     const { requireAuthenticatedAccountId, UnauthenticatedAccountError, UNAUTHENTICATED_ACCOUNT_ID, getCurrentAccountId } =
@@ -609,9 +610,10 @@ describe("requireAuthenticatedAccountId (C2: refuse acct_unauthenticated writes)
     await expect(requireAuthenticatedAccountId()).rejects.toThrow(/未登录/);
   });
 
-  it("queue/reserve write paths refuse multi-user unauthenticated as unsupported", async () => {
+  it("queue/reserve write paths refuse remote unauthenticated as unsupported", async () => {
     vi.resetModules();
     vi.doMock("next/headers", () => ({
+      headers: async () => new Headers({ "cf-ray": "x" }),
       cookies: async () => ({ get: () => undefined }),
     }));
     const {
