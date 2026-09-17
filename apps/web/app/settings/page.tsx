@@ -3,7 +3,7 @@ import { maskProviderUid } from "../../lib/mask-provider-uid";
 import { connection } from "next/server";
 import { headers } from "next/headers";
 import { Suspense } from "react";
-import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, Radio, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
+import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, Languages, Radio, ShieldCheck, Subtitles, TriangleAlert } from "lucide-react";
 import { AppSidebar } from "../../components/app-sidebar";
 import { AddDriveBrandTabs } from "../../components/add-drive-brand-tabs";
 import { TestConnectionButton } from "../../components/test-connection-button";
@@ -22,7 +22,6 @@ import { PanSouConfigForm } from "../../components/pansou-config-form";
 import { DailySweepForm } from "../../components/daily-sweep-form";
 import { PatrolNowButton } from "../../components/patrol-now-button";
 import { SettingsTabs } from "../../components/settings-tabs";
-import { PasswordChangeForm } from "../../components/password-change-form";
 import { GitHubNameplate } from "../../components/github-nameplate";
 import { SettingsActionInbox } from "../../components/settings-action-inbox";
 import { loadSettingsAttentionSummary, markSettingsAttentionSeen } from "../../lib/settings-attention-server";
@@ -137,16 +136,7 @@ export default function SettingsPage({
                   </Suspense>
                 </>
               }
-              account={
-                <>
-                  <Suspense fallback={null}>
-                    <PasswordChangeSection />
-                  </Suspense>
-                  <Suspense fallback={null}>
-                    <AccountManagementSection />
-                  </Suspense>
-                </>
-              }
+              account={null}
               // Fallback is null, not a skeleton: a skeleton element would stream
               // into the slot and the empty-slot observer would read the tab as
               // visible before we know whether the viewer is the 站主.

@@ -30,9 +30,6 @@ const mockRemoteRequest = (cookieValue?: string) => {
 
 afterEach(() => {
   delete process.env.MEDIA_TRACK_SQLITE_PATH;
-  if (prevMultiUser !== undefined) {
-  } else {
-  }
   vi.doUnmock("next/headers");
   vi.resetModules();
 });

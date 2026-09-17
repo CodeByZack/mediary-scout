@@ -34,7 +34,7 @@ class FakeGuangYaClient {
 /** Boot workflow-runtime against a fresh :memory: SQLite repo with the network
  *  login client + executor factory stubbed (no HTTP anywhere). */
 const boot = async () => {
-  process.envMEDIA_TRACK_SQLITE_PATH = ":memory:";
+  process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
   vi.resetModules();
   vi.doMock("@media-track/workflow", async () => {
     const actual = await vi.importActual<typeof import("@media-track/workflow")>("@media-track/workflow");

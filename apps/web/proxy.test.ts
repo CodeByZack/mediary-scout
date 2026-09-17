@@ -15,15 +15,7 @@ import type { NextRequest } from "next/server";
  * proxy 不再读 `mt_auth_required`，「有没有设过密码」不参与任何门禁判定。
  */
 
-// 本套件断言的是单用户行为。必须显式关掉多用户开关：若被 runner 设置或从
-// 别的测试文件泄漏进来，proxy 会走「处处门禁」分支，断言就在悄悄测另一件事。
-beforeAll(() => {
-});
-afterAll(() => {
-  if (prevMultiUser !== undefined) {
-  } else {
-  }
-});
+// 本套件断言的是单用户行为。
 
 const makeRequest = (opts: {
   path?: string;

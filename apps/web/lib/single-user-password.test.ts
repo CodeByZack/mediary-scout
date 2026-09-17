@@ -8,10 +8,6 @@ const boot = async () => {
 
 afterEach(() => {
   delete process.env.MEDIA_TRACK_SQLITE_PATH;
-  // 原值为 undefined 时必须删除而非跳过，否则会把值泄漏给后续测试文件
-  if (prevMultiUser !== undefined) {
-  } else {
-  }
   vi.resetModules();
 });
 
