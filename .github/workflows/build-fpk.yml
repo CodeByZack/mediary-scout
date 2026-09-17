@@ -145,8 +145,8 @@ jobs:
       - name: Upload fpk artifact (${{ matrix.arch }})
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ format('{0}{1}{2}', (inputs.mode == 'test' && format('fpk-{0}-dev', matrix.arch) || matrix.artifact), (inputs.runtime == 'fake' && '-fake' || (inputs.runtime == 'demo' && '-demo' || '')) }}
-          path: ${{ format('{0}-{1}{2}-{3}.fpk', (inputs.mode == 'test' && 'deploy/fpk/dist/mediary-scout-dev' || 'deploy/fpk/dist/mediary-scout'), steps.version.outputs.version, (inputs.runtime == 'fake' && '-fake' || (inputs.runtime == 'demo' && '-demo' || '')), matrix.platform) }}
+          name: ${{ inputs.mode == 'test' && format('fpk-{0}-dev-{1}', matrix.arch, inputs.runtime) || format('fpk-{0}-{1}', matrix.artifact, inputs.runtime) }}
+          path: deploy/fpk/dist/${{ inputs.mode == 'test' && 'mediary-scout-dev' || 'mediary-scout' }}-${{ steps.version.outputs.version }}${{ inputs.runtime != 'normal' && format('-{0}', inputs.runtime) || '' }}-${{ matrix.platform }}.fpk
           if-no-files-found: error
           retention-days: 7
 

@@ -262,7 +262,7 @@ fi
 case "${FPK_RUNTIME}" in
     fake)  FPK_NAME="${FPK_BASE}-${VERSION}-fake-${ARCH}.fpk" ;;
     demo)  FPK_NAME="${FPK_BASE}-${VERSION}-demo-${ARCH}.fpk" ;;
-    *)     FPK_NAME="${FPK_BASE}-${VERSION}-${ARCH}.fpk" ;;
+    normal) FPK_NAME="${FPK_BASE}-${VERSION}-${ARCH}.fpk" ;;
 esac
 
 rm -rf "${DIST_DIR}"
