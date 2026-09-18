@@ -246,13 +246,11 @@ if [ -f "${CMD_MAIN}" ]; then
     sed -i '/^# export MEDIA_TRACK_AGENT_ADAPTER=/d' "${CMD_MAIN}"
     sed -i '/^# export MEDIA_TRACK_STORAGE_ADAPTER=/d' "${CMD_MAIN}"
 
-    # 2) 构造要插入的运行时变量块，插到 `CMD="cd` 之前（幂等：残留行已在 1 删净）
-    if [ "${FPK_RUNTIME}" = "fake" ]; then
-        RUNTIME_BLOCK="export MEDIA_TRACK_MODE=${FPK_RUNTIME}
-export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark        # fake 模式默认盘"
-    else
-        RUNTIME_BLOCK="export MEDIA_TRACK_MODE=${FPK_RUNTIME}"
-    fi
+    # 2) 构造要插入的运行时变量块，插到 `CMD="cd` 之前（幂等：残留行已在 1 删净）。
+    #    只有 MEDIA_TRACK_MODE 一行：resolver 全部派生（adapter/search/demo）。
+    #    ⚠️ 不设 MEDIA_TRACK_DEFAULT_STORAGE_BRAND —— fake 模式存储是 FakeStorageExecutor
+    #    （品牌无关），driveProvider 仅作日志标签且有默认 "quark" 兜底，设了是纯噪声。
+    RUNTIME_BLOCK="export MEDIA_TRACK_MODE=${FPK_RUNTIME}"
     awk -v block="${RUNTIME_BLOCK}" '
         /^CMD="/ && !inserted {
             print block

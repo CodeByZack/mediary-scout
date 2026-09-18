@@ -33,11 +33,26 @@ export interface TransferOutcome {
 export class FakeResourceProvider implements ResourceProvider {
   private readonly keywordResults: Record<string, CandidateFixture[]>;
   private readonly keywordErrors: Record<string, string>;
+  /** Catch-all for keywords NOT in `keywordResults`. A function receives the
+   *  keyword so the fallback candidates can carry the searched title (used by the
+   *  fake runtime mode: real TMDB search + fake candidates for ANY title, so the
+   *  whole acquire→transfer flow runs end-to-end without config). When unset,
+   *  unknown keywords yield zero candidates (existing test behavior). */
+  private readonly defaultKeywordResult?:
+    | CandidateFixture
+    | ((keyword: string) => CandidateFixture | CandidateFixture[]);
   private nextSnapshotNumber = 1;
 
-  constructor(input: { keywordResults: Record<string, CandidateFixture[]>; keywordErrors?: Record<string, string> }) {
+  constructor(input: {
+    keywordResults: Record<string, CandidateFixture[]>;
+    keywordErrors?: Record<string, string>;
+    defaultKeywordResult?:
+      | CandidateFixture
+      | ((keyword: string) => CandidateFixture | CandidateFixture[]);
+  }) {
     this.keywordResults = input.keywordResults;
     this.keywordErrors = input.keywordErrors ?? {};
+    this.defaultKeywordResult = input.defaultKeywordResult;
   }
 
   // `workflowRunId` is accepted for contract parity with real providers but does
@@ -52,7 +67,22 @@ export class FakeResourceProvider implements ResourceProvider {
 
     const snapshotId = `snapshot_${this.nextSnapshotNumber}`;
     this.nextSnapshotNumber += 1;
-    const fixtures = this.keywordResults[input.keyword] ?? [];
+    const configured = this.keywordResults[input.keyword];
+    let fixtures: CandidateFixture[];
+    if (configured !== undefined) {
+      fixtures = configured;
+    } else if (this.defaultKeywordResult !== undefined) {
+      // Catch-all: fabricate candidate(s) carrying the searched keyword as their
+      // title so the fake runtime can run the acquire→transfer flow for any real
+      // (TMDB-searched) title without real cloud-drive candidates.
+      const fallback =
+        typeof this.defaultKeywordResult === "function"
+          ? this.defaultKeywordResult(input.keyword)
+          : this.defaultKeywordResult;
+      fixtures = Array.isArray(fallback) ? fallback : [fallback];
+    } else {
+      fixtures = [];
+    }
     const candidates: ResourceCandidate[] = fixtures.map((fixture, index) => ({
       id: `${snapshotId}_candidate_${index + 1}`,
       snapshotId,

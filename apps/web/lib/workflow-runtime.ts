@@ -1571,6 +1571,15 @@ async function getWorkerResourceProvider(
         },
       ],
     },
+    // fake 运行模式：任意关键词都返回一组按剧名动态构造的假候选（确定性派生，
+    // 同关键词结果一致，便于复现）。配合 FakeStorageExecutor 的
+    // defaultTransferOutcome，让「真实 TMDB 搜索 → 任意剧获取 → 假转存」全流程
+    // 零配置跑通（stub 脚本 + 假网盘，不调 LLM、不碰真实资源）。
+    defaultKeywordResult: (keyword) => [
+      { title: `${keyword} S01E01-S01E24 4K`, source: "fake" },
+      { title: `${keyword} 第一季 1080P`, source: "fake" },
+      { title: `${keyword} 全集 4K`, source: "fake" },
+    ],
   });
   return fakeResourceProvider;
 }
