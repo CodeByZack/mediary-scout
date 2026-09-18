@@ -124,6 +124,19 @@ cp -a "${REPO_ROOT}/apps/web/public/." "${FPK_DIR}/app/server/apps/web/public/"
 
 echo "    app/server 大小: $(du -sh "${FPK_DIR}/app/server" | cut -f1)"
 
+# ---- 2.6 写入 .env 文件（fnOS cmd/main 的 export 不传给 Node.js）----
+# Next.js 会读取 server 目录下的 .env 文件，这是最可靠的配置方式。
+SERVER_ENV="${FPK_DIR}/app/server/.env"
+cat > "${SERVER_ENV}" << EOF
+# MediaTrack 运行模式（由 build-fpk.sh 自动生成）
+MEDIA_TRACK_MODE=${FPK_RUNTIME}
+EOF
+# fake 模式补 quark 默认盘
+if [ "${FPK_RUNTIME}" = "fake" ]; then
+    echo "MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark" >> "${SERVER_ENV}"
+fi
+echo "    .env 已写入: ${SERVER_ENV} (MODE=${FPK_RUNTIME})"
+
 # ---- 2.5 清理 sharp 的 musl 变体（glibc 环境用不到，减小 fpk 体积）----
 # npm 在 linux 下会把 glibc/musl 两种 libc 的 sharp 原生二进制都装进 @img（os/cpu 过滤正常、
 # libc 过滤失效），目标 NAS（飞牛 fnOS）与 CI 均为 glibc，musl 变体完全用不上，删掉。
