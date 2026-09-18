@@ -315,6 +315,50 @@ describe("createStubAcquisitionModel — the deterministic-script agent", () => 
     expect(result.episodes[0]!.obtained).toBe(false);
     expect(result.transferAttempts.length).toBe(0);
   });
+
+  it("fake runtime movie: 3 条剧形候选全 B(无年份) → stub 仲裁选片 → 单片落盘", async () => {
+    // 复刻 fake 模式真实场景：候选标题全是剧集形态且不带年份（截图里 A0/B3 的来源），
+    // 网盘对电影根目录下的 staging 返回单片文件。
+    const provider = new FakeResourceProvider({
+      keywordResults: {},
+      defaultKeywordResult: (kw) => [
+        { title: `${kw} S01E01-S01E24 4K`, source: "fake" },
+        { title: `${kw} 第一季 1080P`, source: "fake" },
+        { title: `${kw} 全集 4K`, source: "fake" },
+      ],
+    });
+    const tvDump = [1, 2, 3].flatMap((season) =>
+      Array.from({ length: 24 }, (_, i) => {
+        const code = `S${String(season).padStart(2, "0")}E${String(i + 1).padStart(2, "0")}`;
+        return {
+          id: `fake_s${season}_${code}`, storageDirectoryId: "x", name: `Demo.${code}.mkv`,
+          sizeBytes: 1_000_000_000, episodeCode: code, providerFileId: `p_${season}_${code}`,
+        };
+      }),
+    );
+    const storage = new FakeStorageExecutor({
+      movieStagingRoots: ["movie_root"],
+      movieTransferOutcome: {
+        status: "succeeded", providerMessage: "fake movie transfer completed",
+        files: [{
+          id: "fake_movie_1", storageDirectoryId: "x", name: "Fake.Movie.1080p.mkv",
+          sizeBytes: 2_000_000_000, episodeCode: "S01E01", providerFileId: "provider_fake_movie_1",
+        }],
+      },
+      defaultTransferOutcome: {
+        status: "succeeded", providerMessage: "fake transfer completed", files: tvDump,
+      },
+    });
+
+    const result = await movieRun({ provider, storage });
+
+    expect(result.status).toBe("succeeded");
+    const movieDirs = await storage.listChildDirectories("movie_root");
+    const movieDir = movieDirs.find((dir) => dir.name === "Some Film (2025) {tmdb-11}");
+    expect(movieDir).toBeDefined();
+    const tree = await storage.listTree({ directoryId: movieDir!.id });
+    expect(tree.map((file) => file.path)).toEqual(["Some Film (2025).mkv"]);
+  });
 });
 
 /** Fast-path arbitration calls carry NO tools (single-shot generateText); the

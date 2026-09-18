@@ -2035,6 +2035,25 @@ async function getWorkerStorageExecutor(
   }
   fakeStorageExecutor ??= new FakeStorageExecutor({
     transferOutcomes: fakeTransferOutcomes(),
+    // 电影形态假数据：落点在电影根目录（fake 模式 = "fake_movies_root"）下的
+    // staging 时，转存产物为【单个影片文件】——搜索→仲裁→单片落盘→flatten→
+    // 标记 MOVIE 全流程零配置跑通（电影关键词是裸标题无年份，候选恒判 B，
+    // 由 stub 仲裁选中后转存）。
+    movieStagingRoots: [moviesParentDirectoryId()],
+    movieTransferOutcome: {
+      status: "succeeded",
+      providerMessage: "fake movie transfer completed",
+      files: [
+        {
+          id: "fake_movie_1",
+          storageDirectoryId: "assigned_by_fake_storage",
+          name: "Fake.Movie.1080p.mkv",
+          sizeBytes: 2_000_000_000,
+          episodeCode: "S01E01",
+          providerFileId: "provider_fake_movie_1",
+        },
+      ],
+    },
     defaultTransferOutcome: {
       status: "succeeded",
       providerMessage: "fake transfer completed",

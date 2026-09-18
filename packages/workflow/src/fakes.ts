@@ -112,6 +112,12 @@ export class FakeStorageExecutor implements StorageExecutor {
    *  makes the fake drive usable for end-to-end previews of the rename flow
    *  without a real 115/quark cookie. Unset ⇒ unknown candidates fail (tests). */
   private readonly defaultTransferOutcome: TransferOutcome | undefined;
+  /** Movie-shaped fallback for the fake runtime mode: when a transfer targets a
+   *  staging dir under one of these roots (a MOVIE task's landing), the drive
+   *  answers with `movieTransferOutcome` (one film file) instead of the TV
+   *  multi-episode dump. Unset (all tests) ⇒ behavior is unchanged. */
+  private readonly movieStagingRoots: string[];
+  private readonly movieTransferOutcome: TransferOutcome | undefined;
   private readonly nestedDirectories: Set<string>;
   private nextDirectoryNumber = 1;
   private nextTransferNumber = 1;
@@ -124,6 +130,8 @@ export class FakeStorageExecutor implements StorageExecutor {
     directories?: Record<string, VerifiedFile[]>;
     transferOutcomes?: Record<string, TransferOutcome>;
     defaultTransferOutcome?: TransferOutcome;
+    movieStagingRoots?: string[];
+    movieTransferOutcome?: TransferOutcome;
     nestedDirectories?: Set<string>;
     packageTrees?: Record<string, FakePackageTreeFile[]>;
     unparsedFiles?: Record<string, UnparsedVideoFile[]>;
@@ -148,6 +156,8 @@ export class FakeStorageExecutor implements StorageExecutor {
     );
     this.transferOutcomes = cloneTransferOutcomes(input.transferOutcomes ?? {});
     this.defaultTransferOutcome = input.defaultTransferOutcome;
+    this.movieStagingRoots = input.movieStagingRoots ?? [];
+    this.movieTransferOutcome = input.movieTransferOutcome;
     this.nestedDirectories = new Set(input.nestedDirectories ?? []);
   }
 
@@ -222,7 +232,12 @@ export class FakeStorageExecutor implements StorageExecutor {
     directoryId: string;
     candidate: ResourceCandidate;
   }): Promise<TransferAttempt> {
+    // Fake-mode movie shape: a landing under a movie root gets the single-film
+    // outcome (TV dump would never pass the movie landing check). Candidate-keyed
+    // outcomes still win for explicit test fixtures on non-movie dirs.
+    const movieTarget = this.movieStagingRoots.some((root) => input.directoryId.startsWith(root));
     const outcome =
+      (movieTarget ? this.movieTransferOutcome : undefined) ??
       this.transferOutcomes[input.candidate.id] ??
       this.defaultTransferOutcome ?? {
         status: "failed",
