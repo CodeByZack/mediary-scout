@@ -31,6 +31,9 @@ export function createExecutorForBrand(input: {
   credential?: unknown;
   /** The drive's write-scope directory ids (rootCid + Movies/TV/Anime). */
   scopeCids: string[];
+  /** The drive's Movies dir cid for the 115 movie-leaf guard (ignored by other
+   *  brands — their executors scope by writeScopeDirectoryIds alone). */
+  moviesDirectoryId?: string;
   /** Base env for the 115 executor (guard pacing etc); defaults to process.env. */
   env?: Record<string, string | undefined>;
   /** Persist hook for refreshed token-auth credentials (光鸭 refresh rotates tokens;
@@ -44,7 +47,10 @@ export function createExecutorForBrand(input: {
       PAN115_COOKIE: cookie,
       ...(input.scopeCids.length > 0 ? { MEDIA_TRACK_115_WRITE_SCOPE_CIDS: input.scopeCids.join(",") } : {}),
     };
-    return createProtectedPan115CookieStorageExecutorFromEnv({ env });
+    return createProtectedPan115CookieStorageExecutorFromEnv({
+      env,
+      ...(input.moviesDirectoryId !== undefined ? { moviesDirectoryId: input.moviesDirectoryId } : {}),
+    });
   }
   if (input.provider === "quark") {
     return new QuarkStorageExecutor({

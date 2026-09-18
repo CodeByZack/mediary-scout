@@ -2017,6 +2017,7 @@ async function getWorkerStorageExecutor(
           credential: creds.credential ?? {},
           scopeCids,
           env: process.env,
+          ...(creds.moviesCid ? { moviesDirectoryId: creds.moviesCid } : {}),
           onCredentialRefresh: makeTokenPersister(accountId, creds.id, creds.provider),
         });
       }
@@ -2025,6 +2026,7 @@ async function getWorkerStorageExecutor(
         cookie: creds.cookie,
         scopeCids,
         env: process.env,
+        ...(creds.moviesCid ? { moviesDirectoryId: creds.moviesCid } : {}),
       });
     }
     // No drive bound yet → legacy env-cookie 115 path (fresh deploy bootstrap).
@@ -2217,20 +2219,16 @@ function storageDirectoryIdForCandidate(_candidateId: string): string {
 }
 
 function storageParentDirectoryId(): string {
-  return (
-    process.env.MEDIA_TRACK_TV_PARENT_CID ??
-    process.env.MEDIA_TRACK_115_TEST_ROOT_CID ??
-    "fake_library_root"
-  );
+  // 目录落点只认连接时建的树（DB CID，目录名可用 MEDIA_TRACK_LIBRARY_*_DIR 定制）；
+  // env 兜底仅剩开发用的 TEST_ROOT_CID（*_PARENT_CID 三件套已于 2026-09-18 删除）。
+  return process.env.MEDIA_TRACK_115_TEST_ROOT_CID ?? "fake_library_root";
 }
 
-/**
- * Separate 115 landing parent for anime. Falls back to the TV parent when
- * MEDIA_TRACK_ANIME_PARENT_CID is unset, so anime simply co-locates with TV
- * until a dedicated Anime directory is configured.
- */
+/** Anime landing parent — co-locates with TV unless the connected drive's
+ *  provisioned tree has a dedicated Anime dir (creds.animeCid, checked first
+ *  by getWorkerStorageParents). */
 function animeParentDirectoryId(): string {
-  return process.env.MEDIA_TRACK_ANIME_PARENT_CID ?? storageParentDirectoryId();
+  return storageParentDirectoryId();
 }
 
 function defaultQuality(): string {
@@ -2282,11 +2280,7 @@ export async function importForeignWorkFiles(input: {
 }
 
 function moviesParentDirectoryId(): string {
-  return (
-    process.env.MEDIA_TRACK_MOVIES_PARENT_CID ??
-    process.env.MEDIA_TRACK_115_TEST_ROOT_CID ??
-    "fake_movies_root"
-  );
+  return process.env.MEDIA_TRACK_115_TEST_ROOT_CID ?? "fake_movies_root";
 }
 
 // ---------------------------------------------------------------------------
@@ -2556,17 +2550,16 @@ async function bindPan115ConnectedStorage(input: {
     });
     return;
   }
-  // insert: honor env CIDs if a deploy pre-configured them, else provision a fresh
-  // media-track/ tree under the 115 root. Provisioning is best-effort — a failure
-  // still stores the connection (worker falls back to env CIDs).
+  // insert: provision a fresh media-track/ tree under the 115 root (dir names
+  // customizable via MEDIA_TRACK_LIBRARY_*_DIR). Provisioning is best-effort —
+  // a failure still stores the connection (worker falls back to TEST_ROOT_CID).
   let cids = {
     rootCid: process.env.MEDIA_TRACK_115_TEST_ROOT_CID ?? null,
-    moviesCid: process.env.MEDIA_TRACK_MOVIES_PARENT_CID ?? null,
-    tvCid: process.env.MEDIA_TRACK_TV_PARENT_CID ?? null,
-    animeCid: process.env.MEDIA_TRACK_ANIME_PARENT_CID ?? null,
+    moviesCid: null as string | null,
+    tvCid: null as string | null,
+    animeCid: null as string | null,
   };
-  const hasEnvCids = Boolean(cids.tvCid && cids.moviesCid && cids.animeCid);
-  if (!hasEnvCids && process.env.MEDIA_TRACK_STORAGE_ADAPTER === "115") {
+  if (process.env.MEDIA_TRACK_STORAGE_ADAPTER === "115") {
     try {
       // Bootstrap (unrestricted) executor — a fresh drive has no write scope yet,
       // and the protected/env executor throws without one (the catch-22 that left
@@ -2589,7 +2582,7 @@ async function bindPan115ConnectedStorage(input: {
         animeCid: provisioned.animeCid,
       };
     } catch (error) {
-      console.error(`[media-track] 115 directory provision failed (will use env fallback): ${String(error)}`);
+      console.error(`[media-track] 115 directory provision failed (will use root fallback): ${String(error)}`);
     }
   }
   await repository.upsertConnectedStorage({

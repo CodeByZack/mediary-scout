@@ -134,6 +134,10 @@ export interface Storage115ExecutorOptions {
 export interface ProtectedStorage115ExecutorOptions {
   api: Pan115StorageApi;
   env?: Record<string, string | undefined>;
+  /** Movie-leaf flatten guard + delete valve: the drive's Movies directory cid.
+   *  Supplied from the connected storage's provisioned CID (DB), not env —
+   *  MEDIA_TRACK_MOVIES_PARENT_CID was removed 2026-09-18. */
+  moviesDirectoryId?: string;
   apiGuard?: Pan115ApiGuard;
   apiGuardOptions?: Pan115ApiGuardOptions;
   minVideoSizeBytes?: number;
@@ -909,7 +913,7 @@ export class Storage115Executor implements StorageExecutor {
     const isMovieNameFallback = parentName === "Movies" && pathNames.length >= 4;
     if (!isMovieLeaf && !isMovieNameFallback) {
       throw new Error(
-        "SAFETY_VIOLATION: flatten target must be a movie leaf under MEDIA_TRACK_MOVIES_PARENT_CID " +
+        "SAFETY_VIOLATION: flatten target must be a movie leaf under the drive\'s Movies directory " +
           "or end with 'Season <number>'; " +
           `path=${joinedPath}`,
       );
@@ -1061,7 +1065,7 @@ export function createProtectedStorage115Executor(
     api: options.api,
     writeScopeDirectoryIds,
     protectedDirectoryIds,
-    ...optionalExecutorOptions(options, env),
+    ...optionalExecutorOptions(options),
   };
   if (options.apiGuard) {
     executorOptions.apiGuard = options.apiGuard;
@@ -1090,10 +1094,9 @@ export function isPan115RiskControlSignal(message: string, patterns = DEFAULT_PA
 
 function optionalExecutorOptions(
   options: ProtectedStorage115ExecutorOptions,
-  env: Record<string, string | undefined>,
 ): Partial<Storage115ExecutorOptions> {
   const executorOptions: Partial<Storage115ExecutorOptions> = {};
-  const moviesDirectoryId = optionalDirectoryId(env["MEDIA_TRACK_MOVIES_PARENT_CID"]);
+  const moviesDirectoryId = optionalDirectoryId(options.moviesDirectoryId);
   if (moviesDirectoryId) {
     executorOptions.moviesDirectoryId = moviesDirectoryId;
   }

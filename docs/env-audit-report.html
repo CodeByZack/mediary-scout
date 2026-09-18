@@ -96,11 +96,11 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
 
 <div class="dash">
   <div class="cell total">
-    <div class="num">39</div>
+    <div class="num">35</div>
     <div class="lbl">环境变量总数（清理后）</div>
   </div>
   <div class="cell ok">
-    <div class="num">39</div>
+    <div class="num">35</div>
     <div class="lbl">✅ 活跃使用中</div>
   </div>
   <div class="cell warn">
@@ -236,41 +236,6 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
       <td class="desc">单次操作的最大 API 调用次数</td>
       <td class="desc">默认 <code>300</code></td>
       <td class="src">pan115-storage-factory.ts, storage-115-executor.ts</td>
-    </tr>
-  </table>
-</div>
-
-<div class="group">
-  <div class="group-header">
-    <span class="group-icon">📁</span>
-    <span class="group-title">目录结构配置</span>
-    <span class="group-count">4 个变量 &middot; 全部活跃</span>
-  </div>
-  <table>
-    <tr><th>变量</th><th>作用</th><th>标签</th><th>源文件</th></tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_TV_PARENT_CID</code></td>
-      <td class="desc">剧集目录父级 CID（新命名，优先级高于 CLAWD 旧命名）</td>
-      <td><span class="tag tag-ok">新命名</span></td>
-      <td class="src">workflow-runtime.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_ANIME_PARENT_CID</code></td>
-      <td class="desc">动漫目录父级 CID（新命名，回退到 storageParentDirectoryId）</td>
-      <td><span class="tag tag-ok">新命名</span></td>
-      <td class="src">workflow-runtime.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_MOVIES_PARENT_CID</code></td>
-      <td class="desc">电影目录父级 CID（新命名，回退到 TEST_ROOT）</td>
-      <td><span class="tag tag-ok">新命名</span></td>
-      <td class="src">workflow-runtime.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_DEFAULT_TV_STORAGE_DIRECTORY_ID</code></td>
-      <td class="desc">Type 2 workflow 创建的默认 TV 存储目录 ID（留空则自动建 <code>Season N</code>）</td>
-      <td><span class="tag tag-ok">正常</span></td>
-      <td class="src">workflow-runtime.ts</td>
     </tr>
   </table>
 </div>
@@ -444,7 +409,7 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
 <div class="issue legacy" style="opacity:0.55;">
   <div class="issue-title">🟣 遗留命名：<code>CLAWD_MEDIA_ROOT_CID</code> / <code>MOVIES_CID</code> / <code>TV_SHOWS_CID</code> / <code>ANIME_CID</code> <span style="color:#3fb950; font-size:12px; font-weight:400;">✅ 已删除</span></div>
   <div class="issue-body">
-    源自旧项目名 "Clawd"。<strong style="color:#3fb950;">已执行：</strong>代码中全部引用已删除（<code>storage-115-executor.ts</code> 改用 <code>MEDIA_TRACK_115_PROTECTED_CIDS</code> / <code>MEDIA_TRACK_MOVIES_PARENT_CID</code>），.env.example 已移除。
+    源自旧项目名 "Clawd"。<strong style="color:#3fb950;">已执行：</strong>代码中全部引用已删除（<code>storage-115-executor.ts</code> 改用 <code>MEDIA_TRACK_115_PROTECTED_CIDS</code>），.env.example 已移除。
   </div>
 </div>
 

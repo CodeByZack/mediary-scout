@@ -16,6 +16,8 @@ export interface ProtectedPan115CookieStorageExecutorFromEnvOptions {
   apiGuard?: Pan115ApiGuard;
   apiGuardOptions?: Pan115ApiGuardOptions;
   listLimit?: number;
+  /** The drive's Movies dir cid (movie-leaf safety guard); from DB creds, not env. */
+  moviesDirectoryId?: string;
 }
 
 export function createProtectedPan115CookieStorageExecutorFromEnv(
@@ -41,6 +43,9 @@ export function createProtectedPan115CookieStorageExecutorFromEnv(
   }
   if (options.apiGuardOptions !== undefined) {
     executorOptions.apiGuardOptions = options.apiGuardOptions;
+  }
+  if (options.moviesDirectoryId !== undefined) {
+    executorOptions.moviesDirectoryId = options.moviesDirectoryId;
   }
   return createProtectedStorage115Executor(executorOptions);
 }

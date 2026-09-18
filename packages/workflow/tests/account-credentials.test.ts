@@ -129,9 +129,6 @@ describe("parsePan115Uid", () => {
 describe("migrateLegacyCookieToDefaultAccount", () => {
   const env = {
     MEDIA_TRACK_115_TEST_ROOT_CID: "ROOT",
-    MEDIA_TRACK_MOVIES_PARENT_CID: "MOV",
-    MEDIA_TRACK_TV_PARENT_CID: "TV",
-    MEDIA_TRACK_ANIME_PARENT_CID: "ANI",
   } as unknown as NodeJS.ProcessEnv;
 
   it("moves the legacy global cookie into a default-account connected_storage", async () => {
@@ -146,9 +143,11 @@ describe("migrateLegacyCookieToDefaultAccount", () => {
     expect(cs?.accountId).toBe(DEFAULT_ACCOUNT_ID);
     expect(cs?.label).toBe("alice");
     expect((cs?.payload as { cookie: string }).cookie).toBe("UID=42_X; CID=c; SEID=s");
-    expect(cs?.tvCid).toBe("TV");
-    expect(cs?.moviesCid).toBe("MOV");
-    expect(cs?.animeCid).toBe("ANI");
+    // *_PARENT_CID env 已删（2026-09-18）：迁移只带 rootCid，分类目录留给
+    // 连接时的建树流程（provisionCategoryDirs）产出。
+    expect(cs?.tvCid).toBeNull();
+    expect(cs?.moviesCid).toBeNull();
+    expect(cs?.animeCid).toBeNull();
     expect(cs?.rootCid).toBe("ROOT");
   });
 

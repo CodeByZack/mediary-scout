@@ -203,9 +203,10 @@ export async function migrateLegacyCookieToDefaultAccount(input: {
     label: meta.userName ?? null,
     payload: { cookie, meta },
     rootCid: env.MEDIA_TRACK_115_TEST_ROOT_CID ?? null,
-    moviesCid: env.MEDIA_TRACK_MOVIES_PARENT_CID ?? null,
-    tvCid: env.MEDIA_TRACK_TV_PARENT_CID ?? null,
-    animeCid: env.MEDIA_TRACK_ANIME_PARENT_CID ?? null,
+    // *_PARENT_CID env 已删（2026-09-18）：分类目录一律由连接时的建树流程产出。
+    moviesCid: null,
+    tvCid: null,
+    animeCid: null,
     createdAt: input.now,
   });
   return { migrated: true, providerUid };
