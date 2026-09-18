@@ -96,11 +96,11 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
 
 <div class="dash">
   <div class="cell total">
-    <div class="num">35</div>
+    <div class="num">33</div>
     <div class="lbl">环境变量总数（清理后）</div>
   </div>
   <div class="cell ok">
-    <div class="num">35</div>
+    <div class="num">33</div>
     <div class="lbl">✅ 活跃使用中</div>
   </div>
   <div class="cell warn">
@@ -276,22 +276,10 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
   <div class="group-header">
     <span class="group-icon">🌐</span>
     <span class="group-title">外部服务</span>
-    <span class="group-count">5 个变量 &middot; 全部活跃</span>
+    <span class="group-count">3 个变量 &middot; 全部活跃</span>
   </div>
   <table>
     <tr><th>变量</th><th>作用</th><th>优先级</th><th>源文件</th></tr>
-    <tr>
-      <td><code class="varname">TMDB_READ_TOKEN</code></td>
-      <td class="desc">TMDB v4 只读 Token（作者代持通道，用户可在设置页用自己的 Key 替代）</td>
-      <td><span class="tag tag-warn">待重构</span> #38</td>
-      <td class="src">workflow-runtime.ts, tmdb-provider.ts, notify.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">TMDB_BASE_URL</code></td>
-      <td class="desc">自定义 TMDB API 代理地址（墙内用户用自建代理时填）</td>
-      <td class="desc">DB 设置 &gt; env &gt; 直连</td>
-      <td class="src">workflow-runtime.ts, tmdb-provider.ts</td>
-    </tr>
     <tr>
       <td><code class="varname">PANSOU_BASE_URL</code></td>
       <td class="desc">PanSou 搜索聚合器地址（compose 注入自带容器 <code>http://pansou</code>）</td>

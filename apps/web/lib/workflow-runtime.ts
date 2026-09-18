@@ -873,26 +873,18 @@ export async function getAssrtToken(
   return value ? value : undefined;
 }
 
-/** Ordered TMDB access channels: user's own key (direct or custom proxy) →
- *  env token (direct). No fallback to author's proxy — if no key is configured,
- *  TMDB access fails and the UI shows a prompt to configure it. */
+/** TMDB access channel: ONLY the Settings-page key (direct TMDB or custom
+ *  proxy base URL). env's TMDB_READ_TOKEN / TMDB_BASE_URL channels were removed
+ *  2026-09-18 (#38 direction: zero fallback, user must configure their own key).
+ *  If no key is configured, TMDB access fails and the UI shows a prompt. */
 export async function getTmdbAccesses(
   repository: { getSetting(key: string): Promise<string | null> },
-  env: NodeJS.ProcessEnv = process.env,
 ): Promise<TmdbAccess[]> {
   const accesses: TmdbAccess[] = [];
   const userKey = (await repository.getSetting(TMDB_API_KEY_SETTING_KEY))?.trim();
   if (userKey) {
-    // Priority: user settings > env TMDB_BASE_URL > direct TMDB
-    // User settings take precedence so a user with their own proxy can
-    // override any deployment-level default.
     const customBase = (await repository.getSetting(TMDB_BASE_URL_SETTING_KEY))?.trim();
-    const baseURL = customBase || env.TMDB_BASE_URL?.trim() || TMDB_DIRECT_BASE_URL;
-    accesses.push({ baseURL, readToken: userKey });
-  }
-  const envToken = env.TMDB_READ_TOKEN?.trim();
-  if (envToken) {
-    accesses.push({ baseURL: TMDB_DIRECT_BASE_URL, readToken: envToken });
+    accesses.push({ baseURL: customBase || TMDB_DIRECT_BASE_URL, readToken: userKey });
   }
   return accesses;
 }

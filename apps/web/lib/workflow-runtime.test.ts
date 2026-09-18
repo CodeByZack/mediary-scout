@@ -132,34 +132,28 @@ describe("getQualityPreference", () => {
 });
 
 describe("getTmdbAccesses", () => {
-  it("puts the user key first, then env token (no proxy fallback)", async () => {
-    const accesses = await getTmdbAccesses(
-      repoMap({ [TMDB_API_KEY_SETTING_KEY]: "userkey" }),
-      { TMDB_READ_TOKEN: "envkey" } as unknown as NodeJS.ProcessEnv,
-    );
-    expect(accesses.map((a) => a.readToken)).toEqual(["userkey", "envkey"]);
+  it("builds the access from the Settings-page key (direct TMDB default)", async () => {
+    const accesses = await getTmdbAccesses(repoMap({ [TMDB_API_KEY_SETTING_KEY]: "userkey" }));
+    expect(accesses.map((a) => a.readToken)).toEqual(["userkey"]);
     expect(accesses[0]?.baseURL).toBe("https://api.themoviedb.org/3");
   });
 
-  it("uses custom base URL from settings when provided", async () => {
+  it("uses the custom proxy base URL from settings when provided", async () => {
     const accesses = await getTmdbAccesses(
       repoMap({ [TMDB_API_KEY_SETTING_KEY]: "userkey", [TMDB_BASE_URL_SETTING_KEY]: "https://proxy.example" }),
-      {} as NodeJS.ProcessEnv,
     );
     expect(accesses.map((a) => a.readToken)).toEqual(["userkey"]);
     expect(accesses[0]?.baseURL).toBe("https://proxy.example");
   });
 
-  it("omits the user access when no key is set, keeping env only", async () => {
-    const accesses = await getTmdbAccesses(
-      repoMap({}),
-      { TMDB_READ_TOKEN: "envkey" } as unknown as NodeJS.ProcessEnv,
-    );
-    expect(accesses.map((a) => a.readToken)).toEqual(["envkey"]);
+  it("env TMDB_READ_TOKEN no longer feeds any access (#38, removed 2026-09-18)", async () => {
+    // env token channel deleted — an env var alone must NOT produce an access.
+    const accesses = await getTmdbAccesses(repoMap({}));
+    expect(accesses).toHaveLength(0);
   });
 
   it("returns empty array when nothing is configured", async () => {
-    const accesses = await getTmdbAccesses(repoMap({}), {} as NodeJS.ProcessEnv);
+    const accesses = await getTmdbAccesses(repoMap({}));
     expect(accesses).toHaveLength(0);
   });
 });
