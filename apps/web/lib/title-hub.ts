@@ -119,7 +119,7 @@ async function seriesTargetFor(tmdbId: number): Promise<PreparedSeriesTarget | n
     try {
       const value = await prepareSeriesTarget({
         tmdbId,
-        qualityPreference: process.env.MEDIA_TRACK_DEFAULT_QUALITY ?? "4K",
+        qualityPreference: "4K",
         metadataProvider: createTmdbMetadataProvider(await getTmdbAccesses(getAccountScopedSettings(await getCurrentAccountId()))),
       });
       seriesTargetCache.set(tmdbId, { value, expiresAt: Date.now() + SERIES_TARGET_TTL_MS });
@@ -156,7 +156,7 @@ async function seriesTargetFor(tmdbId: number): Promise<PreparedSeriesTarget | n
       totalEpisodes: season.episodeCount,
       latestAiredEpisode: season.latestAiredEpisode,
     })),
-    keyword: `${candidate.title} ${process.env.MEDIA_TRACK_DEFAULT_QUALITY ?? "4K"}`.trim(),
+    keyword: `${candidate.title} 4K`.trim(),
   };
 }
 

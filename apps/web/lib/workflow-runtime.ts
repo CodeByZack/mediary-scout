@@ -705,11 +705,12 @@ function buildAccountContextResolver(): ResolveAccountWorkerContext {
     const parents = await getWorkerStorageParents(accountId, connectedStorageId);
     const { model, preferredLanguage, qualityPreference } = await getAgentModel(scoped);
     // The run's drive brand selects its resource sources (quark→PanSou quark-only;
-    // 115→PanSou+Prowlarr). null when no drive resolves → env MEDIA_TRACK_DEFAULT_STORAGE_BRAND
-    // → default quark fallback (2026-08-10: 用户要求默认盘改为夸克, 暂不用 115).
+    // 115→PanSou+Prowlarr). null when no drive resolves → quark fallback
+    // (2026-08-10: 用户要求默认盘改为夸克, 暂不用 115; 2026-09-18: 删除
+    // MEDIA_TRACK_DEFAULT_STORAGE_BRAND, 默认盘锁定 quark 常量).
     const driveProvider =
       (await getAccountStorageCredentials(accountId, connectedStorageId))?.provider ??
-      process.env.MEDIA_TRACK_DEFAULT_STORAGE_BRAND ??
+      // 默认盘锁定为夸克（2026-08-10 用户拍板：默认盘改夸克，暂不用 115）。
       "quark";
     const assrtToken = await getAssrtToken(scoped);
     return {
@@ -1509,7 +1510,7 @@ function parseTvCandidateId(candidateId: string): { tmdbId: number; seasonNumber
 
 async function getWorkerResourceProvider(
   settings: { getSetting(key: string): Promise<string | null> } = getWorkflowRepository(),
-  provider: string = process.env.MEDIA_TRACK_DEFAULT_STORAGE_BRAND ?? "quark",
+  provider: string = "quark",
   accountId?: string,
 ): Promise<ResourceProvider> {
   // accountId 仅用于健康结论回写(recordPanSouHealth)。多账户场景下,worker 在
@@ -2215,7 +2216,7 @@ function animeParentDirectoryId(): string {
 }
 
 function defaultQuality(): string {
-  return process.env.MEDIA_TRACK_DEFAULT_QUALITY ?? "4K";
+  return "4K";
 }
 
 export interface ForeignWorkFinding {

@@ -15,7 +15,6 @@ export MEDIA_TRACK_SQLITE_PATH=/tmp/mediary-preview/mediary-preview.db
 export PANSOU_BASE_URL=http://127.0.0.1:3001
 export MEDIA_TRACK_SEARCH_PROVIDER=tmdb
 export MEDIA_TRACK_WORKFLOW_ADAPTER=pansou
-export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark
 
 mkdir -p "$WORK_DIR"
 
