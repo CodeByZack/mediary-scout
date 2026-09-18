@@ -46,6 +46,7 @@ describe("applyRuntimeMode", () => {
     expect(env.MEDIA_TRACK_DEMO_MODE).toBe("0");
     expect(env.NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE).toBe("0");
     expect(env.MEDIA_TRACK_DEMO_SEED).toBe("0");
+    expect(env.MEDIA_TRACK_SEARCH_PROVIDER).toBe("tmdb");
   });
 
   it("sets all legacy env vars from fake", () => {
@@ -57,6 +58,7 @@ describe("applyRuntimeMode", () => {
     expect(env.MEDIA_TRACK_DEMO_MODE).toBe("0");
     expect(env.NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE).toBe("0");
     expect(env.MEDIA_TRACK_DEMO_SEED).toBe("0");
+    expect(env.MEDIA_TRACK_SEARCH_PROVIDER).toBe("demo");
   });
 
   it("sets all legacy env vars from demo", () => {
@@ -68,5 +70,6 @@ describe("applyRuntimeMode", () => {
     expect(env.MEDIA_TRACK_DEMO_MODE).toBe("1");
     expect(env.NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE).toBe("1");
     expect(env.MEDIA_TRACK_DEMO_SEED).toBe("1");
+    expect(env.MEDIA_TRACK_SEARCH_PROVIDER).toBe("demo");
   });
 });

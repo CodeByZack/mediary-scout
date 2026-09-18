@@ -65,11 +65,20 @@ export function resolveRuntimeMode(raw: string | undefined): ResolvedMode {
  * 必须在任何适配器创建之前调用（instrumentation.ts）。
  */
 export function applyRuntimeMode(env: Record<string, string | undefined>): void {
-  const resolved = resolveRuntimeMode(env.MEDIA_TRACK_MODE);
+  const mode = env.MEDIA_TRACK_MODE;
+  const resolved = resolveRuntimeMode(mode);
+  
+  // Debug: log the resolved mode to verify the resolver is working
+  if (mode) {
+    console.log(`[runtime-mode] MEDIA_TRACK_MODE=${mode} → storage=${resolved.storageAdapter}, workflow=${resolved.workflowAdapter}, agent=${resolved.agentAdapter}, demo=${resolved.demoMode}`);
+  }
+  
   env.MEDIA_TRACK_STORAGE_ADAPTER = resolved.storageAdapter;
   env.MEDIA_TRACK_WORKFLOW_ADAPTER = resolved.workflowAdapter;
   env.MEDIA_TRACK_AGENT_ADAPTER = resolved.agentAdapter;
   env.MEDIA_TRACK_DEMO_MODE = resolved.demoMode ? "1" : "0";
   env.NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE = resolved.demoMode ? "1" : "0";
   env.MEDIA_TRACK_DEMO_SEED = resolved.demoSeed ? "1" : "0";
+  // Also set search provider: fake mode uses demo search, normal uses tmdb
+  env.MEDIA_TRACK_SEARCH_PROVIDER = mode === "fake" || mode === "demo" ? "demo" : "tmdb";
 }
