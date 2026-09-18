@@ -41,7 +41,7 @@ export function QuarkCookieConnect() {
         Network 里点任意一个 <code>drive-pc.quark.cn</code> 请求 → 复制其请求头里的完整 Cookie（需包含
         <code> __pus</code> 与 <code>__uid</code>），粘贴到下面。
       </p>
-      <p className="push-help" style={{ marginBottom: 12 }}>
+      <p className="hint-help" style={{ marginBottom: 12 }}>
         夸克网盘{" "}
         <a href="https://pan.quark.cn/" target="_blank" rel="noopener noreferrer">
           官网 <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />

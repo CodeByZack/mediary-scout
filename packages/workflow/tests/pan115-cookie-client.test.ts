@@ -393,7 +393,7 @@ describe("Pan115CookieClient", () => {
         writeScopeDirectoryIds: ["test_root"],
         apiGuardOptions: { minDelayMs: 0 },
       }),
-    ).toThrow("PAN115_COOKIE is required");
+    ).toThrow("cookie is required");
 
     expect(
       createProtectedPan115CookieStorageExecutorFromEnv({

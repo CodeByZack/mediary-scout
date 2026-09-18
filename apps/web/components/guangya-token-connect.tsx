@@ -75,7 +75,7 @@ export function GuangYaTokenConnect() {
         最省事：把粘贴内容（Console 打印的两段、或复制的 JSON 都行）粘到第一个框，再点
         <strong>「识别并拆分」</strong>，两个框会自动填好。
       </p>
-      <p className="push-help" style={{ marginBottom: 12 }}>
+      <p className="hint-help" style={{ marginBottom: 12 }}>
         光鸭云盘{" "}
         <a href="https://www.guangyapan.com" target="_blank" rel="noopener noreferrer">
           官网 <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />

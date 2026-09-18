@@ -55,7 +55,7 @@ export class Pan115CookieClient implements Pan115StorageApi {
   constructor(options: Pan115CookieClientOptions) {
     const cookie = normalizeCookie(options.cookie);
     if (!cookie) {
-      throw new Error("PAN115_COOKIE is required to create Pan115CookieClient");
+      throw new Error("cookie is required to create Pan115CookieClient");
     }
     this.cookie = cookie;
     this.fetchJson = options.fetchJson ?? defaultFetchJson;

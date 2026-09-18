@@ -30,7 +30,7 @@ export function TestConnectionButton({ storageId }: { storageId: string }) {
         {pending ? "检测中…" : "测试连接"}
       </button>
       {result ? (
-        <span className={`push-help ${result.ok ? "" : "tone-amber"}`}>{result.message}</span>
+        <span className={`hint-help ${result.ok ? "" : "tone-amber"}`}>{result.message}</span>
       ) : null}
     </span>
   );

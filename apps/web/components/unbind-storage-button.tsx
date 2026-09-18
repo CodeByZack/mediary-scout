@@ -14,7 +14,7 @@ export function UnbindStorageButton({ storageId, label }: { storageId: string; l
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   if (result?.ok) {
-    return <span className="push-help">{result.message}</span>;
+    return <span className="hint-help">{result.message}</span>;
   }
 
   if (!confirming) {
@@ -23,14 +23,14 @@ export function UnbindStorageButton({ storageId, label }: { storageId: string; l
         <button type="button" className="ghost-button" onClick={() => setConfirming(true)}>
           取消绑定
         </button>
-        {result && !result.ok ? <span className="push-help tone-amber">{result.message}</span> : null}
+        {result && !result.ok ? <span className="hint-help tone-amber">{result.message}</span> : null}
       </span>
     );
   }
 
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-      <span className="push-help">取消绑定 {label}？追踪记录保留，重绑同盘可恢复。</span>
+      <span className="hint-help">取消绑定 {label}？追踪记录保留，重绑同盘可恢复。</span>
       <button
         type="button"
         className="secondary-button"

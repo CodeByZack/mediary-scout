@@ -38,8 +38,8 @@ export function PatrolNowButton() {
         {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Radar size={14} aria-hidden />}
         {isPending ? "巡检中…" : "立即巡检"}
       </button>
-      <span className="push-help">手动巡检不占用定时计划</span>
-      {note ? <span className="push-help">{note}</span> : null}
+      <span className="hint-help">手动巡检不占用定时计划</span>
+      {note ? <span className="hint-help">{note}</span> : null}
     </span>
   );
 }

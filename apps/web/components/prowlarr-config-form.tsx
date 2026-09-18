@@ -63,7 +63,7 @@ export function ProwlarrConfigForm({ baseURL: initialBaseURL, apiKeySet }: { bas
       <p className="panel-note" style={{ marginBottom: 6 }}>
         Prowlarr 是索引器聚合器：用它把你的公共/私有种子站统一成一个 API，agent 搜资源时会把 Prowlarr 的磁力和网盘搜索结果合并判断。磁力靠 115 秒传（哈希匹配）瞬时转存。不填则只用内置网盘搜索。留空 API Key 不改动已保存的值。
       </p>
-      <p className="push-help" style={{ marginBottom: 12 }}>
+      <p className="hint-help" style={{ marginBottom: 12 }}>
         了解 Prowlarr{" "}
         <a href="https://prowlarr.com/" target="_blank" rel="noopener noreferrer">
           官网 <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />

@@ -40,7 +40,7 @@ export function TianyiSsonConnect() {
         扫码登录失败时的手动回退：登录 <code>cloud.189.cn</code> 后，在浏览器开发者工具的 Application →
         Cookies 里找到 <code>SSON</code>，复制它的值粘贴到下面（仅粘值，不带 <code>SSON=</code> 前缀）。
       </p>
-      <p className="push-help" style={{ marginBottom: 12 }}>
+      <p className="hint-help" style={{ marginBottom: 12 }}>
         天翼云盘{" "}
         <a href="https://cloud.189.cn/" target="_blank" rel="noopener noreferrer">
           官网 <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />

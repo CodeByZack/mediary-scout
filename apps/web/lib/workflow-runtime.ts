@@ -791,8 +791,6 @@ export async function runNextQueuedWorkflow() {
     onAuthErrorFreeze,
     ...(syncSeasonMetadata ? { syncSeasonMetadata } : {}),
   });
-  if (outcome.status !== "idle") {
-  }
   return outcome;
 }
 

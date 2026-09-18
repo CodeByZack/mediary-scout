@@ -33,7 +33,7 @@ export function LlmTestConnectionButton() {
         {pending ? "测试中…" : "测试连接"}
       </button>
       {result ? (
-        <span className={`push-help ${result.ok ? "" : "tone-amber"}`}>{result.message}</span>
+        <span className={`hint-help ${result.ok ? "" : "tone-amber"}`}>{result.message}</span>
       ) : null}
     </span>
   );
