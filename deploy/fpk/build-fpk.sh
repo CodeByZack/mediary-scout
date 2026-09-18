@@ -124,19 +124,6 @@ cp -a "${REPO_ROOT}/apps/web/public/." "${FPK_DIR}/app/server/apps/web/public/"
 
 echo "    app/server 大小: $(du -sh "${FPK_DIR}/app/server" | cut -f1)"
 
-# ---- 2.6 写入 .env 文件（fnOS cmd/main 的 export 不传给 Node.js）----
-# Next.js 会读取 server 目录下的 .env 文件，这是最可靠的配置方式。
-SERVER_ENV="${FPK_DIR}/app/server/.env"
-cat > "${SERVER_ENV}" << EOF
-# MediaTrack 运行模式（由 build-fpk.sh 自动生成）
-MEDIA_TRACK_MODE=${FPK_RUNTIME}
-EOF
-# fake 模式补 quark 默认盘
-if [ "${FPK_RUNTIME}" = "fake" ]; then
-    echo "MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark" >> "${SERVER_ENV}"
-fi
-echo "    .env 已写入: ${SERVER_ENV} (MODE=${FPK_RUNTIME})"
-
 # ---- 2.5 清理 sharp 的 musl 变体（glibc 环境用不到，减小 fpk 体积）----
 # npm 在 linux 下会把 glibc/musl 两种 libc 的 sharp 原生二进制都装进 @img（os/cpu 过滤正常、
 # libc 过滤失效），目标 NAS（飞牛 fnOS）与 CI 均为 glibc，musl 变体完全用不上，删掉。
@@ -238,11 +225,14 @@ fi
 
 # ---- 2.9 cmd/main 运行时环境随 FPK_RUNTIME 改写 ----
 # 统一设 MEDIA_TRACK_MODE，运行时由 instrumentation.ts 解析为具体 adapter/demo 变量。
-# 必须删掉旧的独立 adapter/demo 变量，否则 shell 先导出旧值 → resolver 虽会覆盖，
-# 但部分早期代码路径可能已读到旧值。
+# ⚠️ 必须插在 `CMD="cd ..."` 行之前：cmd/main 的 `case $1 in ... esac` 在文件末尾，
+#    用 `echo >>` 追加会落在 esac 之后、bash 执行到 case 分支结束就退出，永不执行。
+#    （2026-09-18 线上踩过：fake 包真实转存 + MEDIA_TRACK_MODE=undefined 双症状同源。
+#     cmd/main 顶部旧 export MEDIA_TRACK_STORAGE_ADAPTER=115 被 shell 正常导出 →
+#     真实 115 转存；末尾追加的 MODE 永不执行 → resolver 读到 undefined → 默认 normal。）
 CMD_MAIN="${FPK_DIR}/cmd/main"
 if [ -f "${CMD_MAIN}" ]; then
-    # 1) 删除所有旧的 adapter/demo 独立变量行
+    # 1) 删除所有旧的 adapter/demo 独立变量行 + 残留的 MODE/quark 行（无论在哪个位置）
     sed -i '/^export MEDIA_TRACK_STORAGE_ADAPTER=/d' "${CMD_MAIN}"
     sed -i '/^export MEDIA_TRACK_WORKFLOW_ADAPTER=/d' "${CMD_MAIN}"
     sed -i '/^export MEDIA_TRACK_AGENT_ADAPTER=/d' "${CMD_MAIN}"
@@ -250,24 +240,26 @@ if [ -f "${CMD_MAIN}" ]; then
     sed -i '/^export NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE=/d' "${CMD_MAIN}"
     sed -i '/^export MEDIA_TRACK_DEMO_SEED=/d' "${CMD_MAIN}"
     sed -i '/^export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=/d' "${CMD_MAIN}"
-
-    # 2) 删除注释掉的旧 adapter 行（如果有）
+    sed -i '/^export MEDIA_TRACK_MODE=/d' "${CMD_MAIN}"
+    # 注释掉的旧 adapter 行（如果有）
     sed -i '/^# export MEDIA_TRACK_AGENT_ADAPTER=/d' "${CMD_MAIN}"
     sed -i '/^# export MEDIA_TRACK_STORAGE_ADAPTER=/d' "${CMD_MAIN}"
 
-    # 3) 设置 MEDIA_TRACK_MODE（幂等：有则替换，无则追加）
-    if grep -q "^export MEDIA_TRACK_MODE=" "${CMD_MAIN}"; then
-        sed -i "s/^export MEDIA_TRACK_MODE=.*/export MEDIA_TRACK_MODE=${FPK_RUNTIME}/" "${CMD_MAIN}"
-    else
-        echo "export MEDIA_TRACK_MODE=${FPK_RUNTIME}" >> "${CMD_MAIN}"
-    fi
-
-    # 4) fake 模式补 quark 默认盘
+    # 2) 构造要插入的运行时变量块，插到 `CMD="cd` 之前（幂等：残留行已在 1 删净）
     if [ "${FPK_RUNTIME}" = "fake" ]; then
-        echo "export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark        # fake 模式默认盘" >> "${CMD_MAIN}"
+        RUNTIME_BLOCK="export MEDIA_TRACK_MODE=${FPK_RUNTIME}
+export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark        # fake 模式默认盘"
+    else
+        RUNTIME_BLOCK="export MEDIA_TRACK_MODE=${FPK_RUNTIME}"
     fi
-
-    echo "    cmd/main 已改为 ${FPK_RUNTIME} 运行模式"
+    awk -v block="${RUNTIME_BLOCK}" '
+        /^CMD="/ && !inserted {
+            print block
+            inserted = 1
+        }
+        { print }
+    ' "${CMD_MAIN}" > "${CMD_MAIN}.tmp" && mv "${CMD_MAIN}.tmp" "${CMD_MAIN}"
+    echo "    cmd/main 已改为 ${FPK_RUNTIME} 运行模式（MEDIA_TRACK_MODE 已插入 CMD 之前）"
 else
     echo "    cmd/main 不存在，跳过 runtime 改写"
 fi
