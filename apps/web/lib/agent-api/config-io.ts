@@ -94,7 +94,6 @@ export interface AgentConfigWriteInput {
   prowlarr?: { baseURL?: string; apiKey?: string };
   tmdbApiKey?: string;
   tmdbBaseUrl?: string;
-  push?: Partial<Record<PushChannelKey, string>>;
 }
 
 export type AgentConfigWriteResult =
