@@ -38,9 +38,10 @@ export class FakeResourceProvider implements ResourceProvider {
    *  fake runtime mode: real TMDB search + fake candidates for ANY title, so the
    *  whole acquire→transfer flow runs end-to-end without config). When unset,
    *  unknown keywords yield zero candidates (existing test behavior). */
-  private readonly defaultKeywordResult?:
+  private readonly defaultKeywordResult:
     | CandidateFixture
-    | ((keyword: string) => CandidateFixture | CandidateFixture[]);
+    | ((keyword: string) => CandidateFixture | CandidateFixture[])
+    | undefined;
   private nextSnapshotNumber = 1;
 
   constructor(input: {
