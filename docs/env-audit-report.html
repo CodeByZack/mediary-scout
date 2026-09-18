@@ -96,11 +96,11 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
 
 <div class="dash">
   <div class="cell total">
-    <div class="num">51</div>
+    <div class="num">56</div>
     <div class="lbl">环境变量总数（清理后）</div>
   </div>
   <div class="cell ok">
-    <div class="num">50</div>
+    <div class="num">55</div>
     <div class="lbl">✅ 活跃使用中</div>
   </div>
   <div class="cell warn">
@@ -185,10 +185,22 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
   <table>
     <tr><th>变量</th><th>作用</th><th>取值</th><th>源文件</th></tr>
     <tr>
-      <td><code class="varname">MEDIA_TRACK_MODE</code></td>
-      <td class="desc">统一运行模式（替代原 6 个独立变量）</td>
-      <td class="desc"><code>"normal"</code>（默认，真实 LLM+网盘）/ <code>"fake"</code>（stub+假网盘）/ <code>"demo"</code>（只读演示）</td>
-      <td class="src">runtime-mode.ts, instrumentation.ts</td>
+      <td><code class="varname">MEDIA_TRACK_STORAGE_ADAPTER</code></td>
+      <td class="desc">存储后端模式</td>
+      <td class="desc"><code>"fake"</code> / <code>"115"</code>（<code>"115"</code> 强制 <code>AGENT_ADAPTER=vercel-ai</code>）</td>
+      <td class="src">runtime-policy.ts, workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_WORKFLOW_ADAPTER</code></td>
+      <td class="desc">搜索适配器模式</td>
+      <td class="desc"><code>"fake"</code> / <code>"pansou"</code></td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_AGENT_ADAPTER</code></td>
+      <td class="desc">AI Agent 适配器模式</td>
+      <td class="desc"><code>"fake"</code> / <code>"vercel-ai"</code>（⚠️ <code>"real"</code> 是无效值，启动时报错）</td>
+      <td class="src">runtime-policy.ts</td>
     </tr>
     <tr>
       <td><code class="varname">MEDIA_TRACK_SEARCH_PROVIDER</code></td>
@@ -200,6 +212,12 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
       <td><code class="varname">MEDIA_TRACK_DEFAULT_STORAGE_BRAND</code></td>
       <td class="desc">默认网盘品牌（影响首次连接的默认选择）</td>
       <td class="desc">默认 <code>"quark"</code></td>
+      <td class="src">workflow-runtime.ts</td>
+    </tr>
+    <tr>
+      <td><code class="varname">MEDIA_TRACK_DEMO_SEED</code></td>
+      <td class="desc">设为 <code>"0"</code> 禁用 demo 种子数据（compose 默认关闭）</td>
+      <td class="desc">默认 <code>"1"</code>（启用种子）</td>
       <td class="src">workflow-runtime.ts</td>
     </tr>
     <tr>
@@ -460,40 +478,20 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
 <div class="group">
   <div class="group-header">
     <span class="group-icon">🎭</span>
-    <span class="group-title">已移除（统一由 MEDIA_TRACK_MODE 管理）</span>
-    <span class="group-count">6 个变量 &middot; 已整合</span>
+    <span class="group-title">Demo 模式</span>
+    <span class="group-count">2 个变量 &middot; 全部活跃</span>
   </div>
   <table>
-    <tr><th>变量</th><th>原作用</th><th>说明</th></tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_STORAGE_ADAPTER</code></td>
-      <td class="desc">存储后端模式（fake/115）</td>
-      <td class="desc">由 MEDIA_TRACK_MODE 自动决定</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_WORKFLOW_ADAPTER</code></td>
-      <td class="desc">搜索适配器模式（fake/pansou）</td>
-      <td class="desc">由 MEDIA_TRACK_MODE 自动决定</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_AGENT_ADAPTER</code></td>
-      <td class="desc">AI Agent 适配器模式（fake/vercel-ai）</td>
-      <td class="desc">由 MEDIA_TRACK_MODE 自动决定</td>
-    </tr>
+    <tr><th>变量</th><th>作用</th><th>说明</th></tr>
     <tr>
       <td><code class="varname">MEDIA_TRACK_DEMO_MODE</code></td>
-      <td class="desc">服务端 Demo 只读门禁</td>
-      <td class="desc">由 MEDIA_TRACK_MODE=demo 自动启用</td>
+      <td class="desc">服务端 Demo 只读门禁（设为 <code>"1"</code> 禁止所有写操作）</td>
+      <td class="desc"><code>demo-mode.ts</code> 的 <code>assertNotDemo()</code> 在 API 路由入口拦截</td>
     </tr>
     <tr>
       <td><code class="varname">NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE</code></td>
-      <td class="desc">客户端 Demo 标志</td>
-      <td class="desc">由 MEDIA_TRACK_MODE=demo 自动启用</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_DEMO_SEED</code></td>
-      <td class="desc">Demo 种子数据开关</td>
-      <td class="desc">由 MEDIA_TRACK_MODE=demo 自动启用</td>
+      <td class="desc">客户端 Demo 标志（Next.js 内联到前端 bundle，控制 UI 行为）</td>
+      <td class="desc">Demo 站同时设两个</td>
     </tr>
   </table>
 </div>

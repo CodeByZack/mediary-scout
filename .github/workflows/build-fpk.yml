@@ -146,7 +146,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.mode == 'test' && format('fpk-{0}-dev-{1}', matrix.arch, inputs.runtime) || format('fpk-{0}-{1}', matrix.artifact, inputs.runtime) }}
-          path: deploy/fpk/dist/${{ inputs.mode == 'test' && 'mediary-scout-dev' || 'mediary-scout' }}-${{ steps.version.outputs.version }}${{ inputs.runtime != 'normal' && format('-{0}', inputs.runtime) || '' }}-${{ matrix.platform }}.fpk
+          path: deploy/fpk/dist/${{ inputs.mode == 'test' && 'mediary-scout-dev' || 'mediary-scout' }}${{ inputs.runtime != 'normal' && format('-{0}', inputs.runtime) || '' }}-${{ steps.version.outputs.version }}-${{ matrix.platform }}.fpk
           if-no-files-found: error
           retention-days: 7
 
