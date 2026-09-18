@@ -19,7 +19,6 @@ import {
   FakeStorageExecutor,
   FINISHED_RUN_RETENTION_MS,
   createAgentModel,
-  createAgentModelFromEnv,
   createStubAcquisitionModel,
   llmConfigError,
   formatDailyDigestPushText,
@@ -105,7 +104,7 @@ let fakeStorageExecutor: StorageExecutor | null = null;
 // Per-signature model cache (keyed by adapter|baseURL|modelId|apiKey) so multiple
 // accounts with different LLM configs each keep their own built model — a single
 // slot would thrash between accounts in multi-user mode.
-const agentModelCache = new Map<string, ReturnType<typeof createAgentModelFromEnv>>();
+const agentModelCache = new Map<string, ReturnType<typeof createAgentModel>>();
 
 /** The SQLite database file for durable state. Required in every build — the
  *  project is SQLite-only since Postgres was removed. */
@@ -843,7 +842,7 @@ export const LLM_API_KEY_SETTING_KEY = "llm_api_key";
 export const LLM_MODEL_ID_SETTING_KEY = "llm_model_id";
 
 /** The user's configured OpenAI-compatible LLM (Settings → AI 模型). Each field is
- *  undefined when unset/blank, so `getAgentModel` cleanly falls back to .env. */
+ *  undefined when unset/blank (config lives in the Settings page only). */
 export async function getLlmConfig(repository: {
   getSetting(key: string): Promise<string | null>;
 }): Promise<{ baseURL: string | undefined; apiKey: string | undefined; modelId: string | undefined }> {
@@ -1003,7 +1002,7 @@ function parseMovieCandidateId(candidateId: string): number | null {
 export async function movieTargetFromTmdbId(
   tmdbId: number,
 ): Promise<{ title: MediaTitle; keyword: string } | null> {
-  if (process.env.MEDIA_TRACK_SEARCH_PROVIDER === "tmdb") {
+  if (!isDemoMode()) {
     return prepareMovieTarget({
       tmdbId,
       qualityPreference: defaultQuality(),
@@ -1182,7 +1181,7 @@ export async function queueCandidateSeries(
   if (workspace.frozen) {
     return { status: "unsupported", message: "该网盘已掉线，请重新扫码绑定同一个 115 后再获取。" };
   }
-  if (process.env.MEDIA_TRACK_SEARCH_PROVIDER === "tmdb") {
+  if (!isDemoMode()) {
     const target = await prepareSeriesTarget({
       tmdbId: parsed.tmdbId,
       qualityPreference: defaultQuality(),
@@ -1438,7 +1437,7 @@ async function trackingTargetFromCandidateId(candidateId: string): Promise<{
     return null;
   }
 
-  if (process.env.MEDIA_TRACK_SEARCH_PROVIDER === "tmdb") {
+  if (!isDemoMode()) {
     return prepareTrackingTarget({
       tmdbId: parsed.tmdbId,
       mediaType: "tv",
@@ -2078,19 +2077,19 @@ async function getWorkerStorageParents(
  * dev/demo runs complete without a real model. The preferred subtitle language is
  * passed to each workflow as standing context, not baked into the model instance.
  */
-/** Resolve the live agent model config the SAME way the worker builds it: DB
- *  (pass an account-scoped repo) → .env (AGENT_MODEL_*) → undefined. There is
- *  NO built-in default endpoint — baseURL/modelId must be configured (truly BYO,
- *  issue #49). Shared by getAgentModel and testLlmConnectionAction so the
- *  Settings「测试连接」exercises exactly what acquisitions use. */
+/** Resolve the live agent model config: page Settings (DB) ONLY — the
+ *  AGENT_MODEL_* env fallback is removed (2026-09-18); configuration lives in
+ *  设置 → AI 模型 and nowhere else. There is NO built-in default endpoint —
+ *  baseURL/modelId must be configured (truly BYO, issue #49). Shared by
+ *  getAgentModel and testLlmConnectionAction so the Settings「测试连接」
+ *  exercises exactly what acquisitions use. */
 export async function resolveAgentModelConfig(
   repository: { getSetting(key: string): Promise<string | null> },
-  env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ apiKey?: string; baseURL?: string; modelId?: string }> {
   const llm = await getLlmConfig(repository);
-  const apiKey = llm.apiKey ?? env.AGENT_MODEL_API_KEY;
-  const baseURL = llm.baseURL ?? env.AGENT_MODEL_BASE_URL;
-  const modelId = llm.modelId ?? env.AGENT_MODEL_ID;
+  const apiKey = llm.apiKey;
+  const baseURL = llm.baseURL;
+  const modelId = llm.modelId;
   return {
     ...(apiKey === undefined ? {} : { apiKey }),
     ...(baseURL === undefined ? {} : { baseURL }),
@@ -2120,14 +2119,14 @@ export async function acquireLlmPreflightError(
   if (env.MEDIA_TRACK_AGENT_ADAPTER !== "vercel-ai") {
     return null;
   }
-  const resolved = await resolveAgentModelConfig(settings, env);
+  const resolved = await resolveAgentModelConfig(settings);
   return llmConfigError(resolved);
 }
 
 async function getAgentModel(repository: {
   getSetting(key: string): Promise<string | null>;
 }): Promise<{
-  model: ReturnType<typeof createAgentModelFromEnv>;
+  model: ReturnType<typeof createAgentModel>;
   preferredLanguage: string | undefined;
   qualityPreference: "high" | "medium" | undefined;
 }> {
@@ -2138,8 +2137,8 @@ async function getAgentModel(repository: {
   const qualityPreference = await getQualityPreference(repository);
 
   // Resolve the live model config the SAME way the test action does (shared
-  // resolver) — DB-first, then .env. No built-in default endpoint.
-  const resolved = await resolveAgentModelConfig(repository, env);
+  // resolver) — Settings page (DB) only. No built-in default endpoint.
+  const resolved = await resolveAgentModelConfig(repository);
   const { apiKey, baseURL, modelId } = resolved;
   // Fail-fast pre-check (issue #49): on the live (vercel-ai) path, if baseURL or
   // modelId is missing the run would die on its first model call (or hit the

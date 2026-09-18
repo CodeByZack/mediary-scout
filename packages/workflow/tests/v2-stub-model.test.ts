@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { generateText, stepCountIs, tool } from "ai";
+import { z } from "zod";
 import { createStubAcquisitionModel } from "../src/acquisition-v2/stub-model.js";
 import { runTvAcquisitionV2 } from "../src/acquisition-v2/run-tv-v2.js";
 import { runMovieAcquisitionV2 } from "../src/movie-workflow-v2.js";
@@ -312,5 +314,65 @@ describe("createStubAcquisitionModel — the deterministic-script agent", () => 
     expect(result.status).toBe("no_coverage");
     expect(result.episodes[0]!.obtained).toBe(false);
     expect(result.transferAttempts.length).toBe(0);
+  });
+});
+
+/** Fast-path arbitration calls carry NO tools (single-shot generateText); the
+ * agent tool loop always registers tools. The stub must answer the former with a
+ * real JSON verdict instead of a tool call — otherwise every B-grade escalation
+ * in fake mode dies with "仲裁返回无法解析，安全放弃". */
+describe("createStubAcquisitionModel — fast-path arbitration (no-tools calls)", () => {
+  const searchResourcesTool = tool({
+    inputSchema: z.object({ keyword: z.string() }),
+    execute: async () => "ok",
+  });
+
+  it("selection arbitration picks the first listed candidate id verbatim", async () => {
+    const result = await generateText({
+      model: createStubAcquisitionModel(),
+      system: "选片仲裁",
+      prompt:
+        "目标剧集：测试剧（季：1）\n最多挑选 1 个候选\n\n" +
+        "候选（按分级排序，A>B>C>D）：\n" +
+        "[B] [snap_1_candidate_2] 测试剧 S01E01-S01E24 4K — 标题命中\n" +
+        "[B] [snap_1_candidate_3] 测试剧 全集 4K — 标题命中",
+    });
+
+    const parsed = JSON.parse(result.text) as { candidateIds: string[] };
+    expect(parsed.candidateIds).toEqual(["snap_1_candidate_2"]);
+  });
+
+  it("episode-mapping arbitration declines with an empty mapping", async () => {
+    const result = await generateText({
+      model: createStubAcquisitionModel(),
+      system: "集数映射仲裁",
+      prompt: "需要识别集数的文件(可能是纯文件名,也可能带文件夹):\n1. 第1集.mp4",
+    });
+
+    const parsed = JSON.parse(result.text) as { mapping: Record<string, string> };
+    expect(parsed.mapping).toEqual({});
+  });
+
+  it("movie-diagnosis arbitration abandons", async () => {
+    const result = await generateText({
+      model: createStubAcquisitionModel(),
+      system: "落盘诊断仲裁",
+      prompt: "目标电影：某片（发行年：2025）\n\n落盘摘要：\n72 files",
+    });
+
+    expect((JSON.parse(result.text) as { action: string }).action).toBe("abandon");
+  });
+
+  it("tool-loop calls still emit tool calls (the arbitration branch must not swallow them)", async () => {
+    const result = await generateText({
+      model: createStubAcquisitionModel(),
+      system: "stub agent",
+      stopWhen: stepCountIs(1),
+      prompt: 'Acquire the missing episodes for "Stub Show" — Missing episodes: S01E01, S01E02',
+      tools: { searchResources: searchResourcesTool },
+    });
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]!.toolName).toBe("searchResources");
   });
 });

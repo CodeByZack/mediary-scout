@@ -6,6 +6,7 @@ import {
   type SearchPageView,
 } from "@media-track/workflow";
 import { demoMediaSearchProvider } from "./demo-candidates";
+import { isDemoMode } from "./demo-mode";
 import {
   ensureDemoSeeded,
   getAccountScopedSettings,
@@ -39,7 +40,7 @@ function getSearchCache() {
   // Live TMDB searches are cached in-memory (6h TTL) so casual browsing never
   // becomes an API storm; the demo provider stays in-memory too. (The durable
   // Postgres cache was removed when the project went SQLite-only.)
-  if (process.env.MEDIA_TRACK_SEARCH_PROVIDER === "tmdb") {
+  if (!isDemoMode()) {
     return (sqliteSearchCache ??= new InMemoryMediaSearchCache());
   }
   demoSearchCache ??= new InMemoryMediaSearchCache();
@@ -47,7 +48,7 @@ function getSearchCache() {
 }
 
 async function getMediaSearchProvider(): Promise<MediaSearchProvider> {
-  if (process.env.MEDIA_TRACK_SEARCH_PROVIDER !== "tmdb") {
+  if (isDemoMode()) {
     return demoMediaSearchProvider;
   }
   // Built per-call scoped to the current account (its TMDB key → global → proxy),

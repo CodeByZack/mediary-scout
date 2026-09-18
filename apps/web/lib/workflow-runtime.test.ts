@@ -98,7 +98,7 @@ describe("acquireLlmPreflightError (点击获取时的 LLM 预检)", () => {
     expect(message).toBeNull();
   });
 
-  it("live (vercel-ai) + config from env (no DB) → null", async () => {
+  it("live (vercel-ai) + config in env only (no DB) → error (env fallback removed 2026-09-18)", async () => {
     const message = await acquireLlmPreflightError({
       settings: unconfigured,
       env: {
@@ -107,7 +107,7 @@ describe("acquireLlmPreflightError (点击获取时的 LLM 预检)", () => {
         AGENT_MODEL_ID: "env-model",
       } as unknown as NodeJS.ProcessEnv,
     });
-    expect(message).toBeNull();
+    expect(message).toContain("AI");
   });
 });
 
@@ -188,6 +188,12 @@ describe("getProwlarrConfig", () => {
 });
 
 describe("movieTargetFromTmdbId (demo provider mode — movie poster enrichment)", () => {
+  beforeEach(() => {
+    // 搜索源不再有独立变量：demo 模式（DEMO_MODE=1）走固定示例库，其余走真实 TMDB。
+    vi.stubEnv("MEDIA_TRACK_DEMO_MODE", "1");
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
   it("resolves a demo movie candidate carrying its poster", async () => {
     const target = await movieTargetFromTmdbId(1311031); // 我的僵尸女儿 — demo movie candidate
     expect(target?.title.type).toBe("movie");

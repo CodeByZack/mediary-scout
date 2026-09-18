@@ -96,11 +96,11 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
 
 <div class="dash">
   <div class="cell total">
-    <div class="num">48</div>
+    <div class="num">39</div>
     <div class="lbl">环境变量总数（清理后）</div>
   </div>
   <div class="cell ok">
-    <div class="num">48</div>
+    <div class="num">39</div>
     <div class="lbl">✅ 活跃使用中</div>
   </div>
   <div class="cell warn">
@@ -180,7 +180,7 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
   <div class="group-header">
     <span class="group-icon">🔄</span>
     <span class="group-title">运行模式</span>
-    <span class="group-count">2 个变量 &middot; 全部活跃</span>
+    <span class="group-count">1 个变量 &middot; 全部活跃</span>
   </div>
   <table>
     <tr><th>变量</th><th>作用</th><th>取值</th><th>源文件</th></tr>
@@ -189,12 +189,6 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
       <td class="desc">统一运行模式（instrumentation 的 resolver 派生全部 adapter/search/demo 变量）</td>
       <td class="desc"><code>"normal"</code>（默认）/ <code>"fake"</code>（stub+假网盘+真搜索）/ <code>"demo"</code>（只读演示）</td>
       <td class="src">runtime-mode.ts, instrumentation.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_SEARCH_PROVIDER</code></td>
-      <td class="desc">搜索数据源</td>
-      <td class="desc"><code>"demo"</code> / <code>"tmdb"</code></td>
-      <td class="src">workflow-runtime.ts, search-page.ts, title-hub.ts</td>
     </tr>
   </table>
 </div>
@@ -315,36 +309,6 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
 
 <div class="group">
   <div class="group-header">
-    <span class="group-icon">🤖</span>
-    <span class="group-title">AI 模型（LLM）配置</span>
-    <span class="group-count">3 个变量 &middot; 全部活跃</span>
-  </div>
-  <table>
-    <tr><th>变量</th><th>作用</th><th>优先级</th><th>源文件</th></tr>
-    <tr>
-      <td><code class="varname">AGENT_MODEL_BASE_URL</code></td>
-      <td class="desc">OpenAI 兼容服务的 Base URL（**必填**）</td>
-      <td><span class="tag tag-ok">主</span></td>
-      <td class="src">agent-model.ts, workflow-runtime.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">AGENT_MODEL_ID</code></td>
-      <td class="desc">模型名称（**必填**）</td>
-      <td><span class="tag tag-ok">主</span></td>
-      <td class="src">agent-model.ts, workflow-runtime.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">AGENT_MODEL_API_KEY</code></td>
-      <td class="desc">API Key（云端必填，本地 ollama/LM Studio 可留空）</td>
-      <td><span class="tag tag-ok">主</span></td>
-      <td class="src">agent-model.ts, workflow-runtime.ts</td>
-    </tr>
-  </table>
-  <p class="src" style="font-size:13px; margin-top:8px;">📌 优先级：DB 设置 > <code>AGENT_MODEL_*</code>。已删除 <code>XIAOMI_MIMO_*</code> 兼容回退（2026-09-13）。</p>
-</div>
-
-<div class="group">
-  <div class="group-header">
     <span class="group-icon">🌐</span>
     <span class="group-title">外部服务</span>
     <span class="group-count">5 个变量 &middot; 全部活跃</span>
@@ -382,43 +346,6 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
       <td class="src">workflow-runtime.ts, prowlarr-provider.ts</td>
     </tr>
   </table>
-</div>
-
-<div class="group">
-  <div class="group-header">
-    <span class="group-icon">📢</span>
-    <span class="group-title">推送通知</span>
-    <span class="group-count">5 个变量 &middot; 全部活跃</span>
-  </div>
-  <table>
-    <tr><th>变量</th><th>作用</th><th>说明</th></tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_PUSH_BARK_KEY</code></td>
-      <td class="desc">PushBark 推送 Key</td>
-      <td class="desc">非空即启用</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_PUSH_BARK_BASE_URL</code></td>
-      <td class="desc">PushBark 自定义服务器地址</td>
-      <td class="desc">可选，默认官方</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_PUSH_SERVERCHAN_SENDKEY</code></td>
-      <td class="desc">ServerChan（Server 酱）发送 Key</td>
-      <td class="desc">非空即启用</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_PUSH_WECOM_WEBHOOK</code></td>
-      <td class="desc">企业微信 Webhook URL</td>
-      <td class="desc">非空即启用</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_PUSH_WEBHOOK_URL</code></td>
-      <td class="desc">通用 Webhook URL</td>
-      <td class="desc">非空即启用</td>
-    </tr>
-  </table>
-  <p class="src" style="font-size:13px; margin-top:8px;">📌 优先级：overrideConfig &gt; DB <code>push_*</code> 设置 &gt; env。四种通道可同时启用。</p>
 </div>
 
 <div class="group">

@@ -25,10 +25,8 @@ export async function register(): Promise<void> {
 
   // Resolve MEDIA_TRACK_MODE → legacy adapter/demo env vars BEFORE validation.
   // All downstream code reads the legacy vars; the resolver is a thin translation layer.
-  console.log("[instrumentation] resolving runtime mode...");
   const { applyRuntimeMode } = await import("./lib/runtime-mode");
   applyRuntimeMode(process.env);
-  console.log("[instrumentation] runtime mode resolved");
 
   validateRuntimeConfig(process.env);
 

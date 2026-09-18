@@ -92,6 +92,16 @@ function toolCall(
   };
 }
 
+/** A `system` message's content is a bare string; every other role carries an
+ * array of content parts. Both shapes normalize to one text blob. */
+function messageText(message: LanguageModelV3Message): string {
+  const content = message.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  return content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
+}
+
 function textResult(text: string): LanguageModelV3GenerateResult {
   return {
     content: [{ type: "text", text }],
@@ -99,6 +109,36 @@ function textResult(text: string): LanguageModelV3GenerateResult {
     usage: USAGE,
     warnings: [],
   };
+}
+
+/** Fast-path arbitration calls are single-shot `generateText` with NO tools; the
+ *  agent tool loop always registers tools. In fake mode ONE stub instance answers
+ *  both, so arbitrateSelection used to receive a `tool-call` result instead of
+ *  JSON → the arbitrator's safe fallback declined every B-grade escalation
+ *  ("仲裁返回无法解析，安全放弃") and fake runs died at arbitration instead of
+ *  picking the already-ranked top candidate. Answer with a real JSON verdict:
+ *  pick the first listed candidate (the grader already ordered A>B>C>D), decline
+ *  the mapping/diagnosis escalations honestly — a stub would only fabricate. */
+function arbitrationReply(prompt: LanguageModelV3Message[]): LanguageModelV3GenerateResult {
+  const text = prompt.map(messageText).join("\n");
+
+  // selection / movie-selection: the summary is `[<grade>] [<id>] <title> — reasons`.
+  if (/候选（按分级排序/.test(text)) {
+    const pick = /\[[A-D]\] \[([^\]]+)\]/.exec(text);
+    return pick?.[1]
+      ? textResult(JSON.stringify({ candidateIds: [pick[1]], reasoning: "stub: pick top-ranked candidate" }))
+      : textResult(JSON.stringify({ candidateIds: [], reasoning: "stub: no candidate listed" }));
+  }
+  // episode-mapping: an empty mapping hands the verdict back to the digest's
+  // objective coverage check instead of inventing episode codes.
+  if (/需要识别集数的文件/.test(text)) {
+    return textResult(JSON.stringify({ mapping: {}, unmapped: [], reasoning: "stub: no mapping" }));
+  }
+  // movie-diagnosis: abandon is the honest terminal — never claim a landing.
+  if (/落盘摘要/.test(text)) {
+    return textResult(JSON.stringify({ action: "abandon", reasoning: "stub: no diagnosis" }));
+  }
+  return textResult("stub: arbitration declined");
 }
 
 /** The last tool message's structured output, or undefined when none yet.
@@ -140,11 +180,7 @@ function parseTask(
 ): { movie: boolean; title: string; year?: number; need: Set<string> } {
   const userText = prompt
     .filter((message) => message?.role === "user")
-    .flatMap((message) =>
-      message.role === "user"
-        ? message.content.map((part) => (part.type === "text" ? part.text : ""))
-        : [],
-    )
+    .map((message) => messageText(message))
     .join("\n");
   const movieMatch = /Acquire the movie "(.+?)" \((\d{4})\)/.exec(userText);
   if (movieMatch) {
@@ -367,6 +403,10 @@ export function createStubAcquisitionModel(): LanguageModel {
   return new MockLanguageModelV3({
     doGenerate: async (options: LanguageModelV3CallOptions): Promise<LanguageModelV3GenerateResult> => {
       const last = lastToolOutput(options.prompt);
+      // Fast-path arbitration registers NO tools; the agent tool loop always does.
+      if (!options.tools || options.tools.length === 0) {
+        return arbitrationReply(options.prompt);
+      }
       // New-run detection: a prompt with NO tool messages means a fresh
       // conversation. The worker's agentModelCache reuses ONE stub instance
       // across every fake-mode run in the process — without this reset, the

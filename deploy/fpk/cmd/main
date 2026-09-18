@@ -40,7 +40,7 @@ export MEDIA_TRACK_SQLITE_PATH="${TRIM_PKGVAR}/mediary.db"
 # 运行模式由 build-fpk.sh 在此行下方注入（插到 CMD 之前）：
 #   MEDIA_TRACK_MODE=normal|fake|demo
 # instrumentation.ts 启动时经 runtime-mode.ts 统一解析为
-#   STORAGE/WORKFLOW/AGENT_ADAPTER + SEARCH_PROVIDER + DEMO_MODE/DEMO_SEED。
+#   STORAGE/WORKFLOW/AGENT_ADAPTER + DEMO_MODE/DEMO_SEED。
 # 勿再手写独立的 adapter/demo 变量（会与 MODE 解析结果冲突）。
 
 # 未设置（对齐 compose 的缺省/可选行为）：

@@ -7,7 +7,6 @@ describe("resolveRuntimeMode", () => {
     expect(r.storageAdapter).toBe("115");
     expect(r.workflowAdapter).toBe("pansou");
     expect(r.agentAdapter).toBe("vercel-ai");
-    expect(r.searchProvider).toBe("tmdb");
     expect(r.demoMode).toBe(false);
     expect(r.demoSeed).toBe(false);
   });
@@ -17,7 +16,6 @@ describe("resolveRuntimeMode", () => {
     expect(r.storageAdapter).toBe("fake");
     expect(r.workflowAdapter).toBe("fake");
     expect(r.agentAdapter).toBe("fake");
-    expect(r.searchProvider).toBe("tmdb");
     expect(r.demoMode).toBe(false);
     expect(r.demoSeed).toBe(false);
   });
@@ -27,7 +25,6 @@ describe("resolveRuntimeMode", () => {
     expect(r.storageAdapter).toBe("fake");
     expect(r.workflowAdapter).toBe("fake");
     expect(r.agentAdapter).toBe("fake");
-    expect(r.searchProvider).toBe("demo");
     expect(r.demoMode).toBe(true);
     expect(r.demoSeed).toBe(true);
   });
@@ -49,7 +46,6 @@ describe("applyRuntimeMode", () => {
     expect(env.MEDIA_TRACK_DEMO_MODE).toBe("0");
     expect(env.NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE).toBe("0");
     expect(env.MEDIA_TRACK_DEMO_SEED).toBe("0");
-    expect(env.MEDIA_TRACK_SEARCH_PROVIDER).toBe("tmdb");
   });
 
   it("sets all legacy env vars from fake", () => {
@@ -61,7 +57,6 @@ describe("applyRuntimeMode", () => {
     expect(env.MEDIA_TRACK_DEMO_MODE).toBe("0");
     expect(env.NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE).toBe("0");
     expect(env.MEDIA_TRACK_DEMO_SEED).toBe("0");
-    expect(env.MEDIA_TRACK_SEARCH_PROVIDER).toBe("tmdb");
   });
 
   it("sets all legacy env vars from demo", () => {
@@ -73,6 +68,5 @@ describe("applyRuntimeMode", () => {
     expect(env.MEDIA_TRACK_DEMO_MODE).toBe("1");
     expect(env.NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE).toBe("1");
     expect(env.MEDIA_TRACK_DEMO_SEED).toBe("1");
-    expect(env.MEDIA_TRACK_SEARCH_PROVIDER).toBe("demo");
   });
 });

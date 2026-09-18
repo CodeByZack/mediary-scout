@@ -91,22 +91,6 @@ export function createAgentModel(options: AgentModelOptions = {}): LanguageModel
 }
 
 /**
- * Build the live LanguageModel from env. Reads AGENT_MODEL_* only —
- * there is no fallback to legacy keys. baseURL/modelId must be configured.
- */
-export function createAgentModelFromEnv(env: NodeJS.ProcessEnv = process.env): LanguageModel {
-  const options: AgentModelOptions = {};
-  const apiKey = env.AGENT_MODEL_API_KEY;
-  const baseURL = env.AGENT_MODEL_BASE_URL;
-  const modelId = env.AGENT_MODEL_ID;
-  if (apiKey !== undefined) options.apiKey = apiKey;
-  if (baseURL !== undefined) options.baseURL = baseURL;
-  if (modelId !== undefined) options.modelId = modelId;
-  const { providerSettings, modelId: id } = createAgentProviderConfig(options);
-  return createOpenAICompatible(providerSettings)(id);
-}
-
-/**
  * Normalize a user-entered OpenAI-compatible base URL. The provider appends
  * `/chat/completions` itself, so a pasted full endpoint (or trailing slashes)
  * must be stripped — otherwise requests hit `…/chat/completions/chat/completions`
