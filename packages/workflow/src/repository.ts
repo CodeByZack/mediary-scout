@@ -221,15 +221,7 @@ export interface WorkflowRepository extends DeadLinkStore {
     /** ISO cutoff: only notifications with createdAt >= since (e.g. last 7 days). */
     since?: string;
   }): Promise<NotificationEvent[]>;
-  /** Cross-account recent notifications, each tagged with its run's owning account
-   *  — drives the worker's outbound push, which must deliver each user's events to
-   *  THAT user's channels. Newest first. */
-  listRecentNotificationsWithAccount(input?: {
-    limit?: number;
-    /** ISO cutoff applied BEFORE the limit so a flood of newer events cannot
-     *  crowd out earlier post-cutoff notifications (push path uses this). */
-    since?: string;
-  }): Promise<Array<{ accountId: string; connectedStorageId: string | null; notification: NotificationEvent }>>;
+
   /** Instance-level (global) settings, e.g. the multi-account migration marker. */
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
@@ -1076,23 +1068,6 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
     return all.slice(0, input?.limit ?? 100);
   }
 
-  async listRecentNotificationsWithAccount(input?: {
-    limit?: number;
-    since?: string;
-  }): Promise<Array<{ accountId: string; connectedStorageId: string | null; notification: NotificationEvent }>> {
-    const since = input?.since;
-    const all = [...this.workflowRuns.values()]
-      .flatMap((snapshot) =>
-        snapshot.notifications.map((notification) => ({
-          accountId: snapshot.accountId ?? DEFAULT_ACCOUNT_ID,
-          connectedStorageId: snapshot.connectedStorageId ?? null,
-          notification: { ...notification },
-        })),
-      )
-      .filter((entry) => since === undefined || entry.notification.createdAt >= since);
-    all.sort((left, right) => right.notification.createdAt.localeCompare(left.notification.createdAt));
-    return all.slice(0, input?.limit ?? 100);
-  }
 
   private expireStaleActiveWorkflowRuns(input: ReserveWorkflowRunInput): void {
     if (!input.staleActiveRunStartedBefore) {

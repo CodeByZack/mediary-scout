@@ -21,7 +21,7 @@ export interface DrainDeps {
   maxDrains?: number;
   /** Whether any drive is connected. When provided and false (a fresh instance
    *  with no 网盘 yet), the tick skips drain + sweep QUIETLY instead of building a
-   *  drive client that throws "PAN115_COOKIE is required" every poll. Optional so
+   *  drive client that throws "115 网盘未连接" every poll. Optional so
    *  existing callers/tests behave unchanged (absent ⇒ assume configured). */
   isDriveConfigured?: (() => Promise<boolean>) | undefined;
 }

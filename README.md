@@ -60,7 +60,7 @@ All product logic is identical — one codebase, one SQLite engine.
 | **Library wall** — what you have, per drive, with missing / airing badges | ![library](docs/images/library.png) |
 | **Show detail** — season coverage, gaps, tracking state | ![show](docs/images/show.png) |
 | **Realtime activity** — a live queue + per-step evidence you can expand | ![activity](docs/images/activity.png) |
-| **Notifications** — per-acquisition + daily digest, multi-channel push | ![notifications](docs/images/notifications.png) |
+| **Notifications** — per-acquisition + daily digest (in-app activity feed) | ![notifications](docs/images/notifications.png) |
 | **Settings** — drives, quality, language, LLM (BYO-key), Prowlarr, PanSou | ![settings](docs/images/settings.png) |
 
 Multiple drives appear as a workspace switcher with per-brand icons:

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  createPan115CookieClientFromEnv,
   createProtectedPan115CookieStorageExecutorFromEnv,
   Pan115CookieClient,
   Storage115Executor,
@@ -380,38 +379,27 @@ describe("Pan115CookieClient", () => {
     ]);
   });
 
-  it("creates a client from PAN115_COOKIE", () => {
-    expect(() => createPan115CookieClientFromEnv({})).toThrow("PAN115_COOKIE is required");
-    expect(
-      createPan115CookieClientFromEnv({
-        PAN115_COOKIE: "UID=1;CID=2",
-      }),
-    ).toBeInstanceOf(Pan115CookieClient);
-  });
-
-  it("creates a protected storage executor from cookie and write-scope env", () => {
+  it("creates a protected storage executor from an explicit cookie + write scope", () => {
+    // env PAN115_COOKIE / CID direct-connect was removed (2026-09-18): the
+    // factory now requires an explicit cookie + write scope (drive DB row).
     expect(() =>
       createProtectedPan115CookieStorageExecutorFromEnv({
-        env: {
-          PAN115_COOKIE: "UID=1;CID=2",
-        },
+        cookie: "UID=1;CID=2",
       }),
-    ).toThrow("MEDIA_TRACK_115_WRITE_SCOPE_REQUIRED");
+    ).toThrow("WRITE_SCOPE_REQUIRED");
 
     expect(() =>
       createProtectedPan115CookieStorageExecutorFromEnv({
-        env: {
-          MEDIA_TRACK_115_TEST_ROOT_CID: "test_root",
-        },
+        writeScopeDirectoryIds: ["test_root"],
+        apiGuardOptions: { minDelayMs: 0 },
       }),
     ).toThrow("PAN115_COOKIE is required");
 
     expect(
       createProtectedPan115CookieStorageExecutorFromEnv({
-        env: {
-          PAN115_COOKIE: "UID=1;CID=2",
-          MEDIA_TRACK_115_TEST_ROOT_CID: "test_root",
-        },
+        cookie: "UID=1;CID=2",
+        writeScopeDirectoryIds: ["test_root"],
+        apiGuardOptions: { minDelayMs: 0 },
         fetchJson: async () => ({ state: true, data: [] }),
       }),
     ).toBeInstanceOf(Storage115Executor);

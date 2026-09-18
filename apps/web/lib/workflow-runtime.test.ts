@@ -536,12 +536,12 @@ describe("workerHasConfiguredDrive (C1: any account's drive counts)", () => {
     expect(await workerHasConfiguredDrive()).toBe(true);
   });
 
-  it("env PAN115_COOKIE set → true (legacy bootstrap)", async () => {
+  it("env PAN115_COOKIE alone → false (direct-connect removed 2026-09-18)", async () => {
     process.env.MEDIA_TRACK_STORAGE_ADAPTER = "115";
     process.env.PAN115_COOKIE = "UID=1;CID=2;SEID=3";
     vi.resetModules();
     const { workerHasConfiguredDrive } = await import("./workflow-runtime");
-    expect(await workerHasConfiguredDrive()).toBe(true);
+    expect(await workerHasConfiguredDrive()).toBe(false);
   });
 
   it("fresh deploy (adapter 115, no cookie, no drives) → false", async () => {

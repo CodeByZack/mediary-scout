@@ -25,10 +25,4 @@ describe("server actions honor demo read-only", () => {
       DemoReadOnlyError,
     );
   });
-
-  it("savePushSettingsAction rejects in demo mode", async () => {
-    await expect(actions.savePushSettingsAction({ bark: "x" })).rejects.toBeInstanceOf(
-      DemoReadOnlyError,
-    );
-  });
 });

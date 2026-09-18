@@ -898,31 +898,6 @@ export function runRepositoryContract(name: string, harness: RepoHarness): void 
           }),
         ).toEqual([]);
       });
-
-      it("listRecentNotificationsWithAccount tags each notification with its owning account", async () => {
-        const repo = await fresh();
-        await repo.saveWorkflowRunSnapshot({
-          ...workflowPersistenceFixture(),
-          accountId: "acct_default",
-          connectedStorageId: "cs_notif",
-        });
-        const recent = await repo.listRecentNotificationsWithAccount();
-        expect(recent).toHaveLength(1);
-        expect(recent[0]?.accountId).toBe("acct_default");
-        expect(recent[0]?.connectedStorageId).toBe("cs_notif");
-        expect(recent[0]?.notification.id).toBe("notification_1");
-      });
-
-      it("listRecentNotificationsWithAccount surfaces unscoped runs as null, never the internal sentinel", async () => {
-        const repo = await fresh();
-        await repo.saveWorkflowRunSnapshot({
-          ...workflowPersistenceFixture(),
-          accountId: "acct_default",
-        });
-        const recent = await repo.listRecentNotificationsWithAccount();
-        expect(recent).toHaveLength(1);
-        expect(recent[0]?.connectedStorageId).toBeNull();
-      });
     });
 
     describe("lifecycle mutations", () => {

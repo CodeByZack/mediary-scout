@@ -20,9 +20,6 @@ import {
   TMDB_BASE_URL_SETTING_KEY,
 } from "../workflow-runtime";
 
-const PUSH_CHANNEL_KEYS = ["bark", "serverchan", "wecom", "webhook"] as const;
-type PushChannelKey = (typeof PUSH_CHANNEL_KEYS)[number];
-
 export interface AgentConfigView {
   llm: { baseURL: string | null; modelId: string | null; apiKey: string | null };
   qualityPreference: string | undefined;
@@ -32,7 +29,6 @@ export interface AgentConfigView {
   prowlarr: { baseURL: string; apiKey: string | null } | null;
   tmdbApiKey: string | null;
   tmdbBaseUrl: string | null;
-  push: Partial<Record<PushChannelKey, string>>;
   storages: Array<{ id: string; brand: string; name: string | null }>;
 }
 
@@ -65,16 +61,6 @@ export async function readAgentConfig(accountId: string): Promise<AgentConfigVie
   const tmdbKey = (await settings.getSetting(TMDB_API_KEY_SETTING_KEY))?.trim() || null;
   const tmdbBaseUrl = (await settings.getSetting(TMDB_BASE_URL_SETTING_KEY))?.trim() || null;
 
-  const push: Partial<Record<PushChannelKey, string>> = {};
-  for (const key of PUSH_CHANNEL_KEYS) {
-    const value = (await settings.getSetting(`push_${key}`))?.trim();
-    if (value) {
-      const masked = maskSecret(value);
-      if (masked) {
-        push[key] = masked;
-      }
-    }
-  }
 
   return {
     llm: {
@@ -91,7 +77,6 @@ export async function readAgentConfig(accountId: string): Promise<AgentConfigVie
       : null,
     tmdbApiKey: maskSecret(tmdbKey),
     tmdbBaseUrl,
-    push,
     storages: storageRows.map((row) => ({
       id: row.id,
       brand: row.provider,
@@ -137,9 +122,6 @@ export async function writeAgentConfig(
     [input.llm?.apiKey, "llm.apiKey"],
     [input.prowlarr?.apiKey, "prowlarr.apiKey"],
     [input.tmdbApiKey, "tmdbApiKey"],
-    ...Object.entries(input.push ?? {}).map(
-      ([key, value]) => [value, `push.${key}`] as [string | undefined, string],
-    ),
   ];
   for (const [value, field] of secretFields) {
     if (value !== undefined && isMaskedPlaceholder(value)) {
@@ -246,15 +228,7 @@ export async function writeAgentConfig(
     updated.push("tmdbBaseUrl");
   }
 
-  if (input.push) {
-    for (const key of PUSH_CHANNEL_KEYS) {
-      const value = input.push[key];
-      if (value !== undefined) {
-        await setAccount(`push_${key}`, value.trim());
-        updated.push(`push.${key}`);
-      }
-    }
-  }
+
 
   return { ok: true, updated };
 }

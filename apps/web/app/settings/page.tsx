@@ -3,12 +3,11 @@ import { maskProviderUid } from "../../lib/mask-provider-uid";
 import { connection } from "next/server";
 import { headers } from "next/headers";
 import { Suspense } from "react";
-import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, Languages, Radio, ShieldCheck, Subtitles, TriangleAlert } from "lucide-react";
+import { Bot, Cable, CalendarClock, Clapperboard, Gauge, Languages, Radio, ShieldCheck, Subtitles, TriangleAlert } from "lucide-react";
 import { AppSidebar } from "../../components/app-sidebar";
 import { AddDriveBrandTabs } from "../../components/add-drive-brand-tabs";
 import { TestConnectionButton } from "../../components/test-connection-button";
 import { UnbindStorageButton } from "../../components/unbind-storage-button";
-import { PushNotificationForm } from "../../components/push-notification-form";
 import { PreferredLanguageForm } from "../../components/preferred-language-form";
 import { QualityPreferenceForm } from "../../components/quality-preference-form";
 import { RulePatternsForm } from "../../components/rule-patterns-form";
@@ -132,7 +131,6 @@ export default function SettingsPage({
                     <DailySweepSection />
                   </Suspense>
                   <Suspense fallback={<div className="skeleton skeleton-heading" />}>
-                    <PushNotificationSection />
                   </Suspense>
                 </>
               }
@@ -303,10 +301,16 @@ async function TmdbApiKeySection() {
             <Clapperboard size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
             TMDB 元数据
           </h2>
-          <p className="panel-note">影视元数据来源；可填自己的 key 直连，大陆网络可自建 tmdb-proxy</p>
+          <p className="panel-note">影视元数据来源；<strong>强烈建议配置</strong>，可填自己的 key 直连，大陆网络可自建 tmdb-proxy</p>
         </div>
       </div>
       <TmdbApiKeyForm apiKeySet={apiKeySet} baseUrlSet={baseUrlSet} currentBaseUrl={baseUrl} />
+      {!apiKeySet ? (
+        <p className="panel-note drive-risk-note" style={{ marginTop: 12 }}>
+          <TriangleAlert size={12} aria-hidden style={{ verticalAlign: "-2px", marginRight: 4 }} />
+          未配置 key：播出日同步、缺集年守卫、综艺集名锚定均静默降级，结果也无法按 TMDB 规范命名归位。开始获取前请先填好。
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -527,35 +531,6 @@ async function DailySweepSection() {
           上次巡检 {lastLabel} · 下次巡检 {nextSlot}
         </span>
       </div>
-    </section>
-  );
-}
-
-async function PushNotificationSection() {
-  await connection();
-  const repository = getAccountScopedSettings(await getCurrentAccountId());
-
-  // Only whether each channel is configured — the plaintext key is never sent
-  // to the client.
-  const configured: Record<string, boolean> = {};
-  for (const key of ["bark", "serverchan", "wecom", "webhook"]) {
-    const value = await repository.getSetting(`push_${key}`);
-    configured[key] = Boolean(value && value.trim());
-  }
-
-  return (
-    <section className="panel" style={{ maxWidth: 720, marginTop: 24 }}>
-      <div className="panel-header">
-        <div>
-          <h2 className="panel-title">
-            <Bell size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
-            推送通知
-          </h2>
-          <p className="panel-note">配置推送渠道后，每日定时巡检完成时会自动推送更新播报</p>
-        </div>
-      </div>
-
-      <PushNotificationForm configured={configured} />
     </section>
   );
 }

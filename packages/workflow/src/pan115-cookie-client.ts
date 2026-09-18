@@ -325,16 +325,6 @@ export class Pan115CookieClient implements Pan115StorageApi {
   }
 }
 
-export function createPan115CookieClientFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): Pan115CookieClient {
-  const cookie = normalizeCookie(env["PAN115_COOKIE"]);
-  if (!cookie) {
-    throw new Error("PAN115_COOKIE is required to create Pan115CookieClient");
-  }
-  return new Pan115CookieClient({ cookie });
-}
-
 async function defaultFetchJson(url: string, init: Pan115HttpInit): Promise<unknown> {
   const requestInit: RequestInit = {
     method: init.method,

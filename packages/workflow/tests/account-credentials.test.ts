@@ -127,42 +127,38 @@ describe("parsePan115Uid", () => {
 });
 
 describe("migrateLegacyCookieToDefaultAccount", () => {
-  const env = {
-    MEDIA_TRACK_115_TEST_ROOT_CID: "ROOT",
-  } as unknown as NodeJS.ProcessEnv;
-
   it("moves the legacy global cookie into a default-account connected_storage", async () => {
     const repo = new InMemoryWorkflowRepository();
     await repo.setSetting("pan115.cookie", "UID=42_X; CID=c; SEID=s");
     await repo.setSetting("pan115.cookieMeta", JSON.stringify({ userName: "alice", app: "alipaymini" }));
 
-    const result = await migrateLegacyCookieToDefaultAccount({ repository: repo, env, now: "t0" });
+    const result = await migrateLegacyCookieToDefaultAccount({ repository: repo, now: "t0" });
 
     expect(result).toEqual({ migrated: true, providerUid: "42" });
     const cs = await repo.findConnectedStorageByUid("pan115", "42");
     expect(cs?.accountId).toBe(DEFAULT_ACCOUNT_ID);
     expect(cs?.label).toBe("alice");
     expect((cs?.payload as { cookie: string }).cookie).toBe("UID=42_X; CID=c; SEID=s");
-    // *_PARENT_CID env 已删（2026-09-18）：迁移只带 rootCid，分类目录留给
+    // 115 直连 env 已删（2026-09-18）：迁移只搬 cookie，目录 CID 一律由
     // 连接时的建树流程（provisionCategoryDirs）产出。
     expect(cs?.tvCid).toBeNull();
     expect(cs?.moviesCid).toBeNull();
     expect(cs?.animeCid).toBeNull();
-    expect(cs?.rootCid).toBe("ROOT");
+    expect(cs?.rootCid).toBeNull();
   });
 
   it("is idempotent — a second run creates nothing new", async () => {
     const repo = new InMemoryWorkflowRepository();
     await repo.setSetting("pan115.cookie", "UID=42_X; CID=c");
-    await migrateLegacyCookieToDefaultAccount({ repository: repo, env, now: "t0" });
-    const second = await migrateLegacyCookieToDefaultAccount({ repository: repo, env, now: "t1" });
+    await migrateLegacyCookieToDefaultAccount({ repository: repo, now: "t0" });
+    const second = await migrateLegacyCookieToDefaultAccount({ repository: repo, now: "t1" });
     expect(second.migrated).toBe(false);
     expect((await repo.listConnectedStorages(DEFAULT_ACCOUNT_ID)).length).toBe(1);
   });
 
   it("no global cookie → no-op", async () => {
     const repo = new InMemoryWorkflowRepository();
-    const result = await migrateLegacyCookieToDefaultAccount({ repository: repo, env, now: "t0" });
+    const result = await migrateLegacyCookieToDefaultAccount({ repository: repo, now: "t0" });
     expect(result).toEqual({ migrated: false, providerUid: null });
     expect(await repo.listConnectedStorages(DEFAULT_ACCOUNT_ID)).toEqual([]);
   });

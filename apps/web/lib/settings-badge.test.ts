@@ -7,11 +7,10 @@ import { driveConnectionBadge } from "./settings-badge";
 describe("driveConnectionBadge", () => {
   it("shows 已连接 with the drive count when any non-frozen drive exists (non-115 included)", () => {
     expect(
-      driveConnectionBadge({ envConnected: false, drives: [{ status: "active" }] }),
+      driveConnectionBadge({ drives: [{ status: "active" }] }),
     ).toEqual({ tone: "green", label: "已连接 1 块盘" });
     expect(
       driveConnectionBadge({
-        envConnected: false,
         drives: [{ status: "active" }, { status: "active" }, { status: "frozen" }],
       }),
     ).toEqual({ tone: "green", label: "已连接 2 块盘" });
@@ -19,19 +18,13 @@ describe("driveConnectionBadge", () => {
 
   it("all drives frozen → amber 全部掉线 (rows below carry the detail)", () => {
     expect(
-      driveConnectionBadge({ envConnected: false, drives: [{ status: "frozen" }] }),
+      driveConnectionBadge({ drives: [{ status: "frozen" }] }),
     ).toEqual({ tone: "amber", label: "已连接但掉线" });
   });
 
-  it("no drives but legacy .env 115 cookie → 已连接（.env）", () => {
-    expect(driveConnectionBadge({ envConnected: true, drives: [] })).toEqual({
-      tone: "green",
-      label: "已连接（.env）",
-    });
-  });
 
   it("nothing connected → 未连接", () => {
-    expect(driveConnectionBadge({ envConnected: false, drives: [] })).toEqual({
+    expect(driveConnectionBadge({ drives: [] })).toEqual({
       tone: "amber",
       label: "未连接",
     });

@@ -133,10 +133,17 @@ export interface Storage115ExecutorOptions {
 
 export interface ProtectedStorage115ExecutorOptions {
   api: Pan115StorageApi;
+  /** Pacing/limit env (MIN_DELAY_MS / MAX_API_CALLS) — the only env surface left
+   *  on the 115 executor since CID direct-connect was removed (2026-09-18). */
   env?: Record<string, string | undefined>;
-  /** Movie-leaf flatten guard + delete valve: the drive's Movies directory cid.
-   *  Supplied from the connected storage's provisioned CID (DB), not env —
-   *  MEDIA_TRACK_MOVIES_PARENT_CID was removed 2026-09-18. */
+  /** Write scope: the drive's provisioned category dir CIDs (from the DB
+   *  connected_storage row). Required — env CIDs (direct-connect) were removed
+   *  2026-09-18; every drive must be linked via the Web flow first. */
+  writeScopeDirectoryIds: string[];
+  /** Extra read-only dirs the executor must never touch (deploy-level guard). */
+  protectedDirectoryIds?: string[];
+  /** Movie-leaf flatten guard + delete valve: the drive's Movies directory cid
+   *  (from the DB connected_storage row, not env). */
   moviesDirectoryId?: string;
   apiGuard?: Pan115ApiGuard;
   apiGuardOptions?: Pan115ApiGuardOptions;
@@ -1040,26 +1047,16 @@ export function createProtectedStorage115Executor(
   options: ProtectedStorage115ExecutorOptions,
 ): Storage115Executor {
   const env = options.env ?? process.env;
-  const testRootDirectoryId = optionalDirectoryId(env["MEDIA_TRACK_115_TEST_ROOT_CID"]);
-  const explicitWriteScopeDirectoryIds = directoryIdList(env["MEDIA_TRACK_115_WRITE_SCOPE_CIDS"]);
-  const writeScopeDirectoryIds =
-    explicitWriteScopeDirectoryIds.length > 0
-      ? explicitWriteScopeDirectoryIds
-      : testRootDirectoryId
-        ? [testRootDirectoryId]
-        : [];
+  const writeScopeDirectoryIds = options.writeScopeDirectoryIds;
 
   if (writeScopeDirectoryIds.length === 0) {
     throw new Error(
-      "MEDIA_TRACK_115_WRITE_SCOPE_REQUIRED: set MEDIA_TRACK_115_TEST_ROOT_CID " +
-        "for development or MEDIA_TRACK_115_WRITE_SCOPE_CIDS for explicit live writes",
+      "WRITE_SCOPE_REQUIRED: 115 executor needs the drive's provisioned category " +
+        "dir CIDs — connect the drive via the Web UI first (env CID direct-connect was removed)",
     );
   }
 
-  const protectedDirectoryIds = uniqueDirectoryIds([
-    testRootDirectoryId,
-    ...directoryIdList(env["MEDIA_TRACK_115_PROTECTED_CIDS"]),
-  ]);
+  const protectedDirectoryIds = uniqueDirectoryIds(options.protectedDirectoryIds ?? []);
 
   const executorOptions: Storage115ExecutorOptions = {
     api: options.api,

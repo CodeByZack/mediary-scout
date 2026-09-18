@@ -7,7 +7,6 @@ import {
 import { randomBytes } from "node:crypto";
 import {
   PanSouResourceProvider,
-  createProtectedPan115CookieStorageExecutorFromEnv,
   createBootstrapPan115CookieStorageExecutor,
   CompositeResourceProvider,
   ProwlarrResourceProvider,
@@ -21,7 +20,6 @@ import {
   createAgentModel,
   createStubAcquisitionModel,
   llmConfigError,
-  formatDailyDigestPushText,
   getTrackedSeasonStatusView,
   importForeignWorkAsMovie,
   assertWorkflowAgentAdapterPolicy,
@@ -33,9 +31,7 @@ import {
   queueTrackingInitialization,
   reserveMovie,
   runNextQueuedConsumption,
-  resolveDriveSourceLabels,
   runScheduledType3Monitoring,
-  sendPushNotifications,
   createSqliteWorkflowRepository,
   migrateLegacyCookieToDefaultAccount,
   resolveStorageBinding,
@@ -65,7 +61,6 @@ import {
   type WorkflowScope,
   type MediaSearchCandidate,
   type MediaTitle,
-  type NotificationEvent,
   type ResourceProvider,
   type ResourceType,
   type SeasonMetadataSync,
@@ -665,7 +660,6 @@ export async function runStartupMigrations(): Promise<void> {
   try {
     const result = await migrateLegacyCookieToDefaultAccount({
       repository: getWorkflowRepository(),
-      env: process.env,
       now: new Date().toISOString(),
     });
     if (result.migrated) {
@@ -767,7 +761,6 @@ export async function runNextQueuedWorkflow() {
   // The base deps below are the default account's, used as the fallback the
   // resolver overrides per run.
   const accountId = DEFAULT_ACCOUNT_ID;
-  await hydratePan115CookieFromDb();
   // The user's language preference is standing context baked into the agent
   // instance (one global preference), so every workflow — movie, series, type2,
   // anime — searches with it. No per-workflow plumbing.
@@ -777,7 +770,6 @@ export async function runNextQueuedWorkflow() {
   const storage = await getWorkerStorageExecutor(accountId);
   const parents = await getWorkerStorageParents(accountId);
   const resolveAccountContext = buildAccountContextResolver();
-  const startedAt = new Date().toISOString();
   const onAuthErrorFreeze = (id: string, reason: string) => freezeConnectedStorage(id, reason);
   // ★ 2026-09-12：type1 全季(40 集跨季任务)的年守卫数据源 —— 队列侧此前从未注入
   // 元数据同步,播出日只在 type3 巡检侧有,全季获取的守卫因此永久惰性。
@@ -800,7 +792,6 @@ export async function runNextQueuedWorkflow() {
     ...(syncSeasonMetadata ? { syncSeasonMetadata } : {}),
   });
   if (outcome.status !== "idle") {
-    await pushNotificationsSince(repository, startedAt);
   }
   return outcome;
 }
@@ -1068,86 +1059,6 @@ export async function reserveCandidate(
   return { status: request.status, trackedSeasonId: `${movie.title.id}_movie` };
 }
 
-/**
- * Outbound push rides on the feed: whatever notifications a run persisted
- * are delivered to every user-configured channel (DB config > env). Delivery
- * failures are logged, never thrown — the run already succeeded.
- */
-async function pushNotificationsSince(
-  targetRepository: WorkflowRepository,
-  sinceIso: string,
-): Promise<void> {
-  try {
-    // Cross-account: the drain/sweep may have completed runs for several accounts.
-    // Each notification is tagged with its owning account so it goes to THAT
-    // user's channels (push config resolved per-account: account → global → env).
-    // since is applied in the repository BEFORE the limit so a large sweep's
-    // earliest notifications are not crowded out by newer already_current noise.
-    // Cap is high enough for a full patrol of a large library; still bounded.
-    const recent = await targetRepository.listRecentNotificationsWithAccount({
-      since: sinceIso,
-      limit: 10_000,
-    });
-    if (recent.length === 0) {
-      return;
-    }
-
-    type RecentEntry = { connectedStorageId: string | null; notification: NotificationEvent };
-    const byAccount = new Map<string, RecentEntry[]>();
-    for (const { accountId, connectedStorageId, notification } of recent) {
-      const list = byAccount.get(accountId) ?? [];
-      list.push({ connectedStorageId, notification });
-      byAccount.set(accountId, list);
-    }
-
-    for (const [accountId, entries] of byAccount) {
-      const settings = getAccountScopedSettings(accountId);
-      // Source-drive tags: only when this account has ≥2 drives mounted (else the
-      // map is empty and no message carries a source). Resolution is null/unknown
-      // safe (legacy run or unbound drive → that entry is simply not tagged).
-      const drives = await targetRepository.listConnectedStorages(accountId);
-      const sourceLabels = resolveDriveSourceLabels(entries, drives);
-
-      const notifications = entries.map((entry) => entry.notification);
-      // A scheduled sweep touches many shows; collapse this account's into ONE
-      // digest. User-triggered events stay per-resource — each its own message.
-      const scheduled = notifications.filter((notification) => notification.trigger === "scheduled");
-      const individual = notifications.filter((notification) => notification.trigger !== "scheduled");
-
-      for (const notification of individual) {
-        const sourceLabel = sourceLabels.get(notification.id);
-        try {
-          await sendPushNotifications({ repository: settings, notification, ...(sourceLabel ? { sourceLabel } : {}) });
-        } catch (error) {
-          console.error(
-            `[media-track] push for ${notification.id} failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-
-      if (scheduled.length > 0) {
-        const digest: NotificationEvent = {
-          id: `digest_${accountId}_${sinceIso}`,
-          workflowRunId: scheduled[0]!.workflowRunId,
-          kind: "daily_digest",
-          title: "每日巡检",
-          body: formatDailyDigestPushText(scheduled, { sourceLabelById: sourceLabels }),
-          createdAt: new Date().toISOString(),
-          trigger: "scheduled",
-        };
-        try {
-          await sendPushNotifications({ repository: settings, notification: digest });
-        } catch (error) {
-          console.error(
-            `[media-track] digest push failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-    }
-  } catch (error) {
-    console.error(`[media-track] notification push batch failed: ${String(error)}`);
-  }
-}
 
 export async function queueCandidateSeries(
   candidateId: string,
@@ -1339,7 +1250,6 @@ export async function runScheduledType3(options?: {
   }
   let result: Awaited<ReturnType<typeof runScheduledType3Monitoring>>;
   try {
-    await hydratePan115CookieFromDb();
     const sync = tmdbSeasonMetadataSync();
     const accountId = await getCurrentAccountId();
     const { model, preferredLanguage, qualityPreference } = await getAgentModel(getAccountScopedSettings(accountId));
@@ -1360,7 +1270,6 @@ export async function runScheduledType3(options?: {
       ...(sync ? { syncSeasonMetadata: sync } : {}),
     });
     await repository.setSetting(LAST_SWEEP_COMPLETED_AT_SETTING_KEY, new Date().toISOString());
-    await pushNotificationsSince(repository, startedAt);
     return { outcomes: result };
   } catch (error) {
     // The sweep failed before completing — release THIS call's claims (keep the
@@ -1972,9 +1881,8 @@ export async function workerHasConfiguredDrive(): Promise<boolean> {
   if ((process.env.MEDIA_TRACK_STORAGE_ADAPTER ?? "fake") !== "115") {
     return true; // fake/dev executor never needs a cookie
   }
-  if ((process.env.PAN115_COOKIE ?? "").trim().length > 0) {
-    return true; // legacy env-cookie bootstrap path
-  }
+  // env PAN115_COOKIE direct-connect removed (2026-09-18): a drive must be
+  // linked via the Web flow (connected_storage row). Only that counts.
   try {
     return await getWorkflowRepository().hasAnyConnectedStorage();
   } catch {
@@ -2021,8 +1929,11 @@ async function getWorkerStorageExecutor(
         ...(creds.moviesCid ? { moviesDirectoryId: creds.moviesCid } : {}),
       });
     }
-    // No drive bound yet → legacy env-cookie 115 path (fresh deploy bootstrap).
-    return createProtectedPan115CookieStorageExecutorFromEnv({ env: process.env });
+    // No drive bound yet: env PAN115_COOKIE direct-connect was removed
+    // (2026-09-18) — connecting a drive via the Web flow is mandatory.
+    throw new Error(
+      "115 网盘未连接：请在设置页完成网盘绑定后再开始获取（env PAN115_COOKIE 直连已移除）",
+    );
   }
   if (adapter !== "fake") {
     throw new Error(`MEDIA_TRACK_STORAGE_ADAPTER_UNSUPPORTED: ${adapter}`);
@@ -2211,9 +2122,9 @@ function storageDirectoryIdForCandidate(_candidateId: string): string {
 }
 
 function storageParentDirectoryId(): string {
-  // 目录落点只认连接时建的树（DB CID，目录名可用 MEDIA_TRACK_LIBRARY_*_DIR 定制）；
-  // env 兜底仅剩开发用的 TEST_ROOT_CID（*_PARENT_CID 三件套已于 2026-09-18 删除）。
-  return process.env.MEDIA_TRACK_115_TEST_ROOT_CID ?? "fake_library_root";
+  // 目录落点只认连接时建的树（DB CID，目录名可用 MEDIA_TRACK_LIBRARY_*_DIR 定制）。
+  // 115 直连 env（TEST_ROOT_CID 等）已全部移除（2026-09-18）：fake 模式用假根。
+  return "fake_library_root";
 }
 
 /** Anime landing parent — co-locates with TV unless the connected drive's
@@ -2272,33 +2183,18 @@ export async function importForeignWorkFiles(input: {
 }
 
 function moviesParentDirectoryId(): string {
-  return process.env.MEDIA_TRACK_115_TEST_ROOT_CID ?? "fake_movies_root";
+  return "fake_movies_root";
 }
 
 // ---------------------------------------------------------------------------
-// 115 connection (QR login) — cookie lives in the DB once connected; the
-// repo-root .env PAN115_COOKIE remains the bootstrap fallback.
+// 115 connection (QR login) — cookie lives in the DB (connected_storage row)
+// once connected; env PAN115_COOKIE direct-connect was removed (2026-09-18).
 
 const PAN115_COOKIE_KEY = "pan115.cookie";
 const PAN115_META_KEY = "pan115.cookieMeta";
 
-let pan115CookieHydrated = false;
-
-/** DB cookie (newer truth from QR connect) wins over the .env bootstrap. */
-export async function hydratePan115CookieFromDb(): Promise<void> {
-  if (pan115CookieHydrated) {
-    return;
-  }
-  pan115CookieHydrated = true;
-  try {
-    const cookie = await getWorkflowRepository().getSetting(PAN115_COOKIE_KEY);
-    if (cookie) {
-      process.env.PAN115_COOKIE = cookie;
-    }
-  } catch (error) {
-    console.error(`[media-track] failed to hydrate 115 cookie from DB: ${String(error)}`);
-  }
-}
+// 115 直连移除后（2026-09-18）不再存在「DB cookie → env 镜像」这一步：
+// 执行器一律经 createExecutorForBrand 显式拿 connected_storage 的 cookie。
 
 /**
  * After unbinding a pan115 drive: drop the legacy global cookie mirror when it
@@ -2318,19 +2214,11 @@ export async function clearPan115GlobalMirrorForUnboundDrive(
       await repository.deleteSetting(PAN115_META_KEY);
     }
   }
-  const envCookie = (process.env.PAN115_COOKIE ?? "").trim();
-  if (envCookie) {
-    const envUid = parsePan115Uid(envCookie);
-    if (envUid === null || envUid === providerUid) {
-      delete process.env.PAN115_COOKIE;
-    }
-  }
-  pan115CookieHydrated = false;
 }
 
 export interface Pan115ConnectionStatus {
   connected: boolean;
-  source: "qr" | "env" | "none";
+  source: "qr" | "none";
   userName: string | null;
   app: string | null;
   connectedAt: string | null;
@@ -2354,9 +2242,6 @@ export async function getPan115ConnectionStatus(): Promise<Pan115ConnectionStatu
       app: meta.app ?? null,
       connectedAt: meta.connectedAt ?? null,
     };
-  }
-  if (process.env.PAN115_COOKIE) {
-    return { connected: true, source: "env", userName: null, app: null, connectedAt: null };
   }
   return { connected: false, source: "none", userName: null, app: null, connectedAt: null };
 }
@@ -2544,9 +2429,9 @@ async function bindPan115ConnectedStorage(input: {
   }
   // insert: provision a fresh media-track/ tree under the 115 root (dir names
   // customizable via MEDIA_TRACK_LIBRARY_*_DIR). Provisioning is best-effort —
-  // a failure still stores the connection (worker falls back to TEST_ROOT_CID).
+  // a failure still stores the connection (落点解析再提示重新连接建树)。
   let cids = {
-    rootCid: process.env.MEDIA_TRACK_115_TEST_ROOT_CID ?? null,
+    rootCid: null as string | null,
     moviesCid: null as string | null,
     tvCid: null as string | null,
     animeCid: null as string | null,
@@ -2616,6 +2501,8 @@ export async function completePan115QrLogin(input: {
   // global setting + env so the legacy env path keeps working. Multi-user accounts
   // do NOT pollute the shared global cookie.
   if (accountId === DEFAULT_ACCOUNT_ID) {
+    // 115 直连移除后（2026-09-18）不再镜像 env：驱动器一律以 connected_storage
+    // 为准，global cookie setting 仅保留给历史迁移路径（migrateLegacyCookie）。
     await repository.setSetting(PAN115_COOKIE_KEY, result.cookie);
     await repository.setSetting(
       PAN115_META_KEY,
@@ -2625,8 +2512,6 @@ export async function completePan115QrLogin(input: {
         connectedAt: new Date().toISOString(),
       }),
     );
-    process.env.PAN115_COOKIE = result.cookie;
-    pan115CookieHydrated = true;
   }
   return { userName: result.userName, app: result.app };
 }

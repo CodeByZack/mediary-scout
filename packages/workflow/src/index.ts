@@ -48,7 +48,6 @@ export * from "./pan115-storage-factory.js";
 export * from "./queries.js";
 export * from "./search-view.js";
 export * from "./runtime-policy.js";
-export * from "./notify.js";
 export * from "./pan115-qrcode-login.js";
 export * from "./acquisition-v2/storage-115-simulator.js";
 export * from "./acquisition-v2/fake-provider.js";

@@ -6,7 +6,6 @@ import {
   createEpisodeStates,
   episodeCode,
   formatBytes,
-  formatDailyDigestPushText,
   formatReportPushText,
   landedSize,
   type EpisodeState,
@@ -320,88 +319,5 @@ describe("formatReportPushText", () => {
 
   it("omits the size line when size facts are absent (never a bare 🎞)", () => {
     expect(formatReportPushText(buildMovieReport("奥本海默"))).not.toContain("🎞");
-  });
-});
-
-describe("formatDailyDigestPushText", () => {
-  it("merges a sweep into one digest: changed shows detailed, unchanged collapsed", () => {
-    const text = formatDailyDigestPushText([
-      scheduledNotification({ titleName: "翘楚", seasonLabel: "第 1 季", kind: "episodes_restored", newlyObtained: ["E13"], realMissing: [] }),
-      scheduledNotification({ titleName: "灿烂的她", seasonLabel: "第 2 季", kind: "episodes_restored", newlyObtained: ["E10"], realMissing: ["E05"] }),
-      scheduledNotification({ titleName: "庆余年", seasonLabel: "第 2 季", kind: "tracking_completed", newlyObtained: [], realMissing: [] }),
-      scheduledNotification({ titleName: "迷雾追踪", seasonLabel: "第 1 季", kind: "already_current", newlyObtained: [], realMissing: [] }),
-    ]);
-    // No "每日巡检" header line in the body — the push title field carries it.
-    expect(text).not.toContain("📺 每日巡检");
-    expect(text).toContain("翘楚 第 1 季");
-    expect(text).toContain("E13");
-    expect(text).toContain("灿烂的她 第 2 季");
-    expect(text).toContain("E05");
-    expect(text).toContain("庆余年 第 2 季");
-    // Unchanged shows are NAMED, not just counted, so the digest is informative.
-    expect(text).toContain("其余已是最新：迷雾追踪");
-  });
-
-  it("reports no updates when nothing changed", () => {
-    const text = formatDailyDigestPushText([
-      scheduledNotification({ titleName: "迷雾追踪", seasonLabel: "第 1 季", kind: "already_current", newlyObtained: [], realMissing: [] }),
-    ]);
-    expect(text).toContain("无更新");
-  });
-
-  it("renders markdown (bold names, bullet list) so the push isn't a flat blob", () => {
-    const text = formatDailyDigestPushText([
-      scheduledNotification({ titleName: "翘楚", seasonLabel: "第 1 季", kind: "episodes_restored", newlyObtained: ["E13"], realMissing: [] }),
-    ]);
-    expect(text).toContain("**翘楚 第 1 季**"); // bold name renders on Server酱
-    expect(text).toMatch(/^- /m); // markdown bullet, not a "·" text prefix
-  });
-
-  it("appends per-episode size to a changed show's digest line when known", () => {
-    const text = formatDailyDigestPushText([
-      scheduledNotification({
-        titleName: "一人之下",
-        seasonLabel: "第 6 季",
-        kind: "episodes_restored",
-        newlyObtained: ["E04"],
-        realMissing: [],
-        fileCount: 12,
-        totalBytes: 12 * 410 * MB,
-      }),
-    ]);
-    expect(text).toContain("约 410 MB");
-  });
-
-  it("a changed show with no episode delta shows its concrete progress line, not a vague 已更新", () => {
-    const text = formatDailyDigestPushText([
-      scheduledNotification({ titleName: "达顿牧场", seasonLabel: "第 1 季", kind: "episodes_restored", newlyObtained: [], realMissing: [] }),
-    ]);
-    expect(text).toContain("已获取至最新"); // report.lines[0], the real progress
-    expect(text).not.toContain("已更新");
-  });
-});
-
-describe("formatDailyDigestPushText source tags", () => {
-  it("suffixes each show line with ' · 来自<盘名>' from the id→label map", () => {
-    const notif = scheduledNotification({
-      titleName: "斗破苍穹",
-      seasonLabel: "第 5 季",
-      kind: "episodes_restored",
-      newlyObtained: ["E06"],
-      realMissing: [],
-    });
-    const map = new Map([[notif.id, "115 网盘"]]);
-    const out = formatDailyDigestPushText([notif], { sourceLabelById: map });
-    expect(out).toContain("· 来自115 网盘");
-  });
-  it("no opts → identical to current (no 来自 suffix)", () => {
-    const notif = scheduledNotification({
-      titleName: "斗破苍穹",
-      seasonLabel: "第 5 季",
-      kind: "episodes_restored",
-      newlyObtained: ["E06"],
-      realMissing: [],
-    });
-    expect(formatDailyDigestPushText([notif])).not.toContain("来自");
   });
 });

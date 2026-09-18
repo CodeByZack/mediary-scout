@@ -96,11 +96,11 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
 
 <div class="dash">
   <div class="cell total">
-    <div class="num">33</div>
+    <div class="num">29</div>
     <div class="lbl">环境变量总数（清理后）</div>
   </div>
   <div class="cell ok">
-    <div class="num">33</div>
+    <div class="num">29</div>
     <div class="lbl">✅ 活跃使用中</div>
   </div>
   <div class="cell warn">
@@ -197,34 +197,10 @@ footer { margin-top: 40px; color: var(--mut); font-size: 12px; text-align: cente
   <div class="group-header">
     <span class="group-icon">☁️</span>
     <span class="group-title">115 网盘配置</span>
-    <span class="group-count">6 个变量 &middot; 全部活跃</span>
+    <span class="group-count">2 个变量 &middot; 全部活跃</span>
   </div>
   <table>
     <tr><th>变量</th><th>作用</th><th>说明</th><th>源文件</th></tr>
-    <tr>
-      <td><code class="varname">PAN115_COOKIE</code></td>
-      <td class="desc">115 网盘的认证 Cookie 字符串</td>
-      <td class="desc">必需（真实 115 模式）</td>
-      <td class="src">workflow-runtime.ts, pan115-storage-factory.ts, storage-115-executor.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_115_TEST_ROOT_CID</code></td>
-      <td class="desc">开发/测试根目录 CID（未设 WRITE_SCOPE 时的写权限边界）</td>
-      <td class="desc">开发模式用</td>
-      <td class="src">storage-115-executor.ts, workflow-runtime.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_115_WRITE_SCOPE_CIDS</code></td>
-      <td class="desc">显式写权限 CID 列表（逗号分隔，生产用）</td>
-      <td class="desc">与 TEST_ROOT 二选一</td>
-      <td class="src">storage-115-executor.ts, storage-executor-factory.ts</td>
-    </tr>
-    <tr>
-      <td><code class="varname">MEDIA_TRACK_115_PROTECTED_CIDS</code></td>
-      <td class="desc">受保护目录 CID 列表（只读，禁止写入）</td>
-      <td class="desc">逗号分隔</td>
-      <td class="src">storage-115-executor.ts</td>
-    </tr>
     <tr>
       <td><code class="varname">MEDIA_TRACK_115_MIN_DELAY_MS</code></td>
       <td class="desc">115 API 调用之间的最小间隔（毫秒，防限流）</td>

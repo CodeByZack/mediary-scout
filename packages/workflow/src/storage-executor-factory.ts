@@ -41,14 +41,10 @@ export function createExecutorForBrand(input: {
   onCredentialRefresh?: (creds: unknown) => void | Promise<void>;
 }): StorageExecutor {
   if (input.provider === "pan115") {
-    const cookie = input.cookie ?? "";
-    const env = {
-      ...(input.env ?? process.env),
-      PAN115_COOKIE: cookie,
-      ...(input.scopeCids.length > 0 ? { MEDIA_TRACK_115_WRITE_SCOPE_CIDS: input.scopeCids.join(",") } : {}),
-    };
     return createProtectedPan115CookieStorageExecutorFromEnv({
-      env,
+      ...(input.env !== undefined ? { env: input.env } : {}),
+      cookie: input.cookie ?? "",
+      writeScopeDirectoryIds: input.scopeCids,
       ...(input.moviesDirectoryId !== undefined ? { moviesDirectoryId: input.moviesDirectoryId } : {}),
     });
   }

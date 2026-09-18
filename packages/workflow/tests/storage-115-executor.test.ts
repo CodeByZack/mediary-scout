@@ -37,10 +37,10 @@ describe("Storage115Executor", () => {
     expect(() =>
       createProtectedStorage115Executor({
         api: new FakePan115Api(),
-        env: {},
+        writeScopeDirectoryIds: [],
         apiGuardOptions: { minDelayMs: 0 },
       }),
-    ).toThrow("MEDIA_TRACK_115_WRITE_SCOPE_REQUIRED");
+    ).toThrow("WRITE_SCOPE_REQUIRED");
   });
 
   it("createBootstrapPan115CookieStorageExecutor does NOT require a write scope (escapes the provisioning catch-22)", () => {
@@ -68,9 +68,7 @@ describe("Storage115Executor", () => {
     });
     const executor = createProtectedStorage115Executor({
       api,
-      env: {
-        MEDIA_TRACK_115_TEST_ROOT_CID: "test_root",
-      },
+      writeScopeDirectoryIds: ["test_root"],
       apiGuardOptions: { minDelayMs: 0 },
     });
 
@@ -113,10 +111,8 @@ describe("Storage115Executor", () => {
   it("marks configured 115 library roots and the test root as protected flatten targets", async () => {
     const executor = createProtectedStorage115Executor({
       api: new FakePan115Api(),
-      env: {
-        MEDIA_TRACK_115_TEST_ROOT_CID: "test_root",
-        MEDIA_TRACK_115_PROTECTED_CIDS: "media_root,tv_root",
-      },
+      writeScopeDirectoryIds: ["test_root"],
+      protectedDirectoryIds: ["test_root", "media_root", "tv_root"],
       apiGuardOptions: { minDelayMs: 0 },
     });
 
@@ -131,10 +127,8 @@ describe("Storage115Executor", () => {
   it("refuses recursive listing of protected root/parent/category directories", async () => {
     const executor = createProtectedStorage115Executor({
       api: new FakePan115Api(),
-      env: {
-        MEDIA_TRACK_115_TEST_ROOT_CID: "test_root",
-        MEDIA_TRACK_115_PROTECTED_CIDS: "media_root,tv_root",
-      },
+      writeScopeDirectoryIds: ["test_root"],
+      protectedDirectoryIds: ["test_root", "media_root", "tv_root"],
       apiGuardOptions: { minDelayMs: 0 },
     });
 
@@ -981,8 +975,8 @@ describe("Storage115Executor", () => {
     });
     const executor = createProtectedStorage115Executor({
       api,
+      writeScopeDirectoryIds: ["test_root"],
       env: {
-        MEDIA_TRACK_115_TEST_ROOT_CID: "test_root",
         MEDIA_TRACK_115_MAX_API_CALLS: "2",
         MEDIA_TRACK_115_MIN_DELAY_MS: "1",
       },
@@ -999,8 +993,8 @@ describe("Storage115Executor", () => {
     expect(() =>
       createProtectedStorage115Executor({
         api: new FakePan115Api(),
+        writeScopeDirectoryIds: ["test_root"],
         env: {
-          MEDIA_TRACK_115_TEST_ROOT_CID: "test_root",
           MEDIA_TRACK_115_MAX_API_CALLS: "many",
         },
       }),
@@ -1051,7 +1045,7 @@ describe("Storage115Executor.transferSubtitleUrl", () => {
     };
     const executor = createProtectedStorage115Executor({
       api,
-      env: { MEDIA_TRACK_115_TEST_ROOT_CID: "test_root" },
+      writeScopeDirectoryIds: ["test_root"],
       apiGuardOptions: { minDelayMs: 0 },
       subtitleMaterializeAttempts: 1,
       subtitleMaterializePollMs: 1,
