@@ -118,18 +118,16 @@ describe("unbindStorageAction (B4)", () => {
     else delete process.env.PAN115_COOKIE;
   });
 
-  it("unbind pan115 clears pan115.cookie setting + matching env mirror", async () => {
+  it("unbind pan115 clears pan115.cookie setting (env mirror 随直连移除，2026-09-18)", async () => {
     await repo.upsertConnectedStorage(pan115Drive());
     await repo.setSetting("pan115.cookie", "UID=100000001_A; CID=c; SEID=s");
     await repo.setSetting("pan115.cookieMeta", JSON.stringify({ userName: "alice" }));
-    process.env.PAN115_COOKIE = "UID=100000001_A; CID=c; SEID=s";
 
     const result = await actions.unbindStorageAction("cs_100000001");
     expect(result.ok).toBe(true);
     expect(await repo.listConnectedStorages("acct_default")).toEqual([]);
     expect(await repo.getSetting("pan115.cookie")).toBeNull();
     expect(await repo.getSetting("pan115.cookieMeta")).toBeNull();
-    expect(process.env.PAN115_COOKIE).toBeUndefined();
   });
 
   it("unbind refuses when the drive has active runs", async () => {
