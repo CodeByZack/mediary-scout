@@ -66,12 +66,11 @@ export function resolveRuntimeMode(raw: string | undefined): ResolvedMode {
  */
 export function applyRuntimeMode(env: Record<string, string | undefined>): void {
   const mode = env.MEDIA_TRACK_MODE;
+  console.log(`[runtime-mode] applyRuntimeMode called, MEDIA_TRACK_MODE="${mode}"`);
+  
   const resolved = resolveRuntimeMode(mode);
   
-  // Debug: log the resolved mode to verify the resolver is working
-  if (mode) {
-    console.log(`[runtime-mode] MEDIA_TRACK_MODE=${mode} → storage=${resolved.storageAdapter}, workflow=${resolved.workflowAdapter}, agent=${resolved.agentAdapter}, demo=${resolved.demoMode}`);
-  }
+  console.log(`[runtime-mode] resolved: storage=${resolved.storageAdapter}, workflow=${resolved.workflowAdapter}, agent=${resolved.agentAdapter}, demo=${resolved.demoMode}`);
   
   env.MEDIA_TRACK_STORAGE_ADAPTER = resolved.storageAdapter;
   env.MEDIA_TRACK_WORKFLOW_ADAPTER = resolved.workflowAdapter;
@@ -79,6 +78,7 @@ export function applyRuntimeMode(env: Record<string, string | undefined>): void 
   env.MEDIA_TRACK_DEMO_MODE = resolved.demoMode ? "1" : "0";
   env.NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE = resolved.demoMode ? "1" : "0";
   env.MEDIA_TRACK_DEMO_SEED = resolved.demoSeed ? "1" : "0";
-  // Also set search provider: fake mode uses demo search, normal uses tmdb
   env.MEDIA_TRACK_SEARCH_PROVIDER = mode === "fake" || mode === "demo" ? "demo" : "tmdb";
+  
+  console.log(`[runtime-mode] applied. MEDIA_TRACK_AGENT_ADAPTER="${env.MEDIA_TRACK_AGENT_ADAPTER}"`);
 }
