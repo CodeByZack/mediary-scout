@@ -73,8 +73,10 @@ services:
       MEDIA_TRACK_SQLITE_PATH: /data/mediary.db
       # Bundled PanSou via the compose service name (override per-instance in 设置).
       PANSOU_BASE_URL: http://pansou
-      MEDIA_TRACK_SEARCH_PROVIDER: tmdb
-      # 运行模式：normal=真实 LLM+真实网盘（默认）；fake=stub+假网盘；demo=只读演示
+      # 运行模式（resolver 启动时统一解析 adapter/search/demo 变量）：
+      #   normal = 真实 LLM+真实网盘+真实搜索（默认）
+      #   fake   = stub LLM + 假网盘 + 真实 TMDB 搜索（零配置零费用跑通）
+      #   demo   = 只读演示站（固定示例库 + 禁止写操作）
       MEDIA_TRACK_MODE: normal
       # 可观测性:完整有序的 agent 逐步轨迹始终落 agent_steps 表(查库即可复盘)。
       # 额外把每一步打到 stdout(docker compose logs web)是 OPT-IN —— 它会把工具参数

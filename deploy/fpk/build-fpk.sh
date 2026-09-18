@@ -63,9 +63,9 @@ FNPACK_BIN="${FNPACK_BIN:-fnpack}"
 command -v "${FNPACK_BIN}" >/dev/null 2>&1 || { echo "fnpack 不存在: ${FNPACK_BIN}（本机 /usr/local/bin/fnpack，CI 由 workflow 下载）" >&2; exit 1; }
 echo "==> fnpack: ${FNPACK_BIN}"
 
-# ---- 0.7 运行模式：FPK_RUNTIME（normal 真 LLM+真网盘 | fake stub+假网盘 | demo 只读演示）----
-# fake 模式与 preview（3100 全 fake）一致：stub LLM + 假网盘 + 假搜索，零费用。
-# demo 模式：fake 数据 + 只读门禁 + 种子数据。
+# ---- 0.7 运行模式：FPK_RUNTIME（normal 真 LLM+真网盘 | fake stub+假网盘+真 TMDB 搜索 | demo 只读演示）----
+# fake 模式：stub LLM + 假网盘 + 真实 TMDB 搜索（免费、无需 key），零配置零费用
+# 跑通真实剧集全流程，不碰真实网盘。demo 模式：固定示例库 + 只读门禁 + 种子数据。
 # normal（默认）：全量真实配置。
 FPK_RUNTIME="${FPK_RUNTIME:-normal}"
 case "${FPK_RUNTIME}" in

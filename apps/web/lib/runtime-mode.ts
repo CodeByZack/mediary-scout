@@ -11,8 +11,8 @@
  *
  * 三个值：
  *   normal (默认) — 真实 LLM + 真实网盘 + 真实搜索
- *   fake         — stub LLM + 假网盘 + 假搜索（零配置）
- *   demo         — 只读演示站（fake 数据 + 禁止写操作 + 种子数据）
+ *   fake         — stub LLM + 假网盘 + 真实 TMDB 搜索（零配置零费用跑通真实剧集，不碰真实网盘）
+ *   demo         — 只读演示站（固定示例库 + 假网盘 + 禁止写操作 + 种子数据）
  */
 
 export type RuntimeMode = "normal" | "fake" | "demo";
@@ -21,6 +21,7 @@ export interface ResolvedMode {
   storageAdapter: string;
   workflowAdapter: string;
   agentAdapter: string;
+  searchProvider: string;
   demoMode: boolean;
   demoSeed: boolean;
 }
@@ -35,6 +36,9 @@ export function resolveRuntimeMode(raw: string | undefined): ResolvedMode {
         storageAdapter: "fake",
         workflowAdapter: "fake",
         agentAdapter: "fake",
+        // fake ≈ 零费用自用：搜索保持真实 TMDB（免费、无需 key），
+        // 用户能搜到真实剧集并跑通全流程；只有候选/网盘/LLM 是假的。
+        searchProvider: "tmdb",
         demoMode: false,
         demoSeed: false,
       };
@@ -43,6 +47,9 @@ export function resolveRuntimeMode(raw: string | undefined): ResolvedMode {
         storageAdapter: "fake",
         workflowAdapter: "fake",
         agentAdapter: "fake",
+        // demo = 公开演示站：用固定示例库（demo-candidates.ts），
+        // 陌生人无需 TMDB key 也能体验，且禁止一切写操作。
+        searchProvider: "demo",
         demoMode: true,
         demoSeed: true,
       };
@@ -52,6 +59,7 @@ export function resolveRuntimeMode(raw: string | undefined): ResolvedMode {
         storageAdapter: "115",
         workflowAdapter: "pansou",
         agentAdapter: "vercel-ai",
+        searchProvider: "tmdb",
         demoMode: false,
         demoSeed: false,
       };
@@ -78,7 +86,7 @@ export function applyRuntimeMode(env: Record<string, string | undefined>): void 
   env.MEDIA_TRACK_DEMO_MODE = resolved.demoMode ? "1" : "0";
   env.NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE = resolved.demoMode ? "1" : "0";
   env.MEDIA_TRACK_DEMO_SEED = resolved.demoSeed ? "1" : "0";
-  env.MEDIA_TRACK_SEARCH_PROVIDER = mode === "fake" || mode === "demo" ? "demo" : "tmdb";
+  env.MEDIA_TRACK_SEARCH_PROVIDER = resolved.searchProvider;
   
   console.log(`[runtime-mode] applied. MEDIA_TRACK_AGENT_ADAPTER="${env.MEDIA_TRACK_AGENT_ADAPTER}"`);
 }
