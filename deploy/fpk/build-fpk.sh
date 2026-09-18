@@ -236,6 +236,7 @@ if [ -f "${CMD_MAIN}" ]; then
     sed -i '/^export MEDIA_TRACK_STORAGE_ADAPTER=/d' "${CMD_MAIN}"
     sed -i '/^export MEDIA_TRACK_WORKFLOW_ADAPTER=/d' "${CMD_MAIN}"
     sed -i '/^export MEDIA_TRACK_AGENT_ADAPTER=/d' "${CMD_MAIN}"
+    sed -i '/^export MEDIA_TRACK_SEARCH_PROVIDER=/d' "${CMD_MAIN}"
     sed -i '/^export MEDIA_TRACK_DEMO_MODE=/d' "${CMD_MAIN}"
     sed -i '/^export NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE=/d' "${CMD_MAIN}"
     sed -i '/^export MEDIA_TRACK_DEMO_SEED=/d' "${CMD_MAIN}"
