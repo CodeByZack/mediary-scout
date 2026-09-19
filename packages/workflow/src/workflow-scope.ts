@@ -1,4 +1,4 @@
-import { DEFAULT_ACCOUNT_ID } from "./domain.js";
+import { DEFAULT_ACCOUNT_ID, type MediaType } from "./domain.js";
 import { getStorageBrand, isRegisteredStorageProvider } from "./storage-brands.js";
 
 /** The data partition key for the multi-drive tree model: an account (identity)
@@ -264,7 +264,7 @@ export function showHref(
   tmdbId: number,
   from: "search" | "library",
   activeStorageId: string | undefined,
-  type?: "movie" | "tv" | "anime",
+  type?: MediaType,
 ): string {
   let href = `/show/${tmdbId}?from=${from}`;
   if (activeStorageId) {

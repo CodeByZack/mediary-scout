@@ -83,7 +83,7 @@ function seriesFixture(input: {
   tmdbId: number;
   title: string;
   year: number;
-  type: "tv" | "anime";
+  type: "tv" | "anime" | "variety";
   posterPath: string;
   backdropPath: string | null;
   storageDirectoryId: string;
@@ -143,7 +143,7 @@ type CuratedMovie = {
 type CuratedSeries = {
   kind: "series";
   drive: Drive;
-  type: "tv" | "anime";
+  type: "tv" | "anime" | "variety";
   tmdbId: number;
   title: string;
   year: number;
@@ -170,6 +170,7 @@ const CURATED: Curated[] = [
   { kind: "series", drive: "pan115", type: "anime", tmdbId: 1429, title: "进击的巨人", year: 2013, posterPath: "/1j3s19nko8OtGhCRwRMDGmr0m5O.jpg", backdropPath: "/rqbCbjB19amtOtFQbb3K2lgm2zv.jpg", totalEpisodes: 28, latestAired: 28, obtainedCount: 28, status: "completed" },
   { kind: "series", drive: "pan115", type: "anime", tmdbId: 120089, title: "间谍过家家", year: 2022, posterPath: "/xkEGd9GF3oty89xDiXMGJm6pGQL.jpg", backdropPath: "/lysUnU6V0VfcthDbviuVlIqgHOR.jpg", totalEpisodes: 12, latestAired: 8, obtainedCount: 8, status: "active" },
   { kind: "series", drive: "pan115", type: "anime", tmdbId: 85937, title: "鬼灭之刃", year: 2019, posterPath: "/tZ0yGfG4EIox7bYJTxAtqUhoOmR.jpg", backdropPath: "/3GQKYh6Trm8pxd2AypovoYQf4Ay.jpg", totalEpisodes: 11, latestAired: 11, obtainedCount: 7, status: "completed" },
+  { kind: "series", drive: "pan115", type: "variety", tmdbId: 296202, title: "地球超新鲜", year: 2025, posterPath: "/olnV8BefOFnj3U3qcvlYdylAzDq.jpg", backdropPath: "/8KjVA97182D6RF1cDl6bE6o7zAz.jpg", totalEpisodes: 20, latestAired: 17, obtainedCount: 17, status: "active" },
   // ---- quark drive ----
   { kind: "movie", drive: "quark", tmdbId: 278, title: "肖申克的救赎", year: 1994, posterPath: "/Aqo8yM5S5ZEdlcyeBBxj7s0vkTf.jpg", backdropPath: "/zfbjgQE1uSd9wiPTX4VzsLi0rGG.jpg" },
   { kind: "movie", drive: "quark", tmdbId: 13, title: "阿甘正传", year: 1994, posterPath: "/pplybKImR7LKzSVzRylK6Cl4dzm.jpg", backdropPath: "/66Kn4XWhkuPkJxOJyPEx4U2CUfN.jpg" },

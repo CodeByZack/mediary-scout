@@ -107,7 +107,7 @@ async function ShowContent({
   // untracked title — without it a movie id can resolve to an unrelated tv show.
   const tParam = params0["t"];
   const tRaw = Array.isArray(tParam) ? tParam[0] : tParam;
-  const typeHint = tRaw === "movie" || tRaw === "tv" || tRaw === "anime" ? tRaw : undefined;
+  const typeHint = tRaw === "movie" || tRaw === "tv" || tRaw === "anime" || tRaw === "variety" ? tRaw : undefined;
   const { tmdbId: tmdbIdParam } = await params;
   const tmdbId = Number(tmdbIdParam);
   const view = Number.isInteger(tmdbId)

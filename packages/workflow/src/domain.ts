@@ -8,7 +8,7 @@ import type { MergedSourceHealth } from "./resource-source-health.js";
  */
 export const DEFAULT_ACCOUNT_ID = "acct_default";
 
-export type MediaType = "movie" | "tv" | "anime";
+export type MediaType = "movie" | "tv" | "anime" | "variety";
 export type SeasonStatus = "active" | "completed";
 export type LatestAiredSource = "metadata" | "manual" | "unknown";
 export type AirStatus = "aired" | "unaired" | "unknown";
@@ -38,7 +38,7 @@ export interface MediaTitle {
   year: number;
   aliases: string[];
   /** TMDB origin_country (e.g. ["JP"], ["CN"]) — drives the per-media-type search
-   *  recipe (searchProfile) for tv/anime, and lets the movie agent skip the 中文
+   *  recipe (searchProfile) for tv/anime/variety, and lets the movie agent skip the 中文
    *  subtitle floor for 国产片 (CN-origin). Set for tv/anime AND movies (movie
    *  search itself stays origin-independent); absent only for demo titles. */
   originCountries?: string[];
