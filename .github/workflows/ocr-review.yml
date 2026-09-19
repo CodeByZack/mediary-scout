@@ -1,8 +1,8 @@
-# OpenCodeReview - GitHub Actions PR Auto-Review Demo
+# OpenCodeReview - GitHub Actions on-demand PR Review
 #
-# Demonstrates invoking the reusable action for both automatic PR review
-# (pull_request_target: opened/synchronize/reopened) and on-demand re-review
-# via comments starting with '/open-code-review' or '@open-code-review'.
+# 本地定制版:去掉了上游默认的 pull_request_target 自动触发(每 push 全量复审
+# 太费 token),只保留按需评审——在 PR 下评论 '/open-code-review' 或
+# '@open-code-review' 才跑,一次 PR 只花一次评审的钱。
 #
 # Required secrets/vars (Settings -> Secrets and variables -> Actions):
 #   secret    OCR_LLM_URL            LLM API endpoint
@@ -24,60 +24,14 @@ name: OpenCodeReview PR Review
 # single normal comment kills a running review, and you see "two runs, one
 # cancelled" in the Actions tab.
 #
-# Fix: matching events (PR events + /open-code-review comments) share a per-PR
-# group so a new review cancels any stale one for the same PR. Non-matching
-# comments land in a unique noop-<run_id> group that can never collide with a
-# real review, so they are skipped instantly without disrupting anything.
+# Fix: matching /open-code-review comments share a per-PR group so a new
+# review cancels any stale one for the same PR. Non-matching comments land in
+# a unique noop-<run_id> group that can never collide with a real review, so
+# they are skipped instantly without disrupting anything.
 concurrency:
   group: >-
     ${{
       (
-        github.event_name == 'pull_request_target'
-        || (
-          github.event_name == 'issue_comment'
-          && github.event.issue.pull_request
-          && github.event.comment.user.type != 'Bot'
-          && (
-            github.event.comment.author_association == 'MEMBER'
-            || github.event.comment.author_association == 'OWNER'
-            || github.event.comment.author_association == 'COLLABORATOR'
-          )
-          && (
-            startsWith(github.event.comment.body, '/open-code-review')
-            || startsWith(github.event.comment.body, '@open-code-review')
-          )
-        )
-      )
-      && format('ocr-{0}', github.event.pull_request.number || github.event.issue.number)
-      || format('noop-{0}', github.run_id)
-    }}
-  cancel-in-progress: true
-
-on:
-  # Use pull_request_target instead of pull_request so that secrets are
-  # available even for PRs from forks. This is safe because the reusable
-  # action only reads the diff and does not execute any code from the PR.
-  pull_request_target:
-    types: [opened, synchronize, reopened]
-  issue_comment:
-    types: [created]
-
-permissions:
-  contents: read
-  pull-requests: write
-
-jobs:
-  code-review:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    # Run on PR events, or on human-authored comments starting with trigger
-    # keywords. Bot comments are excluded as a safety net: GITHUB_TOKEN already
-    # suppresses events from bot-posted comments, but a PAT/App token would not.
-    # issue_comment triggers are further gated on author_association so only
-    # MEMBER/OWNER/COLLABORATOR users can spend LLM quota via re-review.
-    if: |
-      github.event_name == 'pull_request_target'
-      || (
         github.event_name == 'issue_comment'
         && github.event.issue.pull_request
         && github.event.comment.user.type != 'Bot'
@@ -90,6 +44,40 @@ jobs:
           startsWith(github.event.comment.body, '/open-code-review')
           || startsWith(github.event.comment.body, '@open-code-review')
         )
+      )
+      && format('ocr-{0}', github.event.issue.number)
+      || format('noop-{0}', github.run_id)
+    }}
+  cancel-in-progress: true
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Run only on human-authored comments starting with trigger keywords, on
+    # PRs (not plain issues). Bot comments are excluded as a safety net:
+    # GITHUB_TOKEN already suppresses events from bot-posted comments, but a
+    # PAT/App token would not. Triggers are further gated on author_association
+    # so only MEMBER/OWNER/COLLABORATOR users can spend LLM quota via re-review.
+    if: |
+      github.event.issue.pull_request
+      && github.event.comment.user.type != 'Bot'
+      && (
+        github.event.comment.author_association == 'MEMBER'
+        || github.event.comment.author_association == 'OWNER'
+        || github.event.comment.author_association == 'COLLABORATOR'
+      )
+      && (
+        startsWith(github.event.comment.body, '/open-code-review')
+        || startsWith(github.event.comment.body, '@open-code-review')
       )
     steps:
       - name: Get PR context
@@ -117,7 +105,7 @@ jobs:
           llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
           llm_model: ${{ vars.OCR_LLM_MODEL }}
           llm_use_anthropic: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
-          # For issue_comment triggers, pass the resolved refs; for
-          # pull_request_target the action resolves them from the event.
+          # issue_comment 事件没有 pull_request 负载字段,base/head 靠上面的
+          # pr-context 步骤解析后传入。
           base_ref: ${{ steps.pr-context.outputs.base_ref }}
           head_sha: ${{ steps.pr-context.outputs.head_sha }}
