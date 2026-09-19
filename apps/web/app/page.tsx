@@ -10,7 +10,7 @@ import { RememberQuery } from "../components/search-memory";
 import { SearchForm } from "../components/search-form";
 import { SeasonRequestMenu } from "../components/season-request-menu";
 import { TrendingRow } from "../components/trending-row";
-import type { TrendingKind } from "../lib/trending";
+import { isTrendingKind, type TrendingKind } from "../lib/trending";
 import { getSearchView } from "../lib/search-page";
 import {
   getInProgressTitles,
@@ -95,9 +95,11 @@ async function HomeSurface({
       ? typeParam
       : "all";
   const filter = stringParam(params.filter) || "all";
+  // `?trending=` is validated against the known feeds: an unrecognized value falls
+  // back to the default feed. The old ternary chain silently treated every unknown
+  // value as "movie", so a 4th feed would have been unreachable from the URL.
   const trendingParam = stringParam(params.trending);
-  const activeTrending: TrendingKind =
-    trendingParam === "tv" ? "tv" : trendingParam === "anime" ? "anime" : "movie";
+  const activeTrending: TrendingKind = isTrendingKind(trendingParam) ? trendingParam : "movie";
   // Tree model: keep searches inside the ACTIVE workspace so an acquisition lands
   // on the drive you're viewing — not silently on the primary drive. Root route
   // (no storageId) posts to "/" as before.

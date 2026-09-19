@@ -97,20 +97,38 @@ export function animeFirstAirDateFloor(now: Date = new Date()): string {
   return `${now.getUTCFullYear() - 1}-01-01`;
 }
 
-/** The three discovery feeds the search page shows, aligned to 电影/剧集/动漫.
+/** Rolling 6-month floor: the variety feed shows shows that are CURRENTLY
+ *  airing/recently aired. Unlike anime, variety vote counts are tiny (地球超新鲜=6,
+ *  极限挑战=14), so there is no vote_count.gte; and a first_air_date floor would
+ *  exclude long-running franchises (极限挑战 2015). MUST match apps/web/lib/
+ *  trending.ts varietyLastAirDateFloor. */
+export function varietyLastAirDateFloor(now: Date = new Date()): string {
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 6, now.getUTCDate()));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    d.getUTCDate(),
+  ).padStart(2, "0")}`;
+}
+
+/** The four discovery feeds the search page shows, aligned to 电影/剧集/动漫/综艺.
  *  Movie/TV are TMDB weekly trending. Anime has no "trending" endpoint, so it's
  *  discover/tv (日语动画) with a ROLLING first_air_date.gte (recent seasons only —
  *  bare popularity.desc surfaces decade-old classics) + vote_count.gte=50 +
  *  include_adult=false (mainstream, drops 里番/borderline). The Cron warms these
  *  and the frontend reads the SAME feed — the contract is that the PARAM SET
  *  (names+values) matches apps/web/lib/trending.ts trendingFeedQuery for the same
- *  `now`; ORDER does not matter (cacheKeyFor sorts both sides before keying). */
+ *  `now`. Variety (真人秀 10764, 中文) carries NO vote_count.gte — 综艺投票数极低
+ *  (地球超新鲜=6、极限挑战=14),the 50 floor would empty the feed — and uses the
+ *  ROLLING last_air_date.gte instead of first_air_date.gte, since classic seasons
+ *  air-debut old (极限挑战 2015) while 最近更新才是「热门」信号。ORDER does not
+ *  matter (cacheKeyFor sorts both sides before keying). */
 export function getTrendingFeeds(now: Date = new Date()): string[] {
   const floor = animeFirstAirDateFloor(now);
+  const varietyFloor = varietyLastAirDateFloor(now);
   return [
     "trending/movie/week?language=zh-CN",
     "trending/tv/week?language=zh-CN",
     `discover/tv?first_air_date.gte=${floor}&include_adult=false&language=zh-CN&sort_by=popularity.desc&vote_count.gte=50&with_genres=16&with_original_language=ja`,
+    `discover/tv?include_adult=false&language=zh-CN&last_air_date.gte=${varietyFloor}&sort_by=popularity.desc&with_genres=10764&with_original_language=zh`,
   ];
 }
 

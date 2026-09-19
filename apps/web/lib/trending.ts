@@ -1,7 +1,7 @@
 import { fetchTmdbList } from "@media-track/workflow";
 import { getTmdbAccesses, getAccountScopedSettings, getCurrentAccountId } from "./workflow-runtime";
 
-export type TrendingKind = "movie" | "tv" | "anime";
+export type TrendingKind = "movie" | "tv" | "anime" | "variety";
 
 export interface TrendingCard {
   tmdbId: number;
@@ -11,7 +11,7 @@ export interface TrendingCard {
   mediaType: "movie" | "tv";
 }
 
-/** The three discovery feeds, aligned to the app's 电影/剧集/动漫 library types.
+/** The four discovery feeds, aligned to the app's 电影/剧集/动漫/综艺 library types.
  *  path + query MUST match workers/tmdb-proxy TRENDING_FEEDS so the proxy serves
  *  the Cron-warmed KV entry (cacheKey = path + sorted query). */
 export const TRENDING_KINDS: Record<
@@ -37,9 +37,42 @@ export const TRENDING_KINDS: Record<
     },
     mediaType: "tv",
   },
+  variety: {
+    label: "热门综艺",
+    path: "discover/tv",
+    // 静态参数;动态 last_air_date.gte 由 trendingFeedQuery 注入(见下)。
+    // 与 anime 两处刻意不同(见 design §1.4):
+    //  - 无 vote_count.gte —— 综艺投票数极低(地球超新鲜=6、极限挑战=14),50 门槛全灭;
+    //  - 用 last_air_date 而非 first_air_date —— 经典季播剧首季很老(极限 2015),
+    //    first_air_date 门槛会把整部剧挡掉,而「最近一季还在更」才是热门信号。
+    query: {
+      include_adult: "false",
+      language: "zh-CN",
+      sort_by: "popularity.desc",
+      with_genres: "10764",
+      with_original_language: "zh",
+    },
+    mediaType: "tv",
+  },
 };
 
-export const TRENDING_KIND_ORDER: TrendingKind[] = ["movie", "tv", "anime"];
+export const TRENDING_KIND_ORDER: TrendingKind[] = ["movie", "tv", "anime", "variety"];
+
+/** Short noun for a card's meta line — the kind label minus the 热门 prefix, so a
+ *  card under 热门综艺 reads 「2025 · 综艺」 instead of the full tab label. */
+export const TRENDING_NOUN: Record<TrendingKind, string> = {
+  movie: "电影",
+  tv: "剧集",
+  anime: "动漫",
+  variety: "综艺",
+};
+
+/** Is this string one of the known feed kinds? Derived from the TRENDING_KINDS key
+ *  set, so a 5th feed becomes reachable automatically. Used to validate `?trending=`
+ *  (an unrecognized value must fall back, never be silently coerced). */
+export function isTrendingKind(value: string): value is TrendingKind {
+  return (Object.keys(TRENDING_KINDS) as TrendingKind[]).includes(value);
+}
 
 /** Last-calendar-year floor (rolls yearly): the anime feed shows RECENT seasons,
  *  not TMDB's all-time-popularity classics (全职猎人1999/死神2004…). MUST match
@@ -48,13 +81,28 @@ export function animeFirstAirDateFloor(now: Date = new Date()): string {
   return `${now.getUTCFullYear() - 1}-01-01`;
 }
 
-/** The query for a feed, with the rolling first_air_date.gte injected for anime.
- *  MUST match workers/tmdb-proxy getTrendingFeeds for the same `now` — cacheKeyFor
- *  sorts params, so the param SET (not order) is the contract. */
+/** Rolling 6-month floor (half a year back, calendar-relative): the variety feed
+ *  shows shows that are CURRENTLY airing/recently aired, not TMDB's all-time
+ *  popularity classics. MUST match workers/tmdb-proxy handler.ts
+ *  varietyLastAirDateFloor. */
+export function varietyLastAirDateFloor(now: Date = new Date()): string {
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 6, now.getUTCDate()));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    d.getUTCDate(),
+  ).padStart(2, "0")}`;
+}
+
+/** The query for a feed, with the rolling date floor injected for anime
+ *  (first_air_date) and variety (last_air_date). MUST match workers/tmdb-proxy
+ *  getTrendingFeeds for the same `now` — cacheKeyFor sorts params, so the param
+ *  SET (not order) is the contract. */
 export function trendingFeedQuery(kind: TrendingKind, now: Date = new Date()): Record<string, string> {
   const query = { ...TRENDING_KINDS[kind].query };
   if (kind === "anime") {
     query["first_air_date.gte"] = animeFirstAirDateFloor(now);
+  }
+  if (kind === "variety") {
+    query["last_air_date.gte"] = varietyLastAirDateFloor(now);
   }
   return query;
 }
