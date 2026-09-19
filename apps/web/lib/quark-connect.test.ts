@@ -99,6 +99,7 @@ describe("connectQuarkCookie (C10 live-check before bind)", () => {
       moviesCid: null,
       tvCid: null,
       animeCid: null,
+      varietyCid: null,
       createdAt: "2026-07-01T00:00:00.000Z",
     });
     await expect(rt.connectQuarkCookie(LIVE_COOKIE)).rejects.toBeInstanceOf(rt.StorageOwnedByOtherAccountError);

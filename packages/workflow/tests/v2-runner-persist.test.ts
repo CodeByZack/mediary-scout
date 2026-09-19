@@ -138,6 +138,7 @@ function depsFor(
     assrtToken: undefined,
     tvParentDirectoryId: undefined,
     animeParentDirectoryId: undefined,
+    varietyParentDirectoryId: undefined,
     moviesParentDirectoryId: undefined,
     ...over,
   };

@@ -85,6 +85,7 @@ async function resolveWorkerDeps(
   assrtToken: string | undefined;
   storageParentDirectoryId: string | undefined;
   animeStorageParentDirectoryId: string | undefined;
+  varietyStorageParentDirectoryId: string | undefined;
   moviesParentDirectoryId: string | undefined;
 }> {
   const ctx = resolve ? await resolve(accountId, connectedStorageId) : {};
@@ -100,6 +101,8 @@ async function resolveWorkerDeps(
       ctx.storageParentDirectoryId ?? base.storageParentDirectoryId,
     animeStorageParentDirectoryId:
       ctx.animeStorageParentDirectoryId ?? base.animeStorageParentDirectoryId,
+    varietyStorageParentDirectoryId:
+      ctx.varietyStorageParentDirectoryId ?? base.varietyStorageParentDirectoryId,
     moviesParentDirectoryId:
       ctx.moviesParentDirectoryId ?? base.moviesParentDirectoryId,
   };
@@ -143,6 +146,7 @@ export interface AccountWorkerContext {
   assrtToken?: string;
   storageParentDirectoryId?: string;
   animeStorageParentDirectoryId?: string;
+  varietyStorageParentDirectoryId?: string;
   moviesParentDirectoryId?: string;
 }
 
@@ -344,6 +348,7 @@ async function runQueuedConsumption(
         assrtToken: deps.assrtToken,
         tvParentDirectoryId: deps.storageParentDirectoryId,
         animeParentDirectoryId: deps.animeStorageParentDirectoryId,
+        varietyParentDirectoryId: deps.varietyStorageParentDirectoryId,
         // movie 语义：账号级缺失时回落全局 movies 父目录（TV 侧不读取，无影响）。
         moviesParentDirectoryId:
           deps.moviesParentDirectoryId ?? input.moviesParentDirectoryId,
@@ -398,8 +403,9 @@ export async function runQueuedType2Workflow(input: {
   qualityPreference?: "high" | "medium";
   now?: () => string;
   storageParentDirectoryId?: string;
-  /** Separate landing parent for anime (see runQueuedSeriesInitialization). */
+  /** Separate landing parents for anime / variety (see runQueuedSeriesInitialization). */
   animeStorageParentDirectoryId?: string;
+  varietyStorageParentDirectoryId?: string;
   /** §7: resolve the claimed run's per-account 115 creds + landing CIDs. */
   resolveAccountContext?: ResolveAccountWorkerContext;
   onAuthErrorFreeze?: (storageId: string, reason: string) => Promise<void>;
@@ -440,9 +446,10 @@ export async function runScheduledType3Monitoring(input: {
   preferredLanguage?: string;
   qualityPreference?: "high" | "medium";
   storageParentDirectoryId: string;
-  /** Separate landing parent for anime, so anime patrol verify-or-creates under
-   *  its own tree (see runQueuedSeriesInitialization). */
+  /** Separate landing parents for anime / variety, so their patrols verify-or-create
+   *  under their own trees (see runQueuedSeriesInitialization). */
   animeStorageParentDirectoryId?: string;
+  varietyStorageParentDirectoryId?: string;
   /** Movies category parent. When set, the sweep also patrols tracked-but-
    *  unobtained films, dispatching the MOVIE agent (by title.type) — 已上映无源
    *  films get retried until covered. Unset → movies are left alone. */
@@ -580,6 +587,7 @@ export async function runScheduledType3Monitoring(input: {
           assrtToken: deps.assrtToken,
           tvParentDirectoryId: deps.storageParentDirectoryId,
           animeParentDirectoryId: deps.animeStorageParentDirectoryId,
+          varietyParentDirectoryId: deps.varietyStorageParentDirectoryId,
           moviesParentDirectoryId: deps.moviesParentDirectoryId,
         },
         now,
@@ -770,6 +778,7 @@ async function patrolMovie(args: {
         assrtToken: deps.assrtToken,
         tvParentDirectoryId: undefined,
         animeParentDirectoryId: undefined,
+        varietyParentDirectoryId: undefined,
         moviesParentDirectoryId: moviesParent,
       },
       now,
@@ -868,9 +877,10 @@ export async function runQueuedSeriesInitialization(input: {
   preferredLanguage?: string;
   qualityPreference?: "high" | "medium";
   storageParentDirectoryId: string;
-  /** Separate landing parent for anime, so the 动漫 shelf is physically its own
-   *  tree on 115 and never mixed into the TV shows directory. */
+  /** Separate landing parents for anime / variety, so the 动漫 / 综艺 shelves are
+   *  physically their own trees on 115 and never mixed into the TV shows directory. */
   animeStorageParentDirectoryId?: string;
+  varietyStorageParentDirectoryId?: string;
   now?: () => string;
   /** §7: resolve the claimed run's per-account 115 creds + landing CIDs. */
   resolveAccountContext?: ResolveAccountWorkerContext;

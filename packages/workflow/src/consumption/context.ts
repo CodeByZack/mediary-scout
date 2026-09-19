@@ -66,9 +66,10 @@ export interface ConsumptionContext {
   // ── 注入能力 ──
   /** 存储品牌 id（注册表里已注册，如 "pan115"/"quark"）。 */
   storageProvider: string | undefined;
-  /** 115 上 TV / 动漫 / Movies 父目录（对应 mediaType）。 */
+  /** 115 上 TV / 动漫 / 综艺 / Movies 父目录（对应 mediaType）。 */
   tvParentDirectoryId: string | undefined;
   animeParentDirectoryId: string | undefined;
+  varietyParentDirectoryId: string | undefined;
   moviesParentDirectoryId: string | undefined;
   preferredLanguage: string | undefined;
   qualityPreference: "high" | "medium" | undefined;
@@ -96,6 +97,7 @@ export interface ConsumptionDeps {
   assrtToken: string | undefined;
   tvParentDirectoryId: string | undefined;
   animeParentDirectoryId: string | undefined;
+  varietyParentDirectoryId: string | undefined;
   moviesParentDirectoryId: string | undefined;
   /** type1 全季取播出日的注入(见 ConsumptionContext.seasonMetadataSync)。 */
   seasonMetadataSync?: SeasonMetadataSync | undefined;
@@ -135,6 +137,7 @@ export function buildConsumptionContext(input: {
     storageProvider: input.deps.storageProvider,
     tvParentDirectoryId: input.deps.tvParentDirectoryId,
     animeParentDirectoryId: input.deps.animeParentDirectoryId,
+    varietyParentDirectoryId: input.deps.varietyParentDirectoryId,
     moviesParentDirectoryId: input.deps.moviesParentDirectoryId,
     preferredLanguage: input.deps.preferredLanguage,
     qualityPreference: input.deps.qualityPreference,
@@ -167,6 +170,7 @@ export function buildPatrolConsumptionContext(input: {
     storageProvider: input.deps.storageProvider,
     tvParentDirectoryId: input.deps.tvParentDirectoryId,
     animeParentDirectoryId: input.deps.animeParentDirectoryId,
+    varietyParentDirectoryId: input.deps.varietyParentDirectoryId,
     moviesParentDirectoryId: input.deps.moviesParentDirectoryId,
     preferredLanguage: input.deps.preferredLanguage,
     qualityPreference: input.deps.qualityPreference,
@@ -178,18 +182,23 @@ export function buildPatrolConsumptionContext(input: {
 }
 
 /**
- * Pick the 115 landing parent for a title. Anime lands under its own parent
- * (when configured) so the 动漫 library shelf is a physically separate tree,
- * never intermixed with TV shows; everything else uses the default parent.
+ * Pick the 115 landing parent for a title. Anime and variety land under their own
+ * parents (when configured) so the 动漫 / 综艺 library shelves are physically
+ * separate trees, never intermixed with TV shows; everything else uses the default
+ * parent.
  * （原 worker.ts 私有函数，逐字搬迁 —— ①目录阶段的父级选择。）
  */
 export function storageParentForTitle(
   title: { type: MediaType },
   storageParentDirectoryId: string | undefined,
   animeStorageParentDirectoryId: string | undefined,
+  varietyStorageParentDirectoryId: string | undefined,
 ): string | undefined {
   if (title.type === "anime" && animeStorageParentDirectoryId !== undefined) {
     return animeStorageParentDirectoryId;
+  }
+  if (title.type === "variety" && varietyStorageParentDirectoryId !== undefined) {
+    return varietyStorageParentDirectoryId;
   }
   return storageParentDirectoryId;
 }
@@ -212,6 +221,6 @@ export function requireCategoryParent(parent: string | undefined): string {
 /** ①目录阶段的 TV/动漫父级选择（type2/type1/type3 共用；movie 不走这里）。 */
 export function resolveTvCategoryParent(ctx: ConsumptionContext): string {
   return requireCategoryParent(
-    storageParentForTitle(ctx.title, ctx.tvParentDirectoryId, ctx.animeParentDirectoryId),
+    storageParentForTitle(ctx.title, ctx.tvParentDirectoryId, ctx.animeParentDirectoryId, ctx.varietyParentDirectoryId),
   );
 }

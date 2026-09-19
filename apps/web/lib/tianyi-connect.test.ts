@@ -95,6 +95,7 @@ describe("connectTianyiSson (bind)", () => {
       moviesCid: "movies-1",
       tvCid: "tv-1",
       animeCid: "anime-1",
+      varietyCid: "variety-1",
       createdAt: "2020-01-01T00:00:00.000Z",
     });
 
@@ -127,6 +128,7 @@ describe("connectTianyiSson (bind)", () => {
     expect(stored!.moviesCid).toBe("movies-1");
     expect(stored!.tvCid).toBe("tv-1");
     expect(stored!.animeCid).toBe("anime-1");
+    expect(stored!.varietyCid).toBe("variety-1");
     expect(stored!.createdAt).toBe("2020-01-01T00:00:00.000Z");
   });
 
@@ -149,6 +151,7 @@ describe("connectTianyiSson (bind)", () => {
       moviesCid: null,
       tvCid: null,
       animeCid: null,
+      varietyCid: null,
       createdAt: "2020-01-01T00:00:00.000Z",
     });
 
@@ -193,6 +196,7 @@ describe("connectTianyiSson (bind)", () => {
     expect(stored!.moviesCid).toBeNull();
     expect(stored!.tvCid).toBeNull();
     expect(stored!.animeCid).toBeNull();
+    expect(stored!.varietyCid).toBeNull();
     // Credential blob + durable identity still land correctly.
     const payload = stored!.payload as Record<string, unknown>;
     expect((payload.meta as Record<string, unknown>).loginName).toBe(LOGIN_NAME);
@@ -215,6 +219,7 @@ describe("completeTianyiQrLogin (QR bind)", () => {
       moviesCid: "movies-1",
       tvCid: "tv-1",
       animeCid: "anime-1",
+      varietyCid: "variety-1",
       createdAt: "2020-01-01T00:00:00.000Z",
     });
 

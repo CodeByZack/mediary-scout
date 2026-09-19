@@ -440,7 +440,7 @@ describe("customDirNamesFromEnv (brand-agnostic 自定义媒体库目录名)", (
     expect(customDirNamesFromEnv(env({}))).toEqual({});
   });
 
-  it("reads + trims the four generic vars (applies to every drive brand)", () => {
+  it("reads + trims the five generic vars (applies to every drive brand)", () => {
     expect(
       customDirNamesFromEnv(
         env({
@@ -448,9 +448,10 @@ describe("customDirNamesFromEnv (brand-agnostic 自定义媒体库目录名)", (
           MEDIA_TRACK_LIBRARY_MOVIES_DIR: "电影",
           MEDIA_TRACK_LIBRARY_TV_DIR: "剧集",
           MEDIA_TRACK_LIBRARY_ANIME_DIR: "番剧",
+          MEDIA_TRACK_LIBRARY_VARIETY_DIR: "综艺",
         }),
       ),
-    ).toEqual({ rootName: "我的影音库", moviesName: "电影", tvName: "剧集", animeName: "番剧" });
+    ).toEqual({ rootName: "我的影音库", moviesName: "电影", tvName: "剧集", animeName: "番剧", varietyName: "综艺" });
   });
 
   it("blank / whitespace values are omitted (never an empty-string root → no write-scope footgun)", () => {

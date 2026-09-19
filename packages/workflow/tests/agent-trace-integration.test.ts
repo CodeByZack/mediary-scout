@@ -129,6 +129,7 @@ function ctxFor(repository: InMemoryWorkflowRepository, resourceProvider: Resour
     assrtToken: undefined,
     tvParentDirectoryId: "tv_root",
     animeParentDirectoryId: undefined,
+    varietyParentDirectoryId: undefined,
     moviesParentDirectoryId: undefined,
   };
   return buildConsumptionContext({

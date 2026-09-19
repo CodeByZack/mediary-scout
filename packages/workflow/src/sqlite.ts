@@ -162,6 +162,7 @@ export const SQLITE_SCHEMA = `
     movies_cid text,
     tv_cid text,
     anime_cid text,
+    variety_cid text,
     status text NOT NULL DEFAULT 'active',
     frozen_reason text,
     frozen_at text,
@@ -205,6 +206,19 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec(SQLITE_SCHEMA);
+    // CREATE TABLE IF NOT EXISTS 对已存在的表不补新列，而 schema 又刻意不做迁移
+    //（一次性 final shape），所以存量库的加列走这个幂等补丁。
+    this.ensureColumn("connected_storages", "variety_cid", "text");
+  }
+
+  /** Idempotent add-column for existing databases (schema 无迁移机制). */
+  private ensureColumn(table: string, column: string, definition: string): void {
+    const rows = this.db
+      .prepare(`SELECT name FROM pragma_table_info('${table}')`)
+      .all() as Array<{ name: string }>;
+    if (!rows.some((row) => row.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 
   close(): void {
@@ -1271,6 +1285,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
       moviesCid: (row.movies_cid as string | null | undefined) ?? null,
       tvCid: (row.tv_cid as string | null | undefined) ?? null,
       animeCid: (row.anime_cid as string | null | undefined) ?? null,
+      varietyCid: (row.variety_cid as string | null | undefined) ?? null,
       status: (row.status as "active" | "frozen" | null | undefined) ?? "active",
       frozenReason: (row.frozen_reason as string | null | undefined) ?? null,
       frozenAt: (row.frozen_at as string | null | undefined) ?? null,
@@ -1281,7 +1296,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
   async listConnectedStorages(accountId: string): Promise<ConnectedStorage[]> {
     const rows = this.db
       .prepare(
-        "SELECT id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, status, frozen_reason, frozen_at, created_at " +
+        "SELECT id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, variety_cid, status, frozen_reason, frozen_at, created_at " +
           "FROM connected_storages WHERE account_id = ? ORDER BY created_at",
       )
       .all(accountId) as Array<Record<string, unknown>>;
@@ -1308,11 +1323,11 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     this.db
       .prepare(
         "INSERT INTO connected_storages " +
-          "(id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, created_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+          "(id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, variety_cid, created_at) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
           "ON CONFLICT (provider, provider_uid) DO UPDATE SET " +
           "label = excluded.label, payload = excluded.payload, " +
-          "root_cid = excluded.root_cid, movies_cid = excluded.movies_cid, tv_cid = excluded.tv_cid, anime_cid = excluded.anime_cid " +
+          "root_cid = excluded.root_cid, movies_cid = excluded.movies_cid, tv_cid = excluded.tv_cid, anime_cid = excluded.anime_cid, variety_cid = excluded.variety_cid " +
           "WHERE connected_storages.account_id = excluded.account_id",
       )
       .run(
@@ -1326,6 +1341,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
         row.moviesCid ?? null,
         row.tvCid ?? null,
         row.animeCid ?? null,
+        row.varietyCid ?? null,
         row.createdAt,
       );
   }
@@ -1347,7 +1363,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
     const unbind = this.runTransaction(() => {
       const row = this.db
         .prepare(
-          "SELECT id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, status, frozen_reason, frozen_at, created_at " +
+          "SELECT id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, variety_cid, status, frozen_reason, frozen_at, created_at " +
             "FROM connected_storages WHERE id = ? AND account_id = ?",
         )
         .get(storageId, accountId) as Record<string, unknown> | undefined;
@@ -1379,7 +1395,7 @@ export class SqliteWorkflowRepository implements WorkflowRepository {
   ): Promise<ConnectedStorage | null> {
     const row = this.db
       .prepare(
-        "SELECT id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, status, frozen_reason, frozen_at, created_at " +
+        "SELECT id, account_id, provider, provider_uid, label, payload, root_cid, movies_cid, tv_cid, anime_cid, variety_cid, status, frozen_reason, frozen_at, created_at " +
           "FROM connected_storages WHERE provider = ? AND provider_uid = ?",
       )
       .get(provider, providerUid) as Record<string, unknown> | undefined;

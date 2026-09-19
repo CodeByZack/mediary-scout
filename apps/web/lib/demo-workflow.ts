@@ -28,6 +28,7 @@ type Drive = "pan115" | "quark";
 const driveId = (d: Drive) => (d === "pan115" ? DEMO_DRIVE_115 : DEMO_DRIVE_QUARK);
 const moviesDir = (d: Drive) => (d === "pan115" ? "demo_movies_115" : "demo_movies_q");
 const tvDir = (d: Drive) => (d === "pan115" ? "demo_tv_115" : "demo_tv_q");
+const varietyDir = (d: Drive) => (d === "pan115" ? "demo_variety_115" : "demo_variety_q");
 
 function episodesWithObtained(season: TrackedSeason, obtainedCount: number): EpisodeState[] {
   return createEpisodeStates({
@@ -218,6 +219,7 @@ export async function seedDemoWorkflowRepository(repository: WorkflowRepository)
     moviesCid: "demo_movies_115",
     tvCid: "demo_tv_115",
     animeCid: "demo_anime_115",
+    varietyCid: "demo_variety_115",
     createdAt: "2026-06-01T00:00:00.000Z",
   });
   await repository.upsertConnectedStorage({
@@ -231,6 +233,7 @@ export async function seedDemoWorkflowRepository(repository: WorkflowRepository)
     moviesCid: "demo_movies_q",
     tvCid: "demo_tv_q",
     animeCid: "demo_anime_q",
+    varietyCid: "demo_variety_q",
     createdAt: "2026-06-05T00:00:00.000Z",
   });
 
@@ -254,7 +257,7 @@ export async function seedDemoWorkflowRepository(repository: WorkflowRepository)
             type: item.type,
             posterPath: item.posterPath,
             backdropPath: item.backdropPath,
-            storageDirectoryId: tvDir(item.drive),
+            storageDirectoryId: item.type === "variety" ? varietyDir(item.drive) : tvDir(item.drive),
             totalEpisodes: item.totalEpisodes,
             latestAired: item.latestAired,
             obtainedCount: item.obtainedCount,
