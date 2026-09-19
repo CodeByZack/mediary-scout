@@ -92,11 +92,16 @@ jobs:
           npm version "${VERSION}" --no-git-tag-version   # 同步 package.json + package-lock.json
           git add package.json package-lock.json
           git commit -m "chore(release): v${VERSION}"
-          git push origin "release/v${VERSION}"
+          # 重跑幂等：失败重试时该分支若存在，必然是本 workflow 上轮的中间产物，
+          # force 覆盖无他人内容风险。⚠️ 必须先 fetch 建立 remote-tracking ref——
+          # 本地新建分支没有 tracking 时 --force-with-lease 会按「远端应不存在」
+          # 处理，恰好在重试场景被 stale info 拒推（ocr review #65 抓到的真 bug）。
+          git fetch origin "+refs/heads/release/v${VERSION}:refs/remotes/origin/release/v${VERSION}" || true
+          git push --force-with-lease origin "release/v${VERSION}"
 
       - name: Open PR (留人工合并)
         env:
-          GH_TOKEN: github.token
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           VERSION="${{ steps.ver.outputs.version }}"
@@ -111,7 +116,14 @@ jobs:
             echo "✅ 你手动 merge 后，\`publish.yml\` 会自动在 main 上打 \`v${VERSION}\` tag，"
             echo "随后 \`build-fpk.yml\`（release 模式，arm+x86）构建并把 *.fpk 挂到 GitHub Release。无需再手动做任何事。"
           } > "${RUNNER_TEMP}/body.md"
-          gh pr create --base main --head "release/v${VERSION}" \
-            --title "release: v${VERSION}" \
-            --body-file "${RUNNER_TEMP}/body.md"
+          # 重跑幂等：先探测该 head 是否已有 PR（create 失败原因多样，不能拿
+          # 422 兜底猜）；有则同步 body，无则新建。
+          if gh pr view "release/v${VERSION}" >/dev/null 2>&1; then
+            echo "PR 已存在，更新 body"
+            gh pr edit "release/v${VERSION}" --body-file "${RUNNER_TEMP}/body.md"
+          else
+            gh pr create --base main --head "release/v${VERSION}" \
+              --title "release: v${VERSION}" \
+              --body-file "${RUNNER_TEMP}/body.md"
+          fi
           gh pr view "release/v${VERSION}" --json number,url --template 'PR #{{.number}}: {{.url}}\n'
