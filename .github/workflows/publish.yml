@@ -56,6 +56,9 @@ jobs:
     if: needs.detect-and-tag.outputs.new-tag != ''
     permissions:
       contents: write   # 调用方授权：被调 workflow 的 release job 要 contents:write
+      actions: write    # 保险丝（review #67 点4）：被调 build job 的 upload/download-artifact
+                        # 若按「permissions 未列即 none」口径需要 actions:write，此处给足；
+                        # 若默认本就够用，显式声明无害。
     uses: ./.github/workflows/build-fpk.yml
     with:
       tag: ${{ needs.detect-and-tag.outputs.new-tag }}
