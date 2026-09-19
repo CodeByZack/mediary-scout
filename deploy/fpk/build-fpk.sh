@@ -242,6 +242,7 @@ if [ -f "${CMD_MAIN}" ]; then
     sed -i '/^export MEDIA_TRACK_DEMO_SEED=/d' "${CMD_MAIN}"
     sed -i '/^export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=/d' "${CMD_MAIN}"
     sed -i '/^export MEDIA_TRACK_MODE=/d' "${CMD_MAIN}"
+    sed -i '/^export MEDIA_TRACK_LIBRARY_ROOT_DIR=/d' "${CMD_MAIN}"
     # 注释掉的旧 adapter 行（如果有）
     sed -i '/^# export MEDIA_TRACK_AGENT_ADAPTER=/d' "${CMD_MAIN}"
     sed -i '/^# export MEDIA_TRACK_STORAGE_ADAPTER=/d' "${CMD_MAIN}"
@@ -251,6 +252,13 @@ if [ -f "${CMD_MAIN}" ]; then
     #    ⚠️ 不设 MEDIA_TRACK_DEFAULT_STORAGE_BRAND —— fake 模式存储是 FakeStorageExecutor
     #    （品牌无关），driveProvider 仅作日志标签且有默认 "quark" 兜底，设了是纯噪声。
     RUNTIME_BLOCK="export MEDIA_TRACK_MODE=${FPK_RUNTIME}"
+    # 测试版 + normal 运行时：网盘根目录名默认加 -dev 后缀，实测时一眼区分
+    # 是哪个包建的树（正式版=「Mediary Scout」，测试版=「Mediary Scout-dev」）。
+    # 用户在 .env / 部署配置里显式设置过则尊重其值（:- 兜底不覆盖）。
+    if [ "${FPK_MODE}" = "test" ] && [ "${FPK_RUNTIME}" = "normal" ]; then
+        RUNTIME_BLOCK="${RUNTIME_BLOCK}
+export MEDIA_TRACK_LIBRARY_ROOT_DIR=\${MEDIA_TRACK_LIBRARY_ROOT_DIR:-Mediary Scout-dev}"
+    fi
     awk -v block="${RUNTIME_BLOCK}" '
         /^CMD="/ && !inserted {
             print block
