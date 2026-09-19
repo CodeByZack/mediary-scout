@@ -1,0 +1,117 @@
+# 一键发版·上篇：自动生成「版本号 bump PR + 本版改动说明」，然后停下。
+# 合并由人工把关（AGENTS.md 铁律：PR 必须人合）。你 merge 之后，publish.yml
+# 检测到 main 上版本变化自动打 v<X.Y.Z> tag → 触发既有 build-fpk.yml（release
+# 模式双架构）→ release job 把 *.fpk 挂上 GitHub Release（附 GitHub 自动
+# changelog）。
+#
+# 用法：Actions → Release → Run workflow → version 留空 = 自动 patch+1
+#       （0.0.4 → 0.0.5）；或显式填 0.1.0 / 1.0.0。
+# ⚠️ workflow_dispatch 只对 default 分支上存在的 workflow 可见——合入 main 后即可用。
+name: Release (开 bump PR + 改动说明)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "新版本号，不带 v（例 0.0.5；留空 = 当前版本 patch +1）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write      # push release 分支（含读历史/tag）
+  pull-requests: write # 开 PR
+
+run-name: "Release v${{ inputs.version || '(auto patch+1)' }}"
+
+jobs:
+  bump-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main (full history for changelog)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve target version
+        id: ver
+        run: |
+          set -euo pipefail
+          CURRENT=$(node -p "require('./package.json').version")
+          INPUT="${{ github.event.inputs.version }}"
+          if [ -n "${INPUT}" ]; then
+            VERSION="${INPUT}"
+          else
+            MAJOR=$(echo "${CURRENT}" | cut -d. -f1)
+            MINOR=$(echo "${CURRENT}" | cut -d. -f2)
+            PATCH=$(echo "${CURRENT}" | cut -d. -f3)
+            VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+          echo "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+            || { echo "::error::非法版本号: ${VERSION}"; exit 1; }
+          git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1 \
+            && { echo "::error::tag v${VERSION} 已存在，填个更高的版本号"; exit 1; }
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "current=${CURRENT}" >> "${GITHUB_OUTPUT}"
+
+      - name: Collect changelog since last tag
+        id: log
+        run: |
+          set -euo pipefail
+          # 最近一个 v* 祖先 tag：直接列 remote tags（merge-base 判祖先），
+          # 不依赖 describe 的祖先可达性（浅历史/多分支下更稳）。
+          LAST_TAG=$(git ls-remote --tags origin 'refs/tags/v*' \
+            | grep -v '\^{}' | sed 's#.*refs/tags/##' | sort -V | tail -1)
+          if [ -n "${LAST_TAG}" ] && git merge-base --is-ancestor "${LAST_TAG}" HEAD 2>/dev/null; then
+            RANGE="${LAST_TAG}..HEAD"
+          else
+            LAST_TAG=""
+            RANGE="HEAD"
+          fi
+          {
+            echo "## 本版改动（${LAST_TAG:-repo 起点} → main）"
+            echo ""
+            git log "${RANGE}" --first-parent --pretty=format:'- %s (%h)' -n 200
+            echo ""
+            if [ -n "${LAST_TAG}" ]; then
+              echo ""
+              echo "完整 diff：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${LAST_TAG}...HEAD"
+            fi
+          } > "${RUNNER_TEMP}/commits.md"
+          echo "last_tag=${LAST_TAG}" >> "${GITHUB_OUTPUT}"
+          wc -l "${RUNNER_TEMP}/commits.md"
+
+      - name: Bump package.json + push branch
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          git config user.name "release-bot[bot]"
+          git config user.email "release-bot[bot]@users.noreply.github.com"
+          git checkout -b "release/v${VERSION}"
+          npm version "${VERSION}" --no-git-tag-version   # 同步 package.json + package-lock.json
+          git add package.json package-lock.json
+          git commit -m "chore(release): v${VERSION}"
+          git push origin "release/v${VERSION}"
+
+      - name: Open PR (留人工合并)
+        env:
+          GH_TOKEN: github.token
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          CURRENT="${{ steps.ver.outputs.current }}"
+          {
+            echo "自动发版 PR：\`${CURRENT}\` → \`${VERSION}\`（Release workflow 一键生成）。"
+            echo ""
+            cat "${RUNNER_TEMP}/commits.md"
+            echo ""
+            echo "---"
+            echo ""
+            echo "✅ 你手动 merge 后，\`publish.yml\` 会自动在 main 上打 \`v${VERSION}\` tag，"
+            echo "随后 \`build-fpk.yml\`（release 模式，arm+x86）构建并把 *.fpk 挂到 GitHub Release。无需再手动做任何事。"
+          } > "${RUNNER_TEMP}/body.md"
+          gh pr create --base main --head "release/v${VERSION}" \
+            --title "release: v${VERSION}" \
+            --body-file "${RUNNER_TEMP}/body.md"
+          gh pr view "release/v${VERSION}" --json number,url --template 'PR #{{.number}}: {{.url}}\n'
