@@ -71,7 +71,7 @@ export const TRENDING_NOUN: Record<TrendingKind, string> = {
  *  set, so a 5th feed becomes reachable automatically. Used to validate `?trending=`
  *  (an unrecognized value must fall back, never be silently coerced). */
 export function isTrendingKind(value: string): value is TrendingKind {
-  return (Object.keys(TRENDING_KINDS) as TrendingKind[]).includes(value);
+  return (Object.keys(TRENDING_KINDS) as string[]).includes(value);
 }
 
 /** Last-calendar-year floor (rolls yearly): the anime feed shows RECENT seasons,

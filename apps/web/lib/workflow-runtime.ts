@@ -2485,7 +2485,7 @@ async function bindPan115ConnectedStorage(input: {
         moviesCid: provisioned.moviesCid,
         tvCid: provisioned.tvCid,
         animeCid: provisioned.animeCid,
-         varietyCid: provisioned.varietyCid,
+        varietyCid: provisioned.varietyCid,
       };
     } catch (error) {
       console.error(`[media-track] 115 directory provision failed (will use root fallback): ${String(error)}`);

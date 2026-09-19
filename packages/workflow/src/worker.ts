@@ -300,6 +300,7 @@ interface QueuedConsumptionInput {
   qualityPreference?: "high" | "medium";
   storageParentDirectoryId?: string;
   animeStorageParentDirectoryId?: string;
+  varietyStorageParentDirectoryId?: string;
   moviesParentDirectoryId?: string;
   now?: () => string;
   resolveAccountContext?: ResolveAccountWorkerContext;
