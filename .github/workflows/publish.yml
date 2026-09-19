@@ -1,12 +1,13 @@
-# 一键发版·下篇：merge 即发布。
-# main 上任何 push 都会检查：若 package.json 的 version 相对上一个 commit 发生了变化、
-# 且 git tag v<新版本> 尚不存在 → 自动在该 merge commit 上打 tag 并 push。
-# tag push 触发既有 build-fpk.yml（release 模式双架构）+ 其 release job
-# （fpk 挂 GitHub Release）。
+# 一键发版·下篇：merge 即发布，全自动无人值守。
+# main 上每次 push 检查：package.json version 相对上一 commit 变了、且 v<新版本> tag
+# 不存在 → 打 tag 并在**同一个 run 里**显式调用 build-fpk.yml（reusable workflow，
+# mode=release）出双架构正式版 + 挂 GitHub Release。
 #
-# 这是 release.yml「人工合并」路线的自动续段：人只点 merge，剩下的无人值守。
-# 手动往 main 直推版本改动（如果哪天规则放开）同样被这里兜住。
-name: Publish (merge 后自动打 tag)
+# 为什么不是"推完 tag 就完事"：publish 用的 GITHUB_TOKEN 推 tag 不会产生可触发的
+# push 事件（GitHub 防 workflow 套娃规则，对 dispatch/repository_dispatch 同样生效），
+# 所以自动链路必须走 uses: 显式调用。build-fpk 的 `on: push: tags` 仍保留——NAS 上
+# 手动推 tag（gh-bridge tag）走的不是你，是 owner PAT，事件正常触发，两条路并存。
+name: Publish (merge 后自动打 tag 并发版)
 
 on:
   push:
@@ -16,8 +17,10 @@ permissions:
   contents: write
 
 jobs:
-  tag:
+  detect-and-tag:
     runs-on: ubuntu-latest
+    outputs:
+      new-tag: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -26,6 +29,7 @@ jobs:
           fetch-tags: true
 
       - name: Tag on version bump
+        id: tag
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
@@ -43,4 +47,16 @@ jobs:
           git config user.email "release-bot[bot]@users.noreply.github.com"
           git tag "${TAG}" HEAD
           git push origin "${TAG}"
-          echo "→ ${TAG} 已打在 ${GITHUB_SHA:0:7}（版本 ${PREV_VERSION:-?} → ${VERSION}），build-fpk(release) 即将起跑"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "→ ${TAG} 已打在 ${GITHUB_SHA:0:7}（版本 ${PREV_VERSION:-?} → ${VERSION}）"
+
+  release-build:
+    # 只在本次 run 真的打了新 tag 时才继续（普通合并 main 时上面输出为空 → 跳过）。
+    needs: detect-and-tag
+    if: needs.detect-and-tag.outputs.new-tag != ''
+    permissions:
+      contents: write   # 调用方授权：被调 workflow 的 release job 要 contents:write
+    uses: ./.github/workflows/build-fpk.yml
+    with:
+      tag: ${{ needs.detect-and-tag.outputs.new-tag }}
+      mode: release

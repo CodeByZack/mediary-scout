@@ -2,8 +2,11 @@ name: Build FPK (arm + x86)
 
 # 双架构 fpk 打包：arm（aarch64）+ x86（x86_64）。
 # 触发方式：
-#   - 手动：workflow_dispatch（可带 tag 输入，发布到对应 GitHub Release）
-#   - 自动：push tag v*（产物同时挂到 GitHub Release）
+#   - 自动·正式发版主路径：被 publish.yml 以 workflow_call 调用（merge 后同 run 直调。
+#     GITHUB_TOKEN 推的 tag 不产生 push 事件——recursion 防套娃规则——所以自动发版
+#     必须走显式调用，见 publish.yml）。
+#   - 自动·兼容路径：push tag v*（NAS 上手动 `git tag && push` 时仍直达）。
+#   - 手动：workflow_dispatch（tag/mode/runtime 三个输入；test 模式只出 artifact 不发 Release）。
 #
 # 关键点：
 #   - setup-node 用 Node 24（ABI 137），因为 fpk manifest 声明 install_dep_apps=nodejs_v24，
@@ -41,6 +44,21 @@ on:
           - normal
           - fake
           - demo
+
+  workflow_call:
+    inputs:
+      tag:
+        description: "要发布的 tag（必填；Release job 以它为准）"
+        type: string
+        required: true
+      mode:
+        type: string
+        required: false
+        default: release
+      runtime:
+        type: string
+        required: false
+        default: normal
 
 permissions:
   contents: read
@@ -83,8 +101,9 @@ jobs:
 
       # workflow_dispatch 指定了 tag 时，切到该 tag 对应的提交再构建，
       # 保证产物与发布的版本一致。
-      - name: Checkout tag commit (workflow_dispatch with tag)
-        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+      - name: Checkout tag commit (dispatch/call with tag)
+        # push tag 事件里 inputs.tag 为空串 → 天然跳过（checkout 已在该 tag 的 SHA 上）。
+        if: inputs.tag != ''
         run: |
           git fetch --tags
           if git rev-parse "refs/tags/${{ inputs.tag }}" >/dev/null 2>&1; then
@@ -155,7 +174,10 @@ jobs:
   # test 模式不发布 Release（测试包只作为 artifact 下载，不进正式 Release）。
   release:
     needs: [build]
-    if: needs.build.result == 'success' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')) && inputs.mode != 'test'
+    # 三种触发统一判据：要么本来就在 tag ref 上（push tag），要么显式给了 tag
+    # （dispatch / workflow_call）。mode=test 永不发。不用 event_name 判断——
+    # 被调用时 github context 是调用方的，event_name 会显示成 'push'。
+    if: needs.build.result == 'success' && (github.ref_type == 'tag' || inputs.tag != '') && inputs.mode != 'test'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -163,10 +185,10 @@ jobs:
       - name: Determine release tag
         id: tag
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "tag=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
-          else
+          if [ -n "${{ inputs.tag }}" ]; then
             echo "tag=${{ inputs.tag }}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
           fi
 
       - name: Download fpk artifacts
