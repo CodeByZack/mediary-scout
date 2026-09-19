@@ -6,8 +6,10 @@ const ANIMATION_GENRE_ID = 16;
  *  only reliable variety signal — 8/8 sampled shows (花儿与少年 / 中餐厅 / 地球超新鲜 /
  *  极限挑战 / 奔跑吧 / 密室大逃脱 / 喜人奇妙夜) all carry it. 10767 脱口秀 is
  *  deliberately NOT folded in (欧美夜谈 stay on the 剧集 shelf) — see
- *  docs/variety-type-design.md §7.1. */
-const REALITY_GENRE_ID = 10764;
+ *  docs/variety-type-design.md §7.1. Exported so the 热门综艺 trending feed
+ *  (apps/web/lib/trending.ts) references the same judgement instead of a second
+ *  magic number that can drift. */
+export const REALITY_GENRE_ID = 10764;
 
 /**
  * Refine a base TMDB type into the library's shelf type.

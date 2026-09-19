@@ -9,6 +9,10 @@ import type { MergedSourceHealth } from "./resource-source-health.js";
 export const DEFAULT_ACCOUNT_ID = "acct_default";
 
 export type MediaType = "movie" | "tv" | "anime" | "variety";
+/** Single source of truth for runtime whitelists that must stay in sync with
+ *  MediaType (sessionStorage guards, `?type=` validation…). Add a type here and
+ *  every guard follows — no re-enumeration to forget. */
+export const MEDIA_TYPES: readonly MediaType[] = ["movie", "tv", "anime", "variety"];
 export type SeasonStatus = "active" | "completed";
 export type LatestAiredSource = "metadata" | "manual" | "unknown";
 export type AirStatus = "aired" | "unaired" | "unknown";

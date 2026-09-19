@@ -1,4 +1,4 @@
-import { fetchTmdbList } from "@media-track/workflow";
+import { fetchTmdbList, REALITY_GENRE_ID } from "@media-track/workflow";
 import { getTmdbAccesses, getAccountScopedSettings, getCurrentAccountId } from "./workflow-runtime";
 
 export type TrendingKind = "movie" | "tv" | "anime" | "variety";
@@ -41,6 +41,8 @@ export const TRENDING_KINDS: Record<
     label: "热门综艺",
     path: "discover/tv",
     // 静态参数;动态 last_air_date.gte 由 trendingFeedQuery 注入(见下)。
+    // with_genres 引用判据常量(单一事实源,防与分类器漂移)。注意 workers/tmdb-proxy
+    // 侧同 feed 写的是字面量 10764 —— 双侧 cacheKey 契约钉在 handler.test.ts。
     // 与 anime 两处刻意不同(见 design §1.4):
     //  - 无 vote_count.gte —— 综艺投票数极低(地球超新鲜=6、极限挑战=14),50 门槛全灭;
     //  - 用 last_air_date 而非 first_air_date —— 经典季播剧首季很老(极限 2015),
@@ -49,7 +51,7 @@ export const TRENDING_KINDS: Record<
       include_adult: "false",
       language: "zh-CN",
       sort_by: "popularity.desc",
-      with_genres: "10764",
+      with_genres: String(REALITY_GENRE_ID),
       with_original_language: "zh",
     },
     mediaType: "tv",

@@ -1,4 +1,4 @@
-import type { MediaType } from "@media-track/workflow";
+import { MEDIA_TYPES, type MediaType } from "@media-track/workflow";
 import type { ActivityCompletedItem } from "./activity-view";
 import { playbackStateAt, DEMO_PLAYBACK_TOTAL_MS } from "./demo-playback-timeline";
 
@@ -43,7 +43,7 @@ function isEntry(value: unknown): value is DemoAcquisitionEntry {
     typeof e.tmdbId === "number" &&
     typeof e.title === "string" &&
     typeof e.year === "number" &&
-    (e.type === "movie" || e.type === "tv" || e.type === "anime" || e.type === "variety") &&
+    MEDIA_TYPES.includes(e.type as MediaType) &&
     (e.posterPath === null || typeof e.posterPath === "string")
   );
 }
@@ -170,7 +170,7 @@ function isInProgressEntry(value: unknown): value is DemoInProgressEntry {
     typeof e.tmdbId === "number" &&
     typeof e.title === "string" &&
     typeof e.year === "number" &&
-    (e.type === "movie" || e.type === "tv" || e.type === "anime" || e.type === "variety") &&
+    MEDIA_TYPES.includes(e.type as MediaType) &&
     (e.posterPath === null || typeof e.posterPath === "string") &&
     // Finite, not just `number`: a corrupted NaN/Infinity startedAt would make
     // demoInProgressView's elapsed NaN → entry never promotes → stuck 获取中 row.
