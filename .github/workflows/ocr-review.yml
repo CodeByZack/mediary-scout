@@ -86,9 +86,9 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // For issue_comment events, resolve PR base/head so the action
-            // can review the right diff (issue_comment has no top-level
-            // pull_request payload fields).
+            // For issue_comment events, resolve PR base/head/title so the
+            // action can review the right diff with proper background context
+            // (issue_comment has no top-level pull_request payload fields).
             const prNumber = context.issue.number;
             const { data: pullRequest } = await github.rest.pulls.get({
               owner: context.repo.owner,
@@ -97,6 +97,7 @@ jobs:
             });
             core.setOutput('base_ref', pullRequest.base.ref);
             core.setOutput('head_sha', pullRequest.head.sha);
+            core.setOutput('pr_title', pullRequest.title);
 
       - name: Run OpenCodeReview
         uses: alibaba/open-code-review@v1.12.6  # 固定版本,防上游 main 漂移
@@ -109,3 +110,7 @@ jobs:
           # pr-context 步骤解析后传入。
           base_ref: ${{ steps.pr-context.outputs.base_ref }}
           head_sha: ${{ steps.pr-context.outputs.head_sha }}
+          # PR 标题作为评审背景(--background)——文档称其为"效果最显著的单一参数",
+          # 让模型先知道这次改动的意图再审。本仓库 commit 风格 type(scope): 中文描述
+          # 正好契合。传值走 action 的 input→env 通道,不经 shell 插值,安全。
+          background: ${{ steps.pr-context.outputs.pr_title }}
