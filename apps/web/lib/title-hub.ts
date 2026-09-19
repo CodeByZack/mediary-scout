@@ -7,6 +7,7 @@ import {
   queueSeriesInitialization,
   queueTrackingInitialization,
   type EpisodeStatusCell,
+  type MediaType,
   type MediaTitle,
   type PreparedSeriesTarget,
 } from "@media-track/workflow";
@@ -259,7 +260,7 @@ export async function getTitleHubView(tmdbId: number, storageId?: string): Promi
 export async function getDetailView(
   tmdbId: number,
   storageId?: string,
-  typeHint?: "movie" | "tv" | "anime",
+  typeHint?: MediaType,
 ): Promise<DetailView | null> {
   const repository = getWorkflowRepository();
   const scope = await getActiveWorkspaceScope(storageId);
@@ -390,7 +391,7 @@ export interface LibraryWallEntry {
   tmdbId: number;
   title: string;
   year: number;
-  type: "movie" | "tv" | "anime";
+  type: MediaType;
   posterPath: string | null;
   seasonCount: number;
   obtainedEpisodes: number;
@@ -409,6 +410,7 @@ export interface LibraryTypeCounts {
   movie: number;
   tv: number;
   anime: number;
+  variety: number;
 }
 
 /** Poster-wall view of every tracked title. */
@@ -476,7 +478,7 @@ export interface InProgressTitle {
   tmdbId: number;
   title: string;
   year: number;
-  type: "movie" | "tv" | "anime";
+  type: MediaType;
   posterPath: string | null;
 }
 
@@ -519,5 +521,6 @@ export function getLibraryTypeCounts(entries: LibraryWallEntry[]): LibraryTypeCo
     movie: entries.filter((entry) => entry.type === "movie").length,
     tv: entries.filter((entry) => entry.type === "tv").length,
     anime: entries.filter((entry) => entry.type === "anime").length,
+    variety: entries.filter((entry) => entry.type === "variety").length,
   };
 }

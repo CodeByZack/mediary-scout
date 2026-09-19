@@ -310,6 +310,22 @@ describe("trending discovery", () => {
     expect(animeParams.get("sort_by")).toBe("popularity.desc");
   });
 
+  it("variety feed = recent (last_air_date rolls 6 months) + 中文真人秀 10764, matching the frontend", () => {
+    const now = new Date("2026-07-04T00:00:00Z");
+    const feeds = getTrendingFeeds(now);
+    expect(feeds).toHaveLength(4); // movie, tv, anime, variety
+    const varietyParams = new URL(`https://x/${feeds[3]}`).searchParams;
+    expect(varietyParams.get("last_air_date.gte")).toBe("2026-01-04");
+    expect(varietyParams.get("with_genres")).toBe("10764");
+    expect(varietyParams.get("with_original_language")).toBe("zh");
+    expect(varietyParams.get("include_adult")).toBe("false");
+    expect(varietyParams.get("sort_by")).toBe("popularity.desc");
+    // 综艺投票数极低(地球超新鲜=6、极限挑战=14):a vote_count.gte floor would empty the
+    // feed, and first_air_date.gte would exclude long-running franchises (极限挑战 2015).
+    expect(varietyParams.get("vote_count.gte")).toBeNull();
+    expect(varietyParams.get("first_air_date.gte")).toBeNull();
+  });
+
   it("allows the trending/ prefix (was 404)", async () => {
     const res = await handleTmdbProxy({
       request: new Request("https://w.example/trending/movie/week?language=zh-CN"),
@@ -368,6 +384,17 @@ describe("trending discovery", () => {
       originFetch: async () => new Response(JSON.stringify({ results: [] }), { status: 200 }),
     });
     expect(animeKv.puts[0]?.ttl).toBe(25 * 60 * 60 + 14 * 24 * 60 * 60);
+
+    // The DYNAMIC variety feed (last_air_date.gte rolls 6 months) needs the same
+    // treatment as the anime feed.
+    const varietyKv = fakeKv();
+    await handleTmdbProxy({
+      request: new Request(`https://w.example/${getTrendingFeeds()[3]}`), // discover/tv variety
+      kv: varietyKv,
+      token: "k",
+      originFetch: async () => new Response(JSON.stringify({ results: [] }), { status: 200 }),
+    });
+    expect(varietyKv.puts[0]?.ttl).toBe(25 * 60 * 60 + 14 * 24 * 60 * 60);
 
     // A non-feed discover/tv call keeps its ordinary short TTL (feed-specific, not
     // a blanket discover override).

@@ -101,6 +101,7 @@ describe("connectPan123Token (bind)", () => {
       moviesCid: "movies-1",
       tvCid: "tv-1",
       animeCid: "anime-1",
+      varietyCid: "variety-1",
       createdAt: "2020-01-01T00:00:00.000Z",
     });
 
@@ -123,6 +124,7 @@ describe("connectPan123Token (bind)", () => {
     expect(stored!.moviesCid).toBe("movies-1");
     expect(stored!.tvCid).toBe("tv-1");
     expect(stored!.animeCid).toBe("anime-1");
+    expect(stored!.varietyCid).toBe("variety-1");
     expect(stored!.createdAt).toBe("2020-01-01T00:00:00.000Z");
   }, 20_000);
 
@@ -140,6 +142,7 @@ describe("connectPan123Token (bind)", () => {
       moviesCid: null,
       tvCid: null,
       animeCid: null,
+      varietyCid: null,
       createdAt: "2020-01-01T00:00:00.000Z",
     });
 
@@ -170,6 +173,7 @@ describe("connectPan123Token (bind)", () => {
     expect(stored!.moviesCid).toBeNull();
     expect(stored!.tvCid).toBeNull();
     expect(stored!.animeCid).toBeNull();
+    expect(stored!.varietyCid).toBeNull();
     // Credential blob still lands correctly (pure-token model).
     const payload = stored!.payload as Record<string, unknown>;
     expect(payload.token).toBe(VALID_TOKEN);
@@ -221,6 +225,7 @@ describe("completePan123QrLogin (QR bind)", () => {
       moviesCid: "movies-1",
       tvCid: "tv-1",
       animeCid: "anime-1",
+      varietyCid: "variety-1",
       createdAt: "2020-01-01T00:00:00.000Z",
     });
 

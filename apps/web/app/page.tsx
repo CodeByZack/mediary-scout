@@ -10,7 +10,7 @@ import { RememberQuery } from "../components/search-memory";
 import { SearchForm } from "../components/search-form";
 import { SeasonRequestMenu } from "../components/season-request-menu";
 import { TrendingRow } from "../components/trending-row";
-import type { TrendingKind } from "../lib/trending";
+import { isTrendingKind, type TrendingKind } from "../lib/trending";
 import { getSearchView } from "../lib/search-page";
 import {
   getInProgressTitles,
@@ -25,7 +25,16 @@ import {
   getWorkflowRepository,
 } from "../lib/workflow-runtime";
 import { showHref } from "@media-track/workflow";
-import type { SearchCandidateCard, TrackedSeasonState } from "@media-track/workflow";
+import type { MediaType, SearchCandidateCard, TrackedSeasonState } from "@media-track/workflow";
+
+/** Shelf label for every media type. A Record (not a ternary chain), so adding a
+ *  type is a compile error instead of silently landing on the last branch. */
+const MEDIA_TYPE_LABELS: Record<MediaType, string> = {
+  movie: "电影",
+  tv: "电视剧",
+  anime: "动漫",
+  variety: "综艺",
+};
 
 export default function Page({
   searchParams,
@@ -77,11 +86,20 @@ async function HomeSurface({
   const params = (await searchParams) ?? {};
   const query = stringParam(params.q);
   const activeTab = stringParam(params.tab) === "library" ? "library" : "search";
-  const mediaType = stringParam(params.type) || "all";
+  // `?type` is validated against the known shelves: an unrecognized value falls back
+  // to the full library. The old three-if filter chain matched nothing for an
+  // unrecognized type and leaked every title into that one shelf.
+  const typeParam = stringParam(params.type);
+  const mediaType: MediaType | "all" =
+    typeParam === "movie" || typeParam === "tv" || typeParam === "anime" || typeParam === "variety"
+      ? typeParam
+      : "all";
   const filter = stringParam(params.filter) || "all";
+  // `?trending=` is validated against the known feeds: an unrecognized value falls
+  // back to the default feed. The old ternary chain silently treated every unknown
+  // value as "movie", so a 4th feed would have been unreachable from the URL.
   const trendingParam = stringParam(params.trending);
-  const activeTrending: TrendingKind =
-    trendingParam === "tv" ? "tv" : trendingParam === "anime" ? "anime" : "movie";
+  const activeTrending: TrendingKind = isTrendingKind(trendingParam) ? trendingParam : "movie";
   // Tree model: keep searches inside the ACTIVE workspace so an acquisition lands
   // on the drive you're viewing — not silently on the primary drive. Root route
   // (no storageId) posts to "/" as before.
@@ -396,7 +414,7 @@ function CandidateCard({
   );
 }
 
-async function LibrarySurface({ mediaType, filter, storageId }: { mediaType: string; filter: string; storageId?: string | undefined }) {
+async function LibrarySurface({ mediaType, filter, storageId }: { mediaType: MediaType | "all"; filter: string; storageId?: string | undefined }) {
   const [rawWall, inProgress] = await Promise.all([getLibraryWall(storageId), getInProgressTitles(storageId)]);
   const inProgressIds = new Set(inProgress.map((title) => title.tmdbId));
   // A title still being fetched shows as a 获取中 placeholder, not (yet) a card.
@@ -418,7 +436,7 @@ async function LibrarySurface({ mediaType, filter, storageId }: { mediaType: str
   // inline (as 获取中 cards) alongside the landed ones — plus the dedicated
   // 获取中 row at the very top.
   if (mediaType === "all") {
-    const byType = (type: "movie" | "tv" | "anime") => ({
+    const byType = (type: MediaType) => ({
       inProgressTitles: inProgress.filter((title) => title.type === type),
       wallEntries: wall.filter((entry) => entry.type === type),
     });
@@ -436,16 +454,16 @@ async function LibrarySurface({ mediaType, filter, storageId }: { mediaType: str
         <CategoryRow label="电影" type="movie" {...byType("movie")} storageId={storageId} />
         <CategoryRow label="电视剧" type="tv" {...byType("tv")} storageId={storageId} />
         <CategoryRow label="动漫" type="anime" {...byType("anime")} storageId={storageId} />
+        <CategoryRow label="综艺" type="variety" {...byType("variety")} storageId={storageId} />
       </section>
     );
   }
 
   // Category detail page
   const filteredWall = wall.filter((entry) => {
-    // Type filter
-    if (mediaType === "movie" && entry.type !== "movie") return false;
-    if (mediaType === "tv" && entry.type !== "tv") return false;
-    if (mediaType === "anime" && entry.type !== "anime") return false;
+    // Type filter. mediaType is validated above and covers every MediaType, so one
+    // equality check is exhaustive (see MEDIA_TYPE_LABELS).
+    if (entry.type !== mediaType) return false;
     // State filter
     if (filter === "complete") return entry.state === "complete";
     if (filter === "tracking") return entry.state === "tracking";
@@ -453,7 +471,7 @@ async function LibrarySurface({ mediaType, filter, storageId }: { mediaType: str
     return true;
   });
 
-  const typeLabel = mediaType === "movie" ? "电影" : mediaType === "tv" ? "电视剧" : "动漫";
+  const typeLabel = MEDIA_TYPE_LABELS[mediaType];
   const trackingCount = wall
     .filter((entry) => entry.type === mediaType)
     .filter((entry) => entry.state === "tracking" || entry.state === "partial").length;

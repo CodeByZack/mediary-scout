@@ -1,3 +1,5 @@
+import { MEDIA_TYPES } from "@media-track/workflow/media-types";
+import type { MediaType } from "@media-track/workflow";
 import type { ActivityCompletedItem } from "./activity-view";
 import { playbackStateAt, DEMO_PLAYBACK_TOTAL_MS } from "./demo-playback-timeline";
 
@@ -5,7 +7,7 @@ export interface DemoAcquisitionEntry {
   tmdbId: number;
   title: string;
   year: number;
-  type: "movie" | "tv" | "anime";
+  type: MediaType;
   posterPath: string | null;
   /** Wall-clock ms when this acquisition completed. Optional for back-compat /
    *  direct construction; recordDemoAcquisition stamps it so the 通知 NEW badge
@@ -42,7 +44,7 @@ function isEntry(value: unknown): value is DemoAcquisitionEntry {
     typeof e.tmdbId === "number" &&
     typeof e.title === "string" &&
     typeof e.year === "number" &&
-    (e.type === "movie" || e.type === "tv" || e.type === "anime") &&
+    MEDIA_TYPES.includes(e.type as MediaType) &&
     (e.posterPath === null || typeof e.posterPath === "string")
   );
 }
@@ -140,7 +142,7 @@ export interface DemoInProgressEntry {
   tmdbId: number;
   title: string;
   year: number;
-  type: "movie" | "tv" | "anime";
+  type: MediaType;
   posterPath: string | null;
   /** Wall-clock ms when the acquisition playback started. */
   startedAt: number;
@@ -169,7 +171,7 @@ function isInProgressEntry(value: unknown): value is DemoInProgressEntry {
     typeof e.tmdbId === "number" &&
     typeof e.title === "string" &&
     typeof e.year === "number" &&
-    (e.type === "movie" || e.type === "tv" || e.type === "anime") &&
+    MEDIA_TYPES.includes(e.type as MediaType) &&
     (e.posterPath === null || typeof e.posterPath === "string") &&
     // Finite, not just `number`: a corrupted NaN/Infinity startedAt would make
     // demoInProgressView's elapsed NaN → entry never promotes → stuck 获取中 row.
@@ -283,7 +285,7 @@ export function demoInProgressLibraryCards(active: DemoInProgressActive[]): Arra
   tmdbId: number;
   title: string;
   year: number;
-  type: "movie" | "tv" | "anime";
+  type: MediaType;
   posterPath: string | null;
   acquiring: true;
 }> {
@@ -303,7 +305,7 @@ export function demoInProgressActivityItems(active: DemoInProgressActive[]): Arr
   tmdbId: number;
   title: string;
   year: number;
-  type: "movie" | "tv" | "anime";
+  type: MediaType;
   posterPath: string | null;
   progress: number;
   step: string;
@@ -326,7 +328,7 @@ export interface DemoSessionNotification {
   tmdbId: number;
   title: string;
   year: number;
-  type: "movie" | "tv" | "anime";
+  type: MediaType;
   posterPath: string | null;
   kind: "acquired";
   /** ISO string derived from acquiredAt so the 通知 seen-marker can diff it. */

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Film, RefreshCw, Search } from "lucide-react";
-import { getTrending, TRENDING_KINDS, TRENDING_KIND_ORDER, type TrendingKind } from "../lib/trending";
+import { getTrending, TRENDING_KINDS, TRENDING_KIND_ORDER, TRENDING_NOUN, type TrendingKind } from "../lib/trending";
 
 const POSTER = "https://image.tmdb.org/t/p/w342";
 
@@ -64,7 +64,7 @@ export async function TrendingRow({
             </div>
             <span className="trending-title">{card.title}</span>
             <span className="trending-meta">
-              {card.year ?? "—"} · {activeKind === "anime" ? "动漫" : card.mediaType === "movie" ? "电影" : "剧集"}
+              {card.year ?? "—"} · {TRENDING_NOUN[activeKind]}
             </span>
           </Link>
         ))}

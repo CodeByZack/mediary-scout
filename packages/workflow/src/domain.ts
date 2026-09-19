@@ -1,3 +1,4 @@
+import { MEDIA_TYPES as MEDIA_TYPES_LIST } from "./media-types.js";
 import type { MergedSourceHealth } from "./resource-source-health.js";
 
 /**
@@ -8,7 +9,12 @@ import type { MergedSourceHealth } from "./resource-source-health.js";
  */
 export const DEFAULT_ACCOUNT_ID = "acct_default";
 
-export type MediaType = "movie" | "tv" | "anime";
+export type MediaType = "movie" | "tv" | "anime" | "variety";
+/** Runtime mirror of MediaType — the list itself lives in ./media-types.js, a
+ *  dependency-free leaf also published as "@media-track/workflow/media-types"
+ *  (client components must not drag the package root → node:sqlite into the bundle).
+ *  Add a shelf in BOTH places and every consumer guard follows. */
+export const MEDIA_TYPES: readonly MediaType[] = MEDIA_TYPES_LIST;
 export type SeasonStatus = "active" | "completed";
 export type LatestAiredSource = "metadata" | "manual" | "unknown";
 export type AirStatus = "aired" | "unaired" | "unknown";
@@ -38,7 +44,7 @@ export interface MediaTitle {
   year: number;
   aliases: string[];
   /** TMDB origin_country (e.g. ["JP"], ["CN"]) — drives the per-media-type search
-   *  recipe (searchProfile) for tv/anime, and lets the movie agent skip the 中文
+   *  recipe (searchProfile) for tv/anime/variety, and lets the movie agent skip the 中文
    *  subtitle floor for 国产片 (CN-origin). Set for tv/anime AND movies (movie
    *  search itself stays origin-independent); absent only for demo titles. */
   originCountries?: string[];

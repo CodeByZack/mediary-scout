@@ -13,7 +13,7 @@ import {
  * Live series-acquisition chain (the "获取全剧" path): enqueue via
  * queueSeriesInitialization → the worker drains via runQueuedSeriesInitialization
  * → runSeriesInitializationV2AndPersist (V2 engine) → per-season persistence +
- * dedup-on-repeat + anime-parent routing. Restored after Phase 8 deleted the old
+ * dedup-on-repeat + anime/variety-parent routing. Restored after Phase 8 deleted the old
  * series-init.test.ts, which also carried this live coverage (§11: every
  * runtime-driven entrypoint must keep a test asserting it from the user-action end).
  */
@@ -196,6 +196,43 @@ describe("queueSeriesInitialization + runQueuedSeriesInitialization (live series
     // TV parent — the 动漫 shelf is a physically separate tree on 115.
     const [state] = await repository.listTrackedSeasonStates();
     expect(state?.season.storageDirectoryId.startsWith("anime_root_")).toBe(true);
+    expect(state?.season.storageDirectoryId.includes("tv_root")).toBe(false);
+  });
+
+  it("lands a variety title under the separate variety parent, not the TV parent", async () => {
+    const variety: MediaTitle = {
+      id: "tmdb_tv_296202",
+      tmdbId: 296202,
+      type: "variety",
+      title: "地球超新鲜",
+      originalTitle: "地球超新鲜",
+      year: 2025,
+      aliases: [],
+    };
+    const repository = new InMemoryWorkflowRepository();
+    await queueSeriesInitialization({
+      title: variety,
+      seasons: [{ seasonNumber: 1, totalEpisodes: 1, latestAiredEpisode: 1 }],
+      keyword: "地球超新鲜 4K",
+      repository,
+      createWorkflowRunId: () => "run_variety",
+      now: () => "2026-06-13T00:00:00.000Z",
+    });
+
+    await runQueuedSeriesInitialization({
+      repository,
+      resourceProvider: new FakeResourceProvider({ keywordResults: {} }),
+      storage: new FakeStorageExecutor(),
+      model: noCoverageModel(),
+      storageParentDirectoryId: "tv_root",
+      varietyStorageParentDirectoryId: "variety_root",
+      now: () => "2026-06-13T00:05:00.000Z",
+    });
+
+    // The show/season directory was created under the variety parent, never the
+    // TV parent — the 综艺 shelf is a physically separate tree on 115.
+    const [state] = await repository.listTrackedSeasonStates();
+    expect(state?.season.storageDirectoryId.startsWith("variety_root_")).toBe(true);
     expect(state?.season.storageDirectoryId.includes("tv_root")).toBe(false);
   });
 });

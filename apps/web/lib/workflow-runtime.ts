@@ -268,8 +268,9 @@ export function customDirNamesFromEnv(env: NodeJS.ProcessEnv): {
   moviesName?: string;
   tvName?: string;
   animeName?: string;
+  varietyName?: string;
 } {
-  const opts: { rootName?: string; moviesName?: string; tvName?: string; animeName?: string } = {};
+  const opts: { rootName?: string; moviesName?: string; tvName?: string; animeName?: string; varietyName?: string } = {};
   const pick = (raw: string | undefined): string | undefined => {
     const trimmed = raw?.trim();
     return trimmed ? trimmed : undefined;
@@ -282,6 +283,8 @@ export function customDirNamesFromEnv(env: NodeJS.ProcessEnv): {
   if (tv) opts.tvName = tv;
   const anime = pick(env.MEDIA_TRACK_LIBRARY_ANIME_DIR);
   if (anime) opts.animeName = anime;
+  const variety = pick(env.MEDIA_TRACK_LIBRARY_VARIETY_DIR);
+  if (variety) opts.varietyName = variety;
   return opts;
 }
 
@@ -716,6 +719,7 @@ function buildAccountContextResolver(): ResolveAccountWorkerContext {
       ...(qualityPreference === undefined ? {} : { qualityPreference }),
       storageParentDirectoryId: parents.tv,
       animeStorageParentDirectoryId: parents.anime,
+      varietyStorageParentDirectoryId: parents.variety,
       moviesParentDirectoryId: parents.movies,
     };
   };
@@ -786,6 +790,7 @@ export async function runNextQueuedWorkflow() {
     ...quality,
     storageParentDirectoryId: parents.tv,
     animeStorageParentDirectoryId: parents.anime,
+    varietyStorageParentDirectoryId: parents.variety,
     moviesParentDirectoryId: parents.movies,
     resolveAccountContext,
     onAuthErrorFreeze,
@@ -1261,6 +1266,7 @@ export async function runScheduledType3(options?: {
       ...(qualityPreference === undefined ? {} : { qualityPreference }),
       storageParentDirectoryId: parents.tv,
       animeStorageParentDirectoryId: parents.anime,
+      varietyStorageParentDirectoryId: parents.variety,
       moviesParentDirectoryId: parents.movies,
       staleActiveRunTimeoutMs: 30 * 60 * 1000,
       resolveAccountContext: buildAccountContextResolver(),
@@ -1509,6 +1515,7 @@ interface AccountStorageCredentials {
   moviesCid: string | null;
   tvCid: string | null;
   animeCid: string | null;
+  varietyCid: string | null;
 }
 
 /** Pull a drive's brand-appropriate credential out of its connected_storage
@@ -1543,7 +1550,7 @@ function extractStorageCredential(
 }
 
 /**
- * Provision a drive's media tree (Mediary Scout/{Movies,TV,Anime}) under the
+ * Provision a drive's media tree (Mediary Scout/{Movies,TV,Anime,Variety}) under the
  * account root and return the CIDs. Uses an UNRESTRICTED bootstrap executor — a
  * fresh drive has no write scope yet, and the scope is meant to come FROM these
  * dirs (the catch-22 that left 115 drives stuck "目录待建"). Bounded, idempotent
@@ -1554,7 +1561,7 @@ async function provisionDriveCategoryDirs(
   provider: string,
   cookie: string,
   credential: TokenCredential | null,
-): Promise<{ rootCid: string; moviesCid: string; tvCid: string; animeCid: string }> {
+): Promise<{ rootCid: string; moviesCid: string; tvCid: string; animeCid: string; varietyCid: string }> {
   // Per-brand provisioning root is DATA in the registry ("0"/"0"/""/"-11"), not
   // logic — one lookup drives every arm below (was hardcoded per branch).
   const brand = getStorageBrand(provider);
@@ -1633,6 +1640,7 @@ function makeTokenPersister(
         moviesCid: drive.moviesCid,
         tvCid: drive.tvCid,
         animeCid: drive.animeCid,
+        varietyCid: drive.varietyCid,
         createdAt: drive.createdAt,
       });
     } catch (error) {
@@ -1665,17 +1673,17 @@ async function getAccountStorageCredentials(
     if (!cookie && !credential) {
       return null;
     }
-    let { rootCid, moviesCid, tvCid, animeCid } = drive;
+    let { rootCid, moviesCid, tvCid, animeCid, varietyCid } = drive;
     // Self-heal: a live-mode drive with missing category CIDs (e.g. connect-time
     // provisioning was skipped/failed → "目录待建") gets provisioned on first use,
     // so the queued acquisition just proceeds — no manual rebind. Idempotent;
     // persisted so subsequent runs skip. Best-effort: a failure leaves the CIDs
     // null and the scoped executor still fails loud (surfaced, not silent).
     const liveMode = process.env.MEDIA_TRACK_STORAGE_ADAPTER === "115";
-    if (liveMode && drive.status === "active" && !(rootCid && moviesCid && tvCid && animeCid)) {
+    if (liveMode && drive.status === "active" && !(rootCid && moviesCid && tvCid && animeCid && varietyCid)) {
       try {
         const p = await provisionDriveCategoryDirs(drive.provider, cookie, credential);
-        ({ rootCid, moviesCid, tvCid, animeCid } = p);
+        ({ rootCid, moviesCid, tvCid, animeCid, varietyCid } = p);
         await getWorkflowRepository().upsertConnectedStorage({
           id: drive.id,
           accountId,
@@ -1687,6 +1695,7 @@ async function getAccountStorageCredentials(
           moviesCid,
           tvCid,
           animeCid,
+          varietyCid,
           createdAt: drive.createdAt,
         });
         console.log(`[media-track] auto-provisioned ${drive.provider} dirs for ${drive.id} (root=${rootCid})`);
@@ -1704,6 +1713,7 @@ async function getAccountStorageCredentials(
       moviesCid,
       tvCid,
       animeCid,
+      varietyCid,
     };
   } catch (error) {
     console.error(`[media-track] failed to load storage credentials for ${accountId}: ${String(error)}`);
@@ -1902,7 +1912,7 @@ async function getWorkerStorageExecutor(
       // Scope writes to THIS drive's own provisioned dirs — not the global env CIDs
       // (which belong to the default account's drive). Dispatch by the drive's
       // brand: 115 → Storage115Executor, quark → QuarkStorageExecutor.
-      const scopeCids = [creds.rootCid, creds.moviesCid, creds.tvCid, creds.animeCid].filter(
+      const scopeCids = [creds.rootCid, creds.moviesCid, creds.tvCid, creds.animeCid, creds.varietyCid].filter(
         (cid): cid is string => Boolean(cid),
       );
       // Token-auth brands (光鸭/天翼) authenticate with a rotating credential blob
@@ -1979,6 +1989,7 @@ async function getWorkerStorageParents(
 ): Promise<{
   tv: string;
   anime: string;
+  variety: string;
   movies: string;
 }> {
   const creds =
@@ -1988,6 +1999,7 @@ async function getWorkerStorageParents(
   return {
     tv: creds?.tvCid || storageParentDirectoryId(),
     anime: creds?.animeCid || creds?.tvCid || animeParentDirectoryId(),
+    variety: creds?.varietyCid || creds?.tvCid || varietyParentDirectoryId(),
     movies: creds?.moviesCid || moviesParentDirectoryId(),
   };
 }
@@ -2129,6 +2141,13 @@ function storageParentDirectoryId(): string {
  *  provisioned tree has a dedicated Anime dir (creds.animeCid, checked first
  *  by getWorkerStorageParents). */
 function animeParentDirectoryId(): string {
+  return storageParentDirectoryId();
+}
+
+/** Variety landing parent — co-locates with TV unless the connected drive's
+ *  provisioned tree has a dedicated Variety dir (creds.varietyCid, checked first
+ *  by getWorkerStorageParents). */
+function varietyParentDirectoryId(): string {
   return storageParentDirectoryId();
 }
 
@@ -2275,7 +2294,7 @@ export async function getAccountConnectedStorages(): Promise<ConnectedStorageVie
       connectedAt: meta?.connectedAt ?? null,
       createdAt: row.createdAt,
       status: row.status,
-      provisioned: Boolean(row.tvCid && row.moviesCid && row.animeCid),
+      provisioned: Boolean(row.tvCid && row.moviesCid && row.animeCid && row.varietyCid),
     };
   });
 }
@@ -2344,17 +2363,25 @@ async function bindTokenConnectedStorage(input: {
       moviesCid: existing.moviesCid,
       tvCid: existing.tvCid,
       animeCid: existing.animeCid,
+      varietyCid: existing.varietyCid,
       createdAt: existing.createdAt,
     });
     return { providerUid };
   }
   // insert: provision the media tree under the brand's provisionRootId. Best-effort
   // — a failure still stores the connection (worker self-heals / falls back later).
-  let cids: { rootCid: string | null; moviesCid: string | null; tvCid: string | null; animeCid: string | null } = {
+  let cids: {
+    rootCid: string | null;
+    moviesCid: string | null;
+    tvCid: string | null;
+    animeCid: string | null;
+    varietyCid: string | null;
+  } = {
     rootCid: null,
     moviesCid: null,
     tvCid: null,
     animeCid: null,
+    varietyCid: null,
   };
   try {
     cids = await provisionDriveCategoryDirs(provider, "", credentialBlob);
@@ -2373,6 +2400,7 @@ async function bindTokenConnectedStorage(input: {
     moviesCid: cids.moviesCid,
     tvCid: cids.tvCid,
     animeCid: cids.animeCid,
+    varietyCid: cids.varietyCid,
     createdAt: new Date().toISOString(),
   });
   return { providerUid };
@@ -2421,6 +2449,7 @@ async function bindPan115ConnectedStorage(input: {
       moviesCid: existing.moviesCid,
       tvCid: existing.tvCid,
       animeCid: existing.animeCid,
+      varietyCid: existing.varietyCid,
       createdAt: existing.createdAt,
     });
     return;
@@ -2433,6 +2462,7 @@ async function bindPan115ConnectedStorage(input: {
     moviesCid: null as string | null,
     tvCid: null as string | null,
     animeCid: null as string | null,
+    varietyCid: null as string | null,
   };
   if (process.env.MEDIA_TRACK_STORAGE_ADAPTER === "115") {
     try {
@@ -2455,6 +2485,7 @@ async function bindPan115ConnectedStorage(input: {
         moviesCid: provisioned.moviesCid,
         tvCid: provisioned.tvCid,
         animeCid: provisioned.animeCid,
+        varietyCid: provisioned.varietyCid,
       };
     } catch (error) {
       console.error(`[media-track] 115 directory provision failed (will use root fallback): ${String(error)}`);
@@ -2471,6 +2502,7 @@ async function bindPan115ConnectedStorage(input: {
     moviesCid: cids.moviesCid,
     tvCid: cids.tvCid,
     animeCid: cids.animeCid,
+    varietyCid: cids.varietyCid,
     createdAt: new Date().toISOString(),
   });
 }
@@ -2566,6 +2598,7 @@ export async function connectQuarkCookie(rawCookie: string): Promise<{ providerU
       moviesCid: existing.moviesCid,
       tvCid: existing.tvCid,
       animeCid: existing.animeCid,
+      varietyCid: existing.varietyCid,
       createdAt: existing.createdAt,
     });
     return { providerUid };
@@ -2573,11 +2606,18 @@ export async function connectQuarkCookie(rawCookie: string): Promise<{ providerU
   // insert: provision the category tree under the 夸克 root ("0"). Best-effort —
   // a failure still stores the connection (worker falls back to env CIDs / none).
   // Auth already proved live above; provision errors are non-fatal layout issues.
-  let cids: { rootCid: string | null; moviesCid: string | null; tvCid: string | null; animeCid: string | null } = {
+  let cids: {
+    rootCid: string | null;
+    moviesCid: string | null;
+    tvCid: string | null;
+    animeCid: string | null;
+    varietyCid: string | null;
+  } = {
     rootCid: null,
     moviesCid: null,
     tvCid: null,
     animeCid: null,
+    varietyCid: null,
   };
   try {
     const executor = createExecutorForBrand({ provider: "quark", cookie, scopeCids: [] });
@@ -2604,6 +2644,7 @@ export async function connectQuarkCookie(rawCookie: string): Promise<{ providerU
     moviesCid: cids.moviesCid,
     tvCid: cids.tvCid,
     animeCid: cids.animeCid,
+    varietyCid: cids.varietyCid,
     createdAt: new Date().toISOString(),
   });
   return { providerUid };

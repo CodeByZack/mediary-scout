@@ -46,6 +46,7 @@ export interface ConnectedStorage {
   moviesCid: string | null;
   tvCid: string | null;
   animeCid: string | null;
+  varietyCid: string | null;
   /** active = usable; frozen = cookie died (e.g. logged in elsewhere) → no
    *  acquisition and no patrol run for this drive until re-bound to the same uid.
    *  Data is never lost while frozen. */
@@ -67,6 +68,7 @@ export interface UpsertConnectedStorageInput {
   moviesCid?: string | null;
   tvCid?: string | null;
   animeCid?: string | null;
+  varietyCid?: string | null;
   createdAt: string;
 }
 
@@ -107,6 +109,7 @@ export interface ProvisionedCids {
   moviesCid: string;
   tvCid: string;
   animeCid: string;
+  varietyCid: string;
 }
 
 /**
@@ -114,7 +117,8 @@ export interface ProvisionedCids {
  * parent, else create it. Safe to re-run on an already-provisioned 网盘 (the
  * second run finds every dir and creates nothing).
  *
- * Directory names are customisable (rootName / moviesName / tvName / animeName).
+ * Directory names are customisable (rootName / moviesName / tvName / animeName /
+ * varietyName).
  * A blank or whitespace-only name falls back to its brand default — in
  * particular the root ALWAYS resolves to a real container folder, never to the
  * account root, so the drive's write scope can never widen to the whole account.
@@ -126,12 +130,14 @@ export async function provisionCategoryDirs(input: {
   moviesName?: string;
   tvName?: string;
   animeName?: string;
+  varietyName?: string;
 }): Promise<ProvisionedCids> {
   const named = (value: string | undefined, fallback: string) => value?.trim() || fallback;
   const rootName = named(input.rootName, "Mediary Scout");
   const moviesName = named(input.moviesName, "Movies");
   const tvName = named(input.tvName, "TV");
   const animeName = named(input.animeName, "Anime");
+  const varietyName = named(input.varietyName, "Variety");
   const findOrCreate = async (name: string, parentId: string): Promise<string> => {
     const existing = (await input.storage.listChildDirs(parentId)).find((dir) => dir.name === name);
     return existing ? existing.id : input.storage.createDirectory({ name, parentId });
@@ -140,7 +146,8 @@ export async function provisionCategoryDirs(input: {
   const moviesCid = await findOrCreate(moviesName, rootCid);
   const tvCid = await findOrCreate(tvName, rootCid);
   const animeCid = await findOrCreate(animeName, rootCid);
-  return { rootCid, moviesCid, tvCid, animeCid };
+  const varietyCid = await findOrCreate(varietyName, rootCid);
+  return { rootCid, moviesCid, tvCid, animeCid, varietyCid };
 }
 
 /** Extract the stable 115 user id from a cookie string (`UID=<digits>_...`). */
@@ -206,6 +213,7 @@ export async function migrateLegacyCookieToDefaultAccount(input: {
     moviesCid: null,
     tvCid: null,
     animeCid: null,
+    varietyCid: null,
     createdAt: input.now,
   });
   return { migrated: true, providerUid };

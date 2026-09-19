@@ -21,6 +21,10 @@
       "types": "./dist/ruleset.d.ts",
       "default": "./dist/ruleset.js"
     },
+    "./media-types": {
+      "types": "./dist/media-types.d.ts",
+      "default": "./dist/media-types.js"
+    },
     "./prompt-templates": {
       "types": "./dist/prompt-templates.d.ts",
       "default": "./dist/prompt-templates.js"

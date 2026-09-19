@@ -87,6 +87,7 @@ describe("connectGuangYa (bind)", () => {
     expect(stored!.moviesCid).toBeNull();
     expect(stored!.tvCid).toBeNull();
     expect(stored!.animeCid).toBeNull();
+    expect(stored!.varietyCid).toBeNull();
   });
 
   it("REFRESH (same account, uid already connected): reuses the existing pinned deviceId + keeps resolved CIDs/createdAt", async () => {
@@ -110,6 +111,7 @@ describe("connectGuangYa (bind)", () => {
       moviesCid: "movies-1",
       tvCid: "tv-1",
       animeCid: "anime-1",
+      varietyCid: "variety-1",
       createdAt: "2020-01-01T00:00:00.000Z",
     });
 
@@ -131,6 +133,7 @@ describe("connectGuangYa (bind)", () => {
     expect(stored!.moviesCid).toBe("movies-1");
     expect(stored!.tvCid).toBe("tv-1");
     expect(stored!.animeCid).toBe("anime-1");
+    expect(stored!.varietyCid).toBe("variety-1");
     expect(stored!.createdAt).toBe("2020-01-01T00:00:00.000Z");
   });
 
@@ -148,6 +151,7 @@ describe("connectGuangYa (bind)", () => {
       moviesCid: null,
       tvCid: null,
       animeCid: null,
+      varietyCid: null,
       createdAt: "2020-01-01T00:00:00.000Z",
     });
 

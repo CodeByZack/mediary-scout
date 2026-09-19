@@ -47,7 +47,8 @@ describe("provisionCategoryDirs (find-or-create, idempotent)", () => {
     expect(cids.moviesCid).toBe("moviescid"); // reused under root
     expect(cids.tvCid).toBe("new_TV"); // created
     expect(cids.animeCid).toBe("new_Anime"); // created
-    expect(created).toEqual(["TV@rootcid", "Anime@rootcid"]);
+    expect(cids.varietyCid).toBe("new_Variety"); // created
+    expect(created).toEqual(["TV@rootcid", "Anime@rootcid", "Variety@rootcid"]);
   });
 
   it("honors an explicit rootName override (regression)", async () => {
@@ -65,7 +66,7 @@ describe("provisionCategoryDirs (find-or-create, idempotent)", () => {
     expect(created[0]).toBe("media-track-test"); // explicit value still wins
   });
 
-  it("honors custom root + category names (all four), creating them under the custom root", async () => {
+  it("honors custom root + category names (all five), creating them under the custom root", async () => {
     const created: string[] = [];
     const fakeStorage = {
       async listChildDirs() {
@@ -83,10 +84,17 @@ describe("provisionCategoryDirs (find-or-create, idempotent)", () => {
       moviesName: "电影",
       tvName: "剧集",
       animeName: "番剧",
+      varietyName: "综艺",
     });
     expect(created[0]).toBe("我的影音库@ROOT");
-    expect(created.slice(1)).toEqual(["电影@new_我的影音库", "剧集@new_我的影音库", "番剧@new_我的影音库"]);
+    expect(created.slice(1)).toEqual([
+      "电影@new_我的影音库",
+      "剧集@new_我的影音库",
+      "番剧@new_我的影音库",
+      "综艺@new_我的影音库",
+    ]);
     expect(cids.moviesCid).toBe("new_电影");
+    expect(cids.varietyCid).toBe("new_综艺");
   });
 
   it("treats empty / whitespace names as unset → falls back to defaults (root never collapses to the account root)", async () => {
@@ -107,13 +115,20 @@ describe("provisionCategoryDirs (find-or-create, idempotent)", () => {
       moviesName: "   ",
       tvName: "",
       animeName: "",
+      varietyName: "",
     });
     // Safety: an empty rootName must NOT place categories at the account root.
     // It falls back to the brand default and creates a real container folder.
     expect(created[0]).toBe("Mediary Scout@0");
     expect(cids.rootCid).toBe("new_Mediary Scout");
     expect(cids.rootCid).not.toBe("0");
-    expect(created.slice(1)).toEqual(["Movies@new_Mediary Scout", "TV@new_Mediary Scout", "Anime@new_Mediary Scout"]);
+    expect(created.slice(1)).toEqual([
+      "Movies@new_Mediary Scout",
+      "TV@new_Mediary Scout",
+      "Anime@new_Mediary Scout",
+      "Variety@new_Mediary Scout",
+    ]);
+    expect(cids.varietyCid).toBe("new_Variety");
   });
 });
 
