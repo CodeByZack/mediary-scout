@@ -373,26 +373,6 @@ export async function fetchTmdbList(
   return fetchViaAccessChain(accesses, path, query, opts.fetchJson ?? defaultFetchJson);
 }
 
-export function createTmdbMetadataProviderFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): TmdbMetadataProvider {
-  const readToken = env.TMDB_READ_TOKEN;
-  if (!readToken) {
-    throw new Error("TMDB_READ_TOKEN is required to create TmdbMetadataProvider");
-  }
-  const baseURL = (env.TMDB_BASE_URL || "").trim() || TMDB_DIRECT_BASE_URL;
-  return new TmdbMetadataProvider({ readToken, baseURL });
-}
-
-export function createTmdbSearchProviderFromEnv(env: NodeJS.ProcessEnv = process.env): TmdbSearchProvider {
-  const readToken = env.TMDB_READ_TOKEN;
-  if (!readToken) {
-    throw new Error("TMDB_READ_TOKEN is required to create TmdbSearchProvider");
-  }
-  const baseURL = (env.TMDB_BASE_URL || "").trim() || TMDB_DIRECT_BASE_URL;
-  return new TmdbSearchProvider({ readToken, baseURL });
-}
-
 export async function prepareTrackingTarget(input: TvTrackingTargetInput): Promise<PreparedTrackingTarget> {
   const [details, seasonDetails] = await Promise.all([
     input.metadataProvider.getTvDetails(input.tmdbId),

@@ -1,11 +1,13 @@
 import { connection, NextResponse, type NextRequest } from "next/server";
-import { workerApiGuard } from "../../../../lib/worker-api-guard";
+import { isDemoMode } from "../../../../lib/demo-mode";
 import { runScheduledType3 } from "../../../../lib/workflow-runtime";
 
 export async function POST(request: NextRequest) {
   await connection();
-  const denied = workerApiGuard(request);
-  if (denied) return denied;
+  // demo 模式只读：公开演示站不允许任何人触发巡检。
+  if (isDemoMode()) {
+    return NextResponse.json({ error: "demo mode is read-only" }, { status: 403 });
+  }
 
   // `?force=1` bypasses the daily-time gate for an on-demand "sweep now"; without
   // it the sweep runs at most once per Beijing day, only after the configured

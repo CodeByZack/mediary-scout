@@ -1,3 +1,4 @@
+import { isDemoMode } from "./demo-mode";
 import {
   createTmdbMetadataProvider,
   getTrackedSeasonStatusView,
@@ -104,7 +105,7 @@ function getDurableTargetCache(): DurableJsonCache {
  * null when the title is unknown to both.
  */
 async function seriesTargetFor(tmdbId: number): Promise<PreparedSeriesTarget | null> {
-  if (process.env.MEDIA_TRACK_SEARCH_PROVIDER === "tmdb") {
+  if (!isDemoMode()) {
     const cached = seriesTargetCache.get(tmdbId);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.value;
@@ -119,7 +120,7 @@ async function seriesTargetFor(tmdbId: number): Promise<PreparedSeriesTarget | n
     try {
       const value = await prepareSeriesTarget({
         tmdbId,
-        qualityPreference: process.env.MEDIA_TRACK_DEFAULT_QUALITY ?? "4K",
+        qualityPreference: "4K",
         metadataProvider: createTmdbMetadataProvider(await getTmdbAccesses(getAccountScopedSettings(await getCurrentAccountId()))),
       });
       seriesTargetCache.set(tmdbId, { value, expiresAt: Date.now() + SERIES_TARGET_TTL_MS });
@@ -156,7 +157,7 @@ async function seriesTargetFor(tmdbId: number): Promise<PreparedSeriesTarget | n
       totalEpisodes: season.episodeCount,
       latestAiredEpisode: season.latestAiredEpisode,
     })),
-    keyword: `${candidate.title} ${process.env.MEDIA_TRACK_DEFAULT_QUALITY ?? "4K"}`.trim(),
+    keyword: `${candidate.title} 4K`.trim(),
   };
 }
 

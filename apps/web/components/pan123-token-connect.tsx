@@ -42,7 +42,7 @@ export function Pan123TokenConnect() {
         Application → Local Storage 里找到登录 token（一段 <code>eyJ…</code> 开头的长字符串，约 90
         天有效），复制粘贴到下面。
       </p>
-      <p className="push-help" style={{ marginBottom: 12 }}>
+      <p className="hint-help" style={{ marginBottom: 12 }}>
         123网盘{" "}
         <a href="https://www.123pan.com/" target="_blank" rel="noopener noreferrer">
           官网 <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />

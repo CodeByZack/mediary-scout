@@ -1,15 +1,10 @@
 import { getWorkflowRepository } from "../workflow-runtime";
 
 /**
- * Agent API token: env MEDIA_TRACK_AGENT_TOKEN takes precedence over persisted
- * value in app_settings. Desktop auto-generates and injects via env; container
- * opt-in by setting env explicitly.
+ * Agent API token: persisted value in app_settings (desktop auto-generates).
+ * If no token is configured, returns null → guard returns 404 (endpoints invisible).
  */
 export async function getAgentApiToken(): Promise<string | null> {
-  const envToken = process.env.MEDIA_TRACK_AGENT_TOKEN?.trim();
-  if (envToken) {
-    return envToken;
-  }
   const stored = await getWorkflowRepository().getSetting("agent_api_token");
   return stored?.trim() || null;
 }

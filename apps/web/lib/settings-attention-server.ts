@@ -22,7 +22,6 @@ import {
   getCurrentAccountId,
   getLlmConfig,
   getWorkflowRepository,
-  isMultiUserEnabled,
   PANSOU_BASE_URL_SETTING_KEY,
   PANSOU_HEALTH_SETTING_KEY,
   UNAUTHENTICATED_ACCOUNT_ID,
@@ -42,9 +41,7 @@ async function resolveIsOwner(
   repository: WorkflowRepository,
   accountId: string,
 ): Promise<boolean> {
-  if (!isMultiUserEnabled()) return true;
-  const account = await repository.getAccountById(accountId);
-  return account?.isOwner ?? false;
+  return true; // single-user: always the owner
 }
 
 /** Attention bookkeeping is per-account ONLY — read via getAccountSetting

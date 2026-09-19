@@ -10,7 +10,6 @@ vi.mock("next/cache", () => ({
 }));
 
 const prevDemo = process.env.MEDIA_TRACK_DEMO_MODE;
-const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
 const prevPan115 = process.env.PAN115_COOKIE;
 
 function pan115Drive(over: Partial<UpsertConnectedStorageInput> = {}): UpsertConnectedStorageInput {
@@ -94,7 +93,6 @@ describe("unbindStorageAction (B4)", () => {
 
   beforeEach(async () => {
     delete process.env.MEDIA_TRACK_DEMO_MODE;
-    delete process.env.MEDIA_TRACK_MULTI_USER;
     delete process.env.PAN115_COOKIE;
     repo = new InMemoryWorkflowRepository();
     vi.resetModules();
@@ -116,24 +114,20 @@ describe("unbindStorageAction (B4)", () => {
     vi.resetModules();
     if (prevDemo !== undefined) process.env.MEDIA_TRACK_DEMO_MODE = prevDemo;
     else delete process.env.MEDIA_TRACK_DEMO_MODE;
-    if (prevMultiUser !== undefined) process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
-    else delete process.env.MEDIA_TRACK_MULTI_USER;
     if (prevPan115 !== undefined) process.env.PAN115_COOKIE = prevPan115;
     else delete process.env.PAN115_COOKIE;
   });
 
-  it("unbind pan115 clears pan115.cookie setting + matching env mirror", async () => {
+  it("unbind pan115 clears pan115.cookie setting (env mirror 随直连移除，2026-09-18)", async () => {
     await repo.upsertConnectedStorage(pan115Drive());
     await repo.setSetting("pan115.cookie", "UID=100000001_A; CID=c; SEID=s");
     await repo.setSetting("pan115.cookieMeta", JSON.stringify({ userName: "alice" }));
-    process.env.PAN115_COOKIE = "UID=100000001_A; CID=c; SEID=s";
 
     const result = await actions.unbindStorageAction("cs_100000001");
     expect(result.ok).toBe(true);
     expect(await repo.listConnectedStorages("acct_default")).toEqual([]);
     expect(await repo.getSetting("pan115.cookie")).toBeNull();
     expect(await repo.getSetting("pan115.cookieMeta")).toBeNull();
-    expect(process.env.PAN115_COOKIE).toBeUndefined();
   });
 
   it("unbind refuses when the drive has active runs", async () => {

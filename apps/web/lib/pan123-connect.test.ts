@@ -48,8 +48,6 @@ class FakePan123Client {
   }
 }
 
-const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
-
 /** Boot workflow-runtime against a fresh :memory: SQLite repo with the network
  *  client stubbed (parsePan123Uid stays REAL via importActual — uid derivation is
  *  part of what's under test). `failProvision` additionally makes the insert
@@ -58,7 +56,6 @@ const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
  *  contract (mirrors tianyi-connect.test.ts). */
 const boot = async (opts: { failProvision?: boolean } = {}) => {
   process.env.MEDIA_TRACK_SQLITE_PATH = ":memory:";
-  delete process.env.MEDIA_TRACK_MULTI_USER; // single-user → getCurrentAccountId() = acct_default
   pan123ClientConstructions = 0;
   vi.resetModules();
   vi.doMock("@media-track/workflow", async () => {
@@ -81,7 +78,6 @@ const boot = async (opts: { failProvision?: boolean } = {}) => {
 afterEach(() => {
   vi.doUnmock("@media-track/workflow");
   delete process.env.MEDIA_TRACK_SQLITE_PATH;
-  if (prevMultiUser !== undefined) process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
   vi.resetModules();
 });
 

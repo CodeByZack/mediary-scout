@@ -173,7 +173,6 @@ const LEGACY_COOKIE_META_KEY = "pan115.cookieMeta";
  */
 export async function migrateLegacyCookieToDefaultAccount(input: {
   repository: LegacyCookieMigrationRepo;
-  env: NodeJS.ProcessEnv;
   now: string;
 }): Promise<{ migrated: boolean; providerUid: string | null }> {
   const cookie = (await input.repository.getSetting(LEGACY_COOKIE_KEY))?.trim();
@@ -194,7 +193,8 @@ export async function migrateLegacyCookieToDefaultAccount(input: {
   } catch {
     meta = {};
   }
-  const env = input.env;
+  // 115 直连 env 已删（2026-09-18）：迁移只搬 cookie，目录 CID 一律由
+  // 连接时的建树流程（provisionCategoryDirs）产出。
   await input.repository.upsertConnectedStorage({
     id: `cs_${providerUid}`,
     accountId: DEFAULT_ACCOUNT_ID,
@@ -202,10 +202,10 @@ export async function migrateLegacyCookieToDefaultAccount(input: {
     providerUid,
     label: meta.userName ?? null,
     payload: { cookie, meta },
-    rootCid: env.MEDIA_TRACK_115_TEST_ROOT_CID ?? null,
-    moviesCid: env.MEDIA_TRACK_MOVIES_PARENT_CID ?? null,
-    tvCid: env.MEDIA_TRACK_TV_PARENT_CID ?? null,
-    animeCid: env.MEDIA_TRACK_ANIME_PARENT_CID ?? null,
+    rootCid: null,
+    moviesCid: null,
+    tvCid: null,
+    animeCid: null,
     createdAt: input.now,
   });
   return { migrated: true, providerUid };

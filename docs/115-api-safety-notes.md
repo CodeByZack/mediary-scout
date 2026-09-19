@@ -74,12 +74,13 @@ live 115 execution. It fails closed unless either:
 - `MEDIA_TRACK_115_WRITE_SCOPE_CIDS` is configured with an explicit comma-separated
   production write scope.
 
-The factory also marks `MEDIA_TRACK_115_TEST_ROOT_CID`, `CLAWD_MEDIA_ROOT_CID`,
-`MOVIES_CID`, `TV_SHOWS_CID`, `ANIME_CID`, and any
+The factory also marks `MEDIA_TRACK_115_TEST_ROOT_CID` and any
 `MEDIA_TRACK_115_PROTECTED_CIDS` values as protected flatten targets.
+(旧项目遗留的 `CLAWD_MEDIA_ROOT_CID` / `MOVIES_CID` / `TV_SHOWS_CID` /
+`ANIME_CID` 已随代码清理移除,不再读取。)
 
 The Next.js worker can opt into this boundary with
-`MEDIA_TRACK_STORAGE_ADAPTER=115`. That path now builds a cookie-backed
+`MEDIA_TRACK_MODE=normal`(resolver 派生 `MEDIA_TRACK_STORAGE_ADAPTER=115`). That path now builds a cookie-backed
 `Pan115CookieClient`, then wraps it with the protected executor factory. It
 requires `PAN115_COOKIE` plus `MEDIA_TRACK_115_TEST_ROOT_CID` or explicit
 `MEDIA_TRACK_115_WRITE_SCOPE_CIDS`.

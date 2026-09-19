@@ -3,12 +3,11 @@ import { maskProviderUid } from "../../lib/mask-provider-uid";
 import { connection } from "next/server";
 import { headers } from "next/headers";
 import { Suspense } from "react";
-import { Bell, Bot, Cable, CalendarClock, Clapperboard, Gauge, KeyRound, Languages, Radio, ShieldCheck, Subtitles, TriangleAlert, Users } from "lucide-react";
+import { Bot, Cable, CalendarClock, Clapperboard, Gauge, Languages, Radio, ShieldCheck, Subtitles, TriangleAlert } from "lucide-react";
 import { AppSidebar } from "../../components/app-sidebar";
 import { AddDriveBrandTabs } from "../../components/add-drive-brand-tabs";
 import { TestConnectionButton } from "../../components/test-connection-button";
 import { UnbindStorageButton } from "../../components/unbind-storage-button";
-import { PushNotificationForm } from "../../components/push-notification-form";
 import { PreferredLanguageForm } from "../../components/preferred-language-form";
 import { QualityPreferenceForm } from "../../components/quality-preference-form";
 import { RulePatternsForm } from "../../components/rule-patterns-form";
@@ -22,8 +21,6 @@ import { PanSouConfigForm } from "../../components/pansou-config-form";
 import { DailySweepForm } from "../../components/daily-sweep-form";
 import { PatrolNowButton } from "../../components/patrol-now-button";
 import { SettingsTabs } from "../../components/settings-tabs";
-import { PasswordChangeForm } from "../../components/password-change-form";
-import { AccountAdminPanel } from "../../components/account-admin-panel";
 import { GitHubNameplate } from "../../components/github-nameplate";
 import { SettingsActionInbox } from "../../components/settings-action-inbox";
 import { loadSettingsAttentionSummary, markSettingsAttentionSeen } from "../../lib/settings-attention-server";
@@ -32,9 +29,6 @@ import {
   getAccountConnectedStorages,
   getAccountScopedSettings,
   getCurrentAccountId,
-  getCurrentAccountSummary,
-  isMultiUserEnabled,
-  listManagedAccounts,
   getDailySweepTimes,
   MAX_DAILY_SWEEP_TIMES,
   LAST_SWEEP_COMPLETED_AT_SETTING_KEY,
@@ -137,20 +131,10 @@ export default function SettingsPage({
                     <DailySweepSection />
                   </Suspense>
                   <Suspense fallback={<div className="skeleton skeleton-heading" />}>
-                    <PushNotificationSection />
                   </Suspense>
                 </>
               }
-              account={
-                <>
-                  <Suspense fallback={null}>
-                    <PasswordChangeSection />
-                  </Suspense>
-                  <Suspense fallback={null}>
-                    <AccountManagementSection />
-                  </Suspense>
-                </>
-              }
+              account={null}
               // Fallback is null, not a skeleton: a skeleton element would stream
               // into the slot and the empty-slot observer would read the tab as
               // visible before we know whether the viewer is the 站主.
@@ -186,50 +170,6 @@ async function SettingsAttentionSection({
   // createdAt <= the seen_at written here → never badges the page it was shown on.
   await markSettingsAttentionSeen();
   return <SettingsActionInbox items={summary.items} />;
-}
-
-async function PasswordChangeSection() {
-  // connection() FIRST: cacheComponents would otherwise prerender this at build time
-  // (multi-user off) and bake it as null → never shows in production multi-user.
-  await connection();
-  if (!isMultiUserEnabled()) return null;
-  return (
-    <section id="password" className="panel" style={{ maxWidth: 720, marginTop: 24 }}>
-      <div className="panel-header">
-        <div>
-          <h2 className="panel-title">
-            <KeyRound size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
-            修改密码
-          </h2>
-          <p className="panel-note">修改后所有登录会话失效，需用新密码重新登录</p>
-        </div>
-      </div>
-      <PasswordChangeForm />
-    </section>
-  );
-}
-
-async function AccountManagementSection() {
-  await connection();
-  if (!isMultiUserEnabled()) return null;
-  const me = await getCurrentAccountSummary();
-  if (!me?.isOwner) return null;
-  const accounts = await listManagedAccounts(await getCurrentAccountId());
-  if (!accounts) return null;
-  return (
-    <section id="accounts" className="panel" style={{ maxWidth: 720, marginTop: 24 }}>
-      <div className="panel-header">
-        <div>
-          <h2 className="panel-title">
-            <Users size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
-            账号管理
-          </h2>
-          <p className="panel-note">作为站主，你可以为忘记密码的用户重置密码（不影响他们的网盘和媒体库）</p>
-        </div>
-      </div>
-      <AccountAdminPanel accounts={accounts} />
-    </section>
-  );
 }
 
 async function PreferredLanguageSection() {
@@ -361,10 +301,16 @@ async function TmdbApiKeySection() {
             <Clapperboard size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
             TMDB 元数据
           </h2>
-          <p className="panel-note">影视元数据来源；可填自己的 key 直连，大陆网络可自建 tmdb-proxy</p>
+          <p className="panel-note">影视元数据来源；<strong>强烈建议配置</strong>，可填自己的 key 直连，大陆网络可自建 tmdb-proxy</p>
         </div>
       </div>
       <TmdbApiKeyForm apiKeySet={apiKeySet} baseUrlSet={baseUrlSet} currentBaseUrl={baseUrl} />
+      {!apiKeySet ? (
+        <p className="panel-note drive-risk-note" style={{ marginTop: 12 }}>
+          <TriangleAlert size={12} aria-hidden style={{ verticalAlign: "-2px", marginRight: 4 }} />
+          未配置 key：播出日同步、缺集年守卫、综艺集名锚定均静默降级，结果也无法按 TMDB 规范命名归位。开始获取前请先填好。
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -400,7 +346,7 @@ async function ResourceProviderSection() {
         <>
           <div style={{ height: 18 }} />
           <ProwlarrConfigForm baseURL={prowlarrBaseURL} apiKeySet={prowlarrApiKeySet} />
-          <p className="push-help" style={{ margin: "10px 0 0" }}>
+          <p className="hint-help" style={{ margin: "10px 0 0" }}>
             注：夸克网盘 API 不支持磁力，Prowlarr 仅对 115 盘生效；若你只用夸克，无需配置 Prowlarr。
           </p>
         </>
@@ -454,7 +400,7 @@ async function Pan115Section() {
         {(() => {
           // #93: derive the header badge from ALL drives — 115-only status made
           // a 光鸭/夸克-only user read a permanent misleading 未连接.
-          const badge = driveConnectionBadge({ envConnected: status.connected && status.source === "env", drives });
+          const badge = driveConnectionBadge({ drives });
           return (
             <span className={`hub-badge tone-${badge.tone}`}>
               {badge.tone === "green" ? (
@@ -581,39 +527,10 @@ async function DailySweepSection() {
         }}
       >
         <PatrolNowButton />
-        <span className="push-help" style={{ marginLeft: "auto" }}>
+        <span className="hint-help" style={{ marginLeft: "auto" }}>
           上次巡检 {lastLabel} · 下次巡检 {nextSlot}
         </span>
       </div>
-    </section>
-  );
-}
-
-async function PushNotificationSection() {
-  await connection();
-  const repository = getAccountScopedSettings(await getCurrentAccountId());
-
-  // Only whether each channel is configured — the plaintext key is never sent
-  // to the client.
-  const configured: Record<string, boolean> = {};
-  for (const key of ["bark", "serverchan", "wecom", "webhook"]) {
-    const value = await repository.getSetting(`push_${key}`);
-    configured[key] = Boolean(value && value.trim());
-  }
-
-  return (
-    <section className="panel" style={{ maxWidth: 720, marginTop: 24 }}>
-      <div className="panel-header">
-        <div>
-          <h2 className="panel-title">
-            <Bell size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
-            推送通知
-          </h2>
-          <p className="panel-note">配置推送渠道后，每日定时巡检完成时会自动推送更新播报</p>
-        </div>
-      </div>
-
-      <PushNotificationForm configured={configured} />
     </section>
   );
 }

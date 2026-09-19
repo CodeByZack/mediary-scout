@@ -83,7 +83,7 @@ export function TmdbApiKeyForm({ apiKeySet, baseUrlSet, currentBaseUrl }: { apiK
 
   return (
     <div className="push-form">
-      <p className="push-help" style={{ marginBottom: 12 }}>
+      <p className="hint-help" style={{ marginBottom: 12 }}>
         了解 TMDB{" "}
         <a href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer">
           官网 <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />

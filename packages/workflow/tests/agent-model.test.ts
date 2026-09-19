@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   createAgentModel,
   createAgentProviderConfig,
-  createAgentModelFromEnv,
   llmConfigError,
   normalizeLlmBaseUrl,
   sanitizeLlmApiKey,
@@ -11,7 +10,7 @@ import {
 /**
  * The live vercel-ai model factory — RESTORED after Phase 8 (764ae19) deleted it
  * with the dead structured-output agent. It is NOT dead: apps/web `getAgentModel`
- * calls createAgentModelFromEnv for every real (vercel-ai) run, and the §6a
+ * calls createAgentModel for every real (vercel-ai) run, and the §6a
  * interrogation script uses it. Losing it breaks live e2e at runtime even though
  * tsc stayed green (the web typechecked against a stale dist .d.ts).
  *
@@ -54,7 +53,7 @@ describe("agent-model — the live OpenAI-compatible (BYO) LanguageModel factory
     expect(providerSettings.headers).toBeUndefined();
   });
 
-  // C1 (Copilot #51): a blank/whitespace apiKey (e.g. AGENT_MODEL_API_KEY= in
+  // C1 (Copilot #51): a blank/whitespace apiKey (e.g. an empty Settings 
   // .env) must NOT send a key at all — neither Bearer nor `api-key: ""` — that
   // breaks keyless local LLMs with an avoidable 401.
   it("omits BOTH apiKey and headers for an EMPTY-STRING apiKey (keyless)", () => {
@@ -102,27 +101,18 @@ describe("agent-model — the live OpenAI-compatible (BYO) LanguageModel factory
     expect(() => createAgentModel({ baseURL: "https://example.test/v1" })).toThrow();
   });
 
-  it("builds a model from AGENT_MODEL_* env", () => {
-    const model = createAgentModelFromEnv({
-      AGENT_MODEL_API_KEY: "k",
-      AGENT_MODEL_BASE_URL: "https://example.test/v1",
-      AGENT_MODEL_ID: "some-model",
-    } as NodeJS.ProcessEnv);
+  it("builds a model from explicit options (Settings page config)", () => {
+    const model = createAgentModel({
+      apiKey: "k",
+      baseURL: "https://example.test/v1",
+      modelId: "some-model",
+    });
     expect(model).toBeDefined();
     expect((model as { modelId?: string }).modelId).toBe("some-model");
   });
 
-  it("still reads the XIAOMI_MIMO_* env fallback (back-compat for existing instances)", () => {
-    const fallback = createAgentModelFromEnv({
-      XIAOMI_MIMO_API_KEY: "k2",
-      XIAOMI_MIMO_BASE_URL: "https://token-plan-sgp.xiaomimimo.com/v1",
-      XIAOMI_MIMO_MODEL_ID: "mimo-v2.5-pro",
-    } as NodeJS.ProcessEnv);
-    expect((fallback as { modelId?: string }).modelId).toBe("mimo-v2.5-pro");
-  });
-
-  it("throws (no silent default) when env configures nothing", () => {
-    expect(() => createAgentModelFromEnv({} as NodeJS.ProcessEnv)).toThrow();
+  it("throws (no silent default) when nothing is configured", () => {
+    expect(() => createAgentModel({})).toThrow();
   });
 });
 

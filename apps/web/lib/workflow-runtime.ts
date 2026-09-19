@@ -1,14 +1,12 @@
-import { randomBytes } from "node:crypto";
-import { cache } from "react";
 import {
   checkLoginAllowed,
   recordLoginFailure,
   recordLoginSuccess,
   normalizeThrottleKey,
 } from "./login-throttle";
+import { randomBytes } from "node:crypto";
 import {
   PanSouResourceProvider,
-  createProtectedPan115CookieStorageExecutorFromEnv,
   createBootstrapPan115CookieStorageExecutor,
   CompositeResourceProvider,
   ProwlarrResourceProvider,
@@ -20,10 +18,8 @@ import {
   FakeStorageExecutor,
   FINISHED_RUN_RETENTION_MS,
   createAgentModel,
-  createAgentModelFromEnv,
   createStubAcquisitionModel,
   llmConfigError,
-  formatDailyDigestPushText,
   getTrackedSeasonStatusView,
   importForeignWorkAsMovie,
   assertWorkflowAgentAdapterPolicy,
@@ -35,9 +31,7 @@ import {
   queueTrackingInitialization,
   reserveMovie,
   runNextQueuedConsumption,
-  resolveDriveSourceLabels,
   runScheduledType3Monitoring,
-  sendPushNotifications,
   createSqliteWorkflowRepository,
   migrateLegacyCookieToDefaultAccount,
   resolveStorageBinding,
@@ -64,11 +58,9 @@ import {
   pickWorkspaceStorageId,
   resolveQueueStorageChoice,
   resolveWorkspaceFromParam,
-  type Account,
   type WorkflowScope,
   type MediaSearchCandidate,
   type MediaTitle,
-  type NotificationEvent,
   type ResourceProvider,
   type ResourceType,
   type SeasonMetadataSync,
@@ -87,7 +79,6 @@ import {
 } from "./pansou-chain";
 import { findDemoCandidateById, findDemoCandidateByTmdbId } from "./demo-candidates";
 import { seedDemoWorkflowRepository } from "./demo-workflow";
-import { resolveRegistration, deriveBootstrapState, canManageAccounts } from "./account-bootstrap";
 import { isDemoMode } from "./demo-mode";
 
 export type CandidateTrackingRequestResult =
@@ -108,7 +99,7 @@ let fakeStorageExecutor: StorageExecutor | null = null;
 // Per-signature model cache (keyed by adapter|baseURL|modelId|apiKey) so multiple
 // accounts with different LLM configs each keep their own built model — a single
 // slot would thrash between accounts in multi-user mode.
-const agentModelCache = new Map<string, ReturnType<typeof createAgentModelFromEnv>>();
+const agentModelCache = new Map<string, ReturnType<typeof createAgentModel>>();
 
 /** The SQLite database file for durable state. Required in every build — the
  *  project is SQLite-only since Postgres was removed. */
@@ -147,64 +138,14 @@ async function createLoginSession(accountId: string): Promise<string> {
   return signSession(sessionId, await getSessionSecret());
 }
 
-/**
- * Register a local account (multi-user). v1: open registration (self-host — the
- * operator controls who can reach the instance; login exists to separate data,
- * not to defend a public endpoint). The first account created is the owner, for
- * future group/admin features. Returns a signed session cookie (auto-login).
- */
-export async function registerAccount(username: string, password: string): Promise<AuthOutcome> {
-  const trimmed = username.trim();
-  if (trimmed.length < 2 || password.length < 6) {
-    return { ok: false, error: "用户名至少 2 位、密码至少 6 位。" };
-  }
-  const repository = getWorkflowRepository();
-  const passwordHash = await hashPassword(password);
-  const decision = resolveRegistration(await repository.listAccounts());
-  try {
-    if (decision.kind === "adopt-default") {
-      // First user on an unclaimed instance: claim acct_default in place so the
-      // existing library + drives stay theirs (is_owner already true on seed).
-      await repository.adoptDefaultAccount({ username: trimmed, passwordHash });
-      return {
-        ok: true,
-        accountId: DEFAULT_ACCOUNT_ID,
-        signedCookie: await createLoginSession(DEFAULT_ACCOUNT_ID),
-      };
-    }
-    const account: Account = {
-      id: `acct_${randomBytes(12).toString("hex")}`,
-      username: trimmed,
-      passwordHash,
-      groupId: null,
-      isOwner: false,
-      createdAt: new Date().toISOString(),
-    };
-    await repository.createAccount(account);
-    return { ok: true, accountId: account.id, signedCookie: await createLoginSession(account.id) };
-  } catch (error) {
-    if (error instanceof DuplicateUsernameError) {
-      return { ok: false, error: "用户名已存在。" };
-    }
-    throw error;
-  }
-}
-
-/** Authenticate username+password and start a session. Throttled against brute force. */
+/** Authenticate password and start a session. Throttled against brute force. */
 export async function loginAccount(
-  username: string,
+  _username: string,
   password: string,
   throttleKey?: string,
 ): Promise<AuthOutcome> {
-  // 无显式 throttleKey 时（库级调用，无请求上下文）退化为仅按身份。
-  // 单用户模式忽略用户名（永远是 acct_default），故身份用常量——否则换个
-  // 用户名就换一个桶，限流可被直接绕过。
-  // 多用户不做 toLowerCase()：账号查询是精确匹配，折叠大小写会让不同账号共用一个桶。
-  // 一律过 normalizeThrottleKey()——显式传入的 key 也必须有界，否则调用方
-  // 传超长键就能撑大内存。
-  const key = normalizeThrottleKey(
-    throttleKey ?? (isMultiUserEnabled() ? username : DEFAULT_ACCOUNT_ID),
-  );
+  // 限流身份用常量——单用户模式永远登录 acct_default，不按用户名分桶。
+  const key = normalizeThrottleKey(throttleKey ?? DEFAULT_ACCOUNT_ID);
   const now = Date.now();
   const verdict = checkLoginAllowed(key, now);
   if (!verdict.allowed) {
@@ -215,11 +156,9 @@ export async function loginAccount(
   const DUMMY_HASH =
     "scrypt:a2448ef076990b889ef0540720bccce2:4fdc41afebb4560f4a638b4225d8325904894d18d2df1c7a95c50a65c141b926dc252e99b63e681e15e2d6e008acc845b02c9a2fc99a4888749226ab262c6978";
 
-  // 单用户模式：只认 acct_default（「只输密码」，用户名忽略），且必须已设密码。
+  // 只认 acct_default（「只输密码」，用户名忽略），且必须已设密码。
   const repo = getWorkflowRepository();
-  const account = isMultiUserEnabled()
-    ? await repo.getAccountByUsername(username.trim())
-    : await repo.getAccountById(DEFAULT_ACCOUNT_ID);
+  const account = await repo.getAccountById(DEFAULT_ACCOUNT_ID);
 
   const hash = account?.passwordHash || DUMMY_HASH;
   const valid = await verifyPassword(password, hash);
@@ -227,7 +166,7 @@ export async function loginAccount(
     recordLoginFailure(key, now);
     return {
       ok: false,
-      error: isMultiUserEnabled() ? "用户名或密码不正确。" : "密码不正确。",
+      error: "密码不正确。",
     };
   }
   // 先建 session 再清限流桶：建 session 可能抛（DB 故障、取密钥失败），
@@ -288,112 +227,6 @@ export async function clearSingleUserPassword(): Promise<void> {
   await repo.deleteSessionsForAccount(DEFAULT_ACCOUNT_ID);
 }
 
-/** Self-service password change. Verifies the current password, sets the new hash,
- *  and revokes ALL of the account's sessions (incl. the caller's → must re-login). */
-export async function changeOwnPassword(
-  accountId: string,
-  currentPassword: string,
-  newPassword: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (newPassword.length < 6) {
-    return { ok: false, error: "新密码至少 6 位。" };
-  }
-  const repo = getWorkflowRepository();
-  const acct = await repo.getAccountById(accountId);
-  const valid = Boolean(acct && acct.passwordHash.length > 0 && (await verifyPassword(currentPassword, acct.passwordHash)));
-  if (!acct || !valid) {
-    return { ok: false, error: "当前密码不正确。" };
-  }
-  await repo.setAccountPassword(accountId, await hashPassword(newPassword));
-  await repo.deleteSessionsForAccount(accountId);
-  return { ok: true };
-}
-
-/** Owner-only reset of another account's password (no current-password needed).
- *  Server-enforced owner check — NOT just hidden UI. Revokes the target's sessions. */
-export async function resetUserPassword(
-  ownerAccountId: string,
-  targetAccountId: string,
-  newPassword: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const repo = getWorkflowRepository();
-  const owner = await repo.getAccountById(ownerAccountId);
-  if (!canManageAccounts(owner)) {
-    return { ok: false, error: "无权限。" };
-  }
-  if (newPassword.length < 6) {
-    return { ok: false, error: "新密码至少 6 位。" };
-  }
-  const target = await repo.getAccountById(targetAccountId);
-  if (!target) {
-    return { ok: false, error: "账号不存在。" };
-  }
-  await repo.setAccountPassword(targetAccountId, await hashPassword(newPassword));
-  await repo.deleteSessionsForAccount(targetAccountId);
-  return { ok: true };
-}
-
-/** Bootstrap state for the /login claim screen: is the instance unclaimed, and does
- *  the default account already own a library (→ "接管" vs "创建" copy). */
-export async function getBootstrapState(): Promise<{ needsClaim: boolean; hasExistingLibrary: boolean }> {
-  const repo = getWorkflowRepository();
-  const accounts = await repo.listAccounts();
-  const library = await repo.listTrackedSeasonStates(DEFAULT_ACCOUNT_ID);
-  return deriveBootstrapState(accounts, library.length);
-}
-
-/** Current account's display summary for the sidebar identity block — NEVER the
- *  password hash. Null when there's no real account (unauthenticated sentinel).
- *
- *  Per-request memoized via `cache()`: the identity loader renders twice on
- *  multi-user pages (desktop footer + mobile top-bar copy) and both call this —
- *  `cache()` dedupes the `getAccountById` DB read within a single request so we
- *  only hit the DB once even with two mounted loaders. (Next.js / React.cache
- *  per-request memoization pattern.) */
-export const getCurrentAccountSummary = cache(
-  async (): Promise<{ username: string; isOwner: boolean } | null> => {
-    const acct = await getWorkflowRepository().getAccountById(await getCurrentAccountId());
-    return acct ? { username: acct.username, isOwner: acct.isOwner } : null;
-  },
-);
-
-export interface ManagedAccount {
-  id: string;
-  username: string;
-  isOwner: boolean;
-  createdAt: string;
-  driveCount: number;
-}
-
-/** Owner-only: sanitized account list for the 账号管理 panel (no password hashes).
- *  Returns null for non-owners — server-side gate, not just hidden UI. */
-export async function listManagedAccounts(ownerAccountId: string): Promise<ManagedAccount[] | null> {
-  const repo = getWorkflowRepository();
-  const owner = await repo.getAccountById(ownerAccountId);
-  if (!canManageAccounts(owner)) {
-    return null;
-  }
-  const accounts = await repo.listAccounts();
-  const summaries: ManagedAccount[] = [];
-  for (const account of accounts) {
-    const drives = await repo.listConnectedStorages(account.id);
-    summaries.push({
-      id: account.id,
-      username: account.username,
-      isOwner: account.isOwner,
-      createdAt: account.createdAt,
-      driveCount: drives.length,
-    });
-  }
-  return summaries;
-}
-
-/** §7 P1: multi-user mode gates the login/register UI + session enforcement.
- *  Default OFF → single-user, no login, everything is the implicit default
- *  account (P0 behavior, zero-change). */
-export function isMultiUserEnabled(): boolean {
-  return process.env.MEDIA_TRACK_MULTI_USER === "1";
-}
 
 export const SESSION_COOKIE_NAME = "mt_session";
 
@@ -638,10 +471,8 @@ export function isRemoteRequest(hdrs: Headers): boolean {
  *
  * `"unknown"`（状态读取失败）同样无需特判：远程本来就要 session，局域网本来就放行。
  *
- * 远程放行只认 `acct_default`：同一个库可能残留多用户时期的账号
- * （`MEDIA_TRACK_MULTI_USER` 是运行时开关，可来回切），那些账号的 session
- * 不该在单用户模式下被当作站主，况且改密/清密只会吊销 `acct_default` 的 session，
- * 吊销不掉它们。
+ * 远程放行只认 `acct_default`：同一个库可能残留多用户时期的账号，
+ * 那些账号的 session 不该被当作站主。
  *
  * 抽成纯函数是为了能确定性覆盖全部「内外 × 有无 session」组合——
  * Emby/Jellyfin 的事故正是内外判定出错，这段逻辑必须可被精确测试。
@@ -660,47 +491,32 @@ export function resolveSingleUserAccount(opts: {
 }
 
 export async function getCurrentAccountId(): Promise<string> {
-  if (!isMultiUserEnabled()) {
-    // 注意：这里**不能**因为「没设密码」就提前返回 acct_default。那正是被移除的
-    // 公网洞——未设密码的实例会对隧道来的匿名访客全开放。密码状态只作为参数
-    // 传给 resolveSingleUserAccount()，由它统一按「LAN 开放 / 远程需 session」判定。
-    const hasPassword = await hasLoginPassword();
-    // 无论是否设过密码，都要看请求来自哪里
-    let hdrs: Headers;
-    let sessionCookie: string | undefined;
-    try {
-      const { cookies, headers } = await import("next/headers");
-      hdrs = await headers();
-      sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
-    } catch {
-      // 无请求上下文（in-process worker）：视为本地直通——采集任务不认 cookie。
-      return DEFAULT_ACCOUNT_ID;
-    }
-    if (!isRemoteRequest(hdrs)) return DEFAULT_ACCOUNT_ID; // LAN → 开放
-    // 已确认是远程：此后任何读取失败都必须 fail-closed，不能退回开放默认值
-    let sessionAccountId: string | null = null;
-    if (sessionCookie) {
-      try {
-        sessionAccountId = await resolveSessionAccountId(sessionCookie);
-      } catch {
-        return UNAUTHENTICATED_ACCOUNT_ID;
-      }
-    }
-    return resolveSingleUserAccount({ hasPassword, isRemote: true, sessionAccountId });
-  }
+  // 注意：这里**不能**因为「没设密码」就提前返回 acct_default。那正是被移除的
+  // 公网洞——未设密码的实例会对隧道来的匿名访客全开放。密码状态只作为参数
+  // 传给 resolveSingleUserAccount()，由它统一按「LAN 开放 / 远程需 session」判定。
+  const hasPassword = await hasLoginPassword();
+  // 无论是否设过密码，都要看请求来自哪里
+  let hdrs: Headers;
+  let sessionCookie: string | undefined;
   try {
-    const { cookies } = await import("next/headers");
-    const store = await cookies();
-    const raw = store.get(SESSION_COOKIE_NAME)?.value;
-    if (!raw) {
-      return UNAUTHENTICATED_ACCOUNT_ID;
-    }
-    return (await resolveSessionAccountId(raw)) ?? UNAUTHENTICATED_ACCOUNT_ID;
+    const { cookies, headers } = await import("next/headers");
+    hdrs = await headers();
+    sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
   } catch {
-    // No request scope (the in-process worker) — it resolves credentials per
-    // claimed run.accountId, not via the request cookie.
+    // 无请求上下文（in-process worker）：视为本地直通——采集任务不认 cookie。
     return DEFAULT_ACCOUNT_ID;
   }
+  if (!isRemoteRequest(hdrs)) return DEFAULT_ACCOUNT_ID; // LAN → 开放
+  // 已确认是远程：此后任何读取失败都必须 fail-closed，不能退回开放默认值
+  let sessionAccountId: string | null = null;
+  if (sessionCookie) {
+    try {
+      sessionAccountId = await resolveSessionAccountId(sessionCookie);
+    } catch {
+      return UNAUTHENTICATED_ACCOUNT_ID;
+    }
+  }
+  return resolveSingleUserAccount({ hasPassword, isRemote: true, sessionAccountId });
 }
 
 /**
@@ -844,7 +660,6 @@ export async function runStartupMigrations(): Promise<void> {
   try {
     const result = await migrateLegacyCookieToDefaultAccount({
       repository: getWorkflowRepository(),
-      env: process.env,
       now: new Date().toISOString(),
     });
     if (result.migrated) {
@@ -883,11 +698,12 @@ function buildAccountContextResolver(): ResolveAccountWorkerContext {
     const parents = await getWorkerStorageParents(accountId, connectedStorageId);
     const { model, preferredLanguage, qualityPreference } = await getAgentModel(scoped);
     // The run's drive brand selects its resource sources (quark→PanSou quark-only;
-    // 115→PanSou+Prowlarr). null when no drive resolves → env MEDIA_TRACK_DEFAULT_STORAGE_BRAND
-    // → default quark fallback (2026-08-10: 用户要求默认盘改为夸克, 暂不用 115).
+    // 115→PanSou+Prowlarr). null when no drive resolves → quark fallback
+    // (2026-08-10: 用户要求默认盘改为夸克, 暂不用 115; 2026-09-18: 删除
+    // MEDIA_TRACK_DEFAULT_STORAGE_BRAND, 默认盘锁定 quark 常量).
     const driveProvider =
       (await getAccountStorageCredentials(accountId, connectedStorageId))?.provider ??
-      process.env.MEDIA_TRACK_DEFAULT_STORAGE_BRAND ??
+      // 默认盘锁定为夸克（2026-08-10 用户拍板：默认盘改夸克，暂不用 115）。
       "quark";
     const assrtToken = await getAssrtToken(scoped);
     return {
@@ -945,7 +761,6 @@ export async function runNextQueuedWorkflow() {
   // The base deps below are the default account's, used as the fallback the
   // resolver overrides per run.
   const accountId = DEFAULT_ACCOUNT_ID;
-  await hydratePan115CookieFromDb();
   // The user's language preference is standing context baked into the agent
   // instance (one global preference), so every workflow — movie, series, type2,
   // anime — searches with it. No per-workflow plumbing.
@@ -955,7 +770,6 @@ export async function runNextQueuedWorkflow() {
   const storage = await getWorkerStorageExecutor(accountId);
   const parents = await getWorkerStorageParents(accountId);
   const resolveAccountContext = buildAccountContextResolver();
-  const startedAt = new Date().toISOString();
   const onAuthErrorFreeze = (id: string, reason: string) => freezeConnectedStorage(id, reason);
   // ★ 2026-09-12：type1 全季(40 集跨季任务)的年守卫数据源 —— 队列侧此前从未注入
   // 元数据同步,播出日只在 type3 巡检侧有,全季获取的守卫因此永久惰性。
@@ -977,9 +791,6 @@ export async function runNextQueuedWorkflow() {
     onAuthErrorFreeze,
     ...(syncSeasonMetadata ? { syncSeasonMetadata } : {}),
   });
-  if (outcome.status !== "idle") {
-    await pushNotificationsSince(repository, startedAt);
-  }
   return outcome;
 }
 
@@ -1020,7 +831,7 @@ export const LLM_API_KEY_SETTING_KEY = "llm_api_key";
 export const LLM_MODEL_ID_SETTING_KEY = "llm_model_id";
 
 /** The user's configured OpenAI-compatible LLM (Settings → AI 模型). Each field is
- *  undefined when unset/blank, so `getAgentModel` cleanly falls back to .env. */
+ *  undefined when unset/blank (config lives in the Settings page only). */
 export async function getLlmConfig(repository: {
   getSetting(key: string): Promise<string | null>;
 }): Promise<{ baseURL: string | undefined; apiKey: string | undefined; modelId: string | undefined }> {
@@ -1051,26 +862,18 @@ export async function getAssrtToken(
   return value ? value : undefined;
 }
 
-/** Ordered TMDB access channels: user's own key (direct or custom proxy) →
- *  env token (direct). No fallback to author's proxy — if no key is configured,
- *  TMDB access fails and the UI shows a prompt to configure it. */
+/** TMDB access channel: ONLY the Settings-page key (direct TMDB or custom
+ *  proxy base URL). env's TMDB_READ_TOKEN / TMDB_BASE_URL channels were removed
+ *  2026-09-18 (#38 direction: zero fallback, user must configure their own key).
+ *  If no key is configured, TMDB access fails and the UI shows a prompt. */
 export async function getTmdbAccesses(
   repository: { getSetting(key: string): Promise<string | null> },
-  env: NodeJS.ProcessEnv = process.env,
 ): Promise<TmdbAccess[]> {
   const accesses: TmdbAccess[] = [];
   const userKey = (await repository.getSetting(TMDB_API_KEY_SETTING_KEY))?.trim();
   if (userKey) {
-    // Priority: user settings > env TMDB_BASE_URL > direct TMDB
-    // User settings take precedence so a user with their own proxy can
-    // override any deployment-level default.
     const customBase = (await repository.getSetting(TMDB_BASE_URL_SETTING_KEY))?.trim();
-    const baseURL = customBase || env.TMDB_BASE_URL?.trim() || TMDB_DIRECT_BASE_URL;
-    accesses.push({ baseURL, readToken: userKey });
-  }
-  const envToken = env.TMDB_READ_TOKEN?.trim();
-  if (envToken) {
-    accesses.push({ baseURL: TMDB_DIRECT_BASE_URL, readToken: envToken });
+    accesses.push({ baseURL: customBase || TMDB_DIRECT_BASE_URL, readToken: userKey });
   }
   return accesses;
 }
@@ -1180,7 +983,7 @@ function parseMovieCandidateId(candidateId: string): number | null {
 export async function movieTargetFromTmdbId(
   tmdbId: number,
 ): Promise<{ title: MediaTitle; keyword: string } | null> {
-  if (process.env.MEDIA_TRACK_SEARCH_PROVIDER === "tmdb") {
+  if (!isDemoMode()) {
     return prepareMovieTarget({
       tmdbId,
       qualityPreference: defaultQuality(),
@@ -1254,86 +1057,6 @@ export async function reserveCandidate(
   return { status: request.status, trackedSeasonId: `${movie.title.id}_movie` };
 }
 
-/**
- * Outbound push rides on the feed: whatever notifications a run persisted
- * are delivered to every user-configured channel (DB config > env). Delivery
- * failures are logged, never thrown — the run already succeeded.
- */
-async function pushNotificationsSince(
-  targetRepository: WorkflowRepository,
-  sinceIso: string,
-): Promise<void> {
-  try {
-    // Cross-account: the drain/sweep may have completed runs for several accounts.
-    // Each notification is tagged with its owning account so it goes to THAT
-    // user's channels (push config resolved per-account: account → global → env).
-    // since is applied in the repository BEFORE the limit so a large sweep's
-    // earliest notifications are not crowded out by newer already_current noise.
-    // Cap is high enough for a full patrol of a large library; still bounded.
-    const recent = await targetRepository.listRecentNotificationsWithAccount({
-      since: sinceIso,
-      limit: 10_000,
-    });
-    if (recent.length === 0) {
-      return;
-    }
-
-    type RecentEntry = { connectedStorageId: string | null; notification: NotificationEvent };
-    const byAccount = new Map<string, RecentEntry[]>();
-    for (const { accountId, connectedStorageId, notification } of recent) {
-      const list = byAccount.get(accountId) ?? [];
-      list.push({ connectedStorageId, notification });
-      byAccount.set(accountId, list);
-    }
-
-    for (const [accountId, entries] of byAccount) {
-      const settings = getAccountScopedSettings(accountId);
-      // Source-drive tags: only when this account has ≥2 drives mounted (else the
-      // map is empty and no message carries a source). Resolution is null/unknown
-      // safe (legacy run or unbound drive → that entry is simply not tagged).
-      const drives = await targetRepository.listConnectedStorages(accountId);
-      const sourceLabels = resolveDriveSourceLabels(entries, drives);
-
-      const notifications = entries.map((entry) => entry.notification);
-      // A scheduled sweep touches many shows; collapse this account's into ONE
-      // digest. User-triggered events stay per-resource — each its own message.
-      const scheduled = notifications.filter((notification) => notification.trigger === "scheduled");
-      const individual = notifications.filter((notification) => notification.trigger !== "scheduled");
-
-      for (const notification of individual) {
-        const sourceLabel = sourceLabels.get(notification.id);
-        try {
-          await sendPushNotifications({ repository: settings, notification, ...(sourceLabel ? { sourceLabel } : {}) });
-        } catch (error) {
-          console.error(
-            `[media-track] push for ${notification.id} failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-
-      if (scheduled.length > 0) {
-        const digest: NotificationEvent = {
-          id: `digest_${accountId}_${sinceIso}`,
-          workflowRunId: scheduled[0]!.workflowRunId,
-          kind: "daily_digest",
-          title: "每日巡检",
-          body: formatDailyDigestPushText(scheduled, { sourceLabelById: sourceLabels }),
-          createdAt: new Date().toISOString(),
-          trigger: "scheduled",
-        };
-        try {
-          await sendPushNotifications({ repository: settings, notification: digest });
-        } catch (error) {
-          console.error(
-            `[media-track] digest push failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-    }
-  } catch (error) {
-    console.error(`[media-track] notification push batch failed: ${String(error)}`);
-  }
-}
 
 export async function queueCandidateSeries(
   candidateId: string,
@@ -1359,7 +1082,7 @@ export async function queueCandidateSeries(
   if (workspace.frozen) {
     return { status: "unsupported", message: "该网盘已掉线，请重新扫码绑定同一个 115 后再获取。" };
   }
-  if (process.env.MEDIA_TRACK_SEARCH_PROVIDER === "tmdb") {
+  if (!isDemoMode()) {
     const target = await prepareSeriesTarget({
       tmdbId: parsed.tmdbId,
       qualityPreference: defaultQuality(),
@@ -1525,7 +1248,6 @@ export async function runScheduledType3(options?: {
   }
   let result: Awaited<ReturnType<typeof runScheduledType3Monitoring>>;
   try {
-    await hydratePan115CookieFromDb();
     const sync = tmdbSeasonMetadataSync();
     const accountId = await getCurrentAccountId();
     const { model, preferredLanguage, qualityPreference } = await getAgentModel(getAccountScopedSettings(accountId));
@@ -1546,7 +1268,6 @@ export async function runScheduledType3(options?: {
       ...(sync ? { syncSeasonMetadata: sync } : {}),
     });
     await repository.setSetting(LAST_SWEEP_COMPLETED_AT_SETTING_KEY, new Date().toISOString());
-    await pushNotificationsSince(repository, startedAt);
     return { outcomes: result };
   } catch (error) {
     // The sweep failed before completing — release THIS call's claims (keep the
@@ -1615,7 +1336,7 @@ async function trackingTargetFromCandidateId(candidateId: string): Promise<{
     return null;
   }
 
-  if (process.env.MEDIA_TRACK_SEARCH_PROVIDER === "tmdb") {
+  if (!isDemoMode()) {
     return prepareTrackingTarget({
       tmdbId: parsed.tmdbId,
       mediaType: "tv",
@@ -1687,7 +1408,7 @@ function parseTvCandidateId(candidateId: string): { tmdbId: number; seasonNumber
 
 async function getWorkerResourceProvider(
   settings: { getSetting(key: string): Promise<string | null> } = getWorkflowRepository(),
-  provider: string = process.env.MEDIA_TRACK_DEFAULT_STORAGE_BRAND ?? "quark",
+  provider: string = "quark",
   accountId?: string,
 ): Promise<ResourceProvider> {
   // accountId 仅用于健康结论回写(recordPanSouHealth)。多账户场景下,worker 在
@@ -1749,6 +1470,15 @@ async function getWorkerResourceProvider(
         },
       ],
     },
+    // fake 运行模式：任意关键词都返回一组按剧名动态构造的假候选（确定性派生，
+    // 同关键词结果一致，便于复现）。配合 FakeStorageExecutor 的
+    // defaultTransferOutcome，让「真实 TMDB 搜索 → 任意剧获取 → 假转存」全流程
+    // 零配置跑通（stub 脚本 + 假网盘，不调 LLM、不碰真实资源）。
+    defaultKeywordResult: (keyword) => [
+      { title: `${keyword} S01E01-S01E24 4K`, source: "fake" },
+      { title: `${keyword} 第一季 1080P`, source: "fake" },
+      { title: `${keyword} 全集 4K`, source: "fake" },
+    ],
   });
   return fakeResourceProvider;
 }
@@ -2149,9 +1879,8 @@ export async function workerHasConfiguredDrive(): Promise<boolean> {
   if ((process.env.MEDIA_TRACK_STORAGE_ADAPTER ?? "fake") !== "115") {
     return true; // fake/dev executor never needs a cookie
   }
-  if ((process.env.PAN115_COOKIE ?? "").trim().length > 0) {
-    return true; // legacy env-cookie bootstrap path
-  }
+  // env PAN115_COOKIE direct-connect removed (2026-09-18): a drive must be
+  // linked via the Web flow (connected_storage row). Only that counts.
   try {
     return await getWorkflowRepository().hasAnyConnectedStorage();
   } catch {
@@ -2186,6 +1915,7 @@ async function getWorkerStorageExecutor(
           credential: creds.credential ?? {},
           scopeCids,
           env: process.env,
+          ...(creds.moviesCid ? { moviesDirectoryId: creds.moviesCid } : {}),
           onCredentialRefresh: makeTokenPersister(accountId, creds.id, creds.provider),
         });
       }
@@ -2194,16 +1924,39 @@ async function getWorkerStorageExecutor(
         cookie: creds.cookie,
         scopeCids,
         env: process.env,
+        ...(creds.moviesCid ? { moviesDirectoryId: creds.moviesCid } : {}),
       });
     }
-    // No drive bound yet → legacy env-cookie 115 path (fresh deploy bootstrap).
-    return createProtectedPan115CookieStorageExecutorFromEnv({ env: process.env });
+    // No drive bound yet: env PAN115_COOKIE direct-connect was removed
+    // (2026-09-18) — connecting a drive via the Web flow is mandatory.
+    throw new Error(
+      "115 网盘未连接：请在设置页完成网盘绑定后再开始获取（env PAN115_COOKIE 直连已移除）",
+    );
   }
   if (adapter !== "fake") {
     throw new Error(`MEDIA_TRACK_STORAGE_ADAPTER_UNSUPPORTED: ${adapter}`);
   }
   fakeStorageExecutor ??= new FakeStorageExecutor({
     transferOutcomes: fakeTransferOutcomes(),
+    // 电影形态假数据：落点在电影根目录（fake 模式 = "fake_movies_root"）下的
+    // staging 时，转存产物为【单个影片文件】——搜索→仲裁→单片落盘→flatten→
+    // 标记 MOVIE 全流程零配置跑通（电影关键词是裸标题无年份，候选恒判 B，
+    // 由 stub 仲裁选中后转存）。
+    movieStagingRoots: [moviesParentDirectoryId()],
+    movieTransferOutcome: {
+      status: "succeeded",
+      providerMessage: "fake movie transfer completed",
+      files: [
+        {
+          id: "fake_movie_1",
+          storageDirectoryId: "assigned_by_fake_storage",
+          name: "Fake.Movie.1080p.mkv",
+          sizeBytes: 2_000_000_000,
+          episodeCode: "S01E01",
+          providerFileId: "provider_fake_movie_1",
+        },
+      ],
+    },
     defaultTransferOutcome: {
       status: "succeeded",
       providerMessage: "fake transfer completed",
@@ -2246,20 +1999,19 @@ async function getWorkerStorageParents(
  * dev/demo runs complete without a real model. The preferred subtitle language is
  * passed to each workflow as standing context, not baked into the model instance.
  */
-/** Resolve the live agent model config the SAME way the worker builds it: DB
- *  (pass an account-scoped repo) → .env (AGENT_MODEL_* with XIAOMI_MIMO_* as a
- *  back-compat fallback) → undefined. There is NO built-in default endpoint —
+/** Resolve the live agent model config: page Settings (DB) ONLY — the
+ *  AGENT_MODEL_* env fallback is removed (2026-09-18); configuration lives in
+ *  设置 → AI 模型 and nowhere else. There is NO built-in default endpoint —
  *  baseURL/modelId must be configured (truly BYO, issue #49). Shared by
- *  getAgentModel and testLlmConnectionAction so the Settings「测试连接」exercises
- *  exactly what acquisitions use. */
+ *  getAgentModel and testLlmConnectionAction so the Settings「测试连接」
+ *  exercises exactly what acquisitions use. */
 export async function resolveAgentModelConfig(
   repository: { getSetting(key: string): Promise<string | null> },
-  env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ apiKey?: string; baseURL?: string; modelId?: string }> {
   const llm = await getLlmConfig(repository);
-  const apiKey = llm.apiKey ?? env.AGENT_MODEL_API_KEY ?? env.XIAOMI_MIMO_API_KEY;
-  const baseURL = llm.baseURL ?? env.AGENT_MODEL_BASE_URL ?? env.XIAOMI_MIMO_BASE_URL;
-  const modelId = llm.modelId ?? env.AGENT_MODEL_ID ?? env.XIAOMI_MIMO_MODEL_ID;
+  const apiKey = llm.apiKey;
+  const baseURL = llm.baseURL;
+  const modelId = llm.modelId;
   return {
     ...(apiKey === undefined ? {} : { apiKey }),
     ...(baseURL === undefined ? {} : { baseURL }),
@@ -2289,14 +2041,14 @@ export async function acquireLlmPreflightError(
   if (env.MEDIA_TRACK_AGENT_ADAPTER !== "vercel-ai") {
     return null;
   }
-  const resolved = await resolveAgentModelConfig(settings, env);
+  const resolved = await resolveAgentModelConfig(settings);
   return llmConfigError(resolved);
 }
 
 async function getAgentModel(repository: {
   getSetting(key: string): Promise<string | null>;
 }): Promise<{
-  model: ReturnType<typeof createAgentModelFromEnv>;
+  model: ReturnType<typeof createAgentModel>;
   preferredLanguage: string | undefined;
   qualityPreference: "high" | "medium" | undefined;
 }> {
@@ -2307,8 +2059,8 @@ async function getAgentModel(repository: {
   const qualityPreference = await getQualityPreference(repository);
 
   // Resolve the live model config the SAME way the test action does (shared
-  // resolver) — DB-first, then .env. No built-in default endpoint.
-  const resolved = await resolveAgentModelConfig(repository, env);
+  // resolver) — Settings page (DB) only. No built-in default endpoint.
+  const resolved = await resolveAgentModelConfig(repository);
   const { apiKey, baseURL, modelId } = resolved;
   // Fail-fast pre-check (issue #49): on the live (vercel-ai) path, if baseURL or
   // modelId is missing the run would die on its first model call (or hit the
@@ -2368,24 +2120,20 @@ function storageDirectoryIdForCandidate(_candidateId: string): string {
 }
 
 function storageParentDirectoryId(): string {
-  return (
-    process.env.MEDIA_TRACK_TV_PARENT_CID ??
-    process.env.MEDIA_TRACK_115_TEST_ROOT_CID ??
-    "fake_library_root"
-  );
+  // 目录落点只认连接时建的树（DB CID，目录名可用 MEDIA_TRACK_LIBRARY_*_DIR 定制）。
+  // 115 直连 env（TEST_ROOT_CID 等）已全部移除（2026-09-18）：fake 模式用假根。
+  return "fake_library_root";
 }
 
-/**
- * Separate 115 landing parent for anime. Falls back to the TV parent when
- * MEDIA_TRACK_ANIME_PARENT_CID is unset, so anime simply co-locates with TV
- * until a dedicated Anime directory is configured.
- */
+/** Anime landing parent — co-locates with TV unless the connected drive's
+ *  provisioned tree has a dedicated Anime dir (creds.animeCid, checked first
+ *  by getWorkerStorageParents). */
 function animeParentDirectoryId(): string {
-  return process.env.MEDIA_TRACK_ANIME_PARENT_CID ?? storageParentDirectoryId();
+  return storageParentDirectoryId();
 }
 
 function defaultQuality(): string {
-  return process.env.MEDIA_TRACK_DEFAULT_QUALITY ?? "4K";
+  return "4K";
 }
 
 export interface ForeignWorkFinding {
@@ -2433,37 +2181,18 @@ export async function importForeignWorkFiles(input: {
 }
 
 function moviesParentDirectoryId(): string {
-  return (
-    process.env.MEDIA_TRACK_MOVIES_PARENT_CID ??
-    process.env.MEDIA_TRACK_115_TEST_ROOT_CID ??
-    "fake_movies_root"
-  );
+  return "fake_movies_root";
 }
 
 // ---------------------------------------------------------------------------
-// 115 connection (QR login) — cookie lives in the DB once connected; the
-// repo-root .env PAN115_COOKIE remains the bootstrap fallback.
+// 115 connection (QR login) — cookie lives in the DB (connected_storage row)
+// once connected; env PAN115_COOKIE direct-connect was removed (2026-09-18).
 
 const PAN115_COOKIE_KEY = "pan115.cookie";
 const PAN115_META_KEY = "pan115.cookieMeta";
 
-let pan115CookieHydrated = false;
-
-/** DB cookie (newer truth from QR connect) wins over the .env bootstrap. */
-export async function hydratePan115CookieFromDb(): Promise<void> {
-  if (pan115CookieHydrated) {
-    return;
-  }
-  pan115CookieHydrated = true;
-  try {
-    const cookie = await getWorkflowRepository().getSetting(PAN115_COOKIE_KEY);
-    if (cookie) {
-      process.env.PAN115_COOKIE = cookie;
-    }
-  } catch (error) {
-    console.error(`[media-track] failed to hydrate 115 cookie from DB: ${String(error)}`);
-  }
-}
+// 115 直连移除后（2026-09-18）不再存在「DB cookie → env 镜像」这一步：
+// 执行器一律经 createExecutorForBrand 显式拿 connected_storage 的 cookie。
 
 /**
  * After unbinding a pan115 drive: drop the legacy global cookie mirror when it
@@ -2483,19 +2212,11 @@ export async function clearPan115GlobalMirrorForUnboundDrive(
       await repository.deleteSetting(PAN115_META_KEY);
     }
   }
-  const envCookie = (process.env.PAN115_COOKIE ?? "").trim();
-  if (envCookie) {
-    const envUid = parsePan115Uid(envCookie);
-    if (envUid === null || envUid === providerUid) {
-      delete process.env.PAN115_COOKIE;
-    }
-  }
-  pan115CookieHydrated = false;
 }
 
 export interface Pan115ConnectionStatus {
   connected: boolean;
-  source: "qr" | "env" | "none";
+  source: "qr" | "none";
   userName: string | null;
   app: string | null;
   connectedAt: string | null;
@@ -2519,9 +2240,6 @@ export async function getPan115ConnectionStatus(): Promise<Pan115ConnectionStatu
       app: meta.app ?? null,
       connectedAt: meta.connectedAt ?? null,
     };
-  }
-  if (process.env.PAN115_COOKIE) {
-    return { connected: true, source: "env", userName: null, app: null, connectedAt: null };
   }
   return { connected: false, source: "none", userName: null, app: null, connectedAt: null };
 }
@@ -2707,17 +2425,16 @@ async function bindPan115ConnectedStorage(input: {
     });
     return;
   }
-  // insert: honor env CIDs if a deploy pre-configured them, else provision a fresh
-  // media-track/ tree under the 115 root. Provisioning is best-effort — a failure
-  // still stores the connection (worker falls back to env CIDs).
+  // insert: provision a fresh media-track/ tree under the 115 root (dir names
+  // customizable via MEDIA_TRACK_LIBRARY_*_DIR). Provisioning is best-effort —
+  // a failure still stores the connection (落点解析再提示重新连接建树)。
   let cids = {
-    rootCid: process.env.MEDIA_TRACK_115_TEST_ROOT_CID ?? null,
-    moviesCid: process.env.MEDIA_TRACK_MOVIES_PARENT_CID ?? null,
-    tvCid: process.env.MEDIA_TRACK_TV_PARENT_CID ?? null,
-    animeCid: process.env.MEDIA_TRACK_ANIME_PARENT_CID ?? null,
+    rootCid: null as string | null,
+    moviesCid: null as string | null,
+    tvCid: null as string | null,
+    animeCid: null as string | null,
   };
-  const hasEnvCids = Boolean(cids.tvCid && cids.moviesCid && cids.animeCid);
-  if (!hasEnvCids && process.env.MEDIA_TRACK_STORAGE_ADAPTER === "115") {
+  if (process.env.MEDIA_TRACK_STORAGE_ADAPTER === "115") {
     try {
       // Bootstrap (unrestricted) executor — a fresh drive has no write scope yet,
       // and the protected/env executor throws without one (the catch-22 that left
@@ -2740,7 +2457,7 @@ async function bindPan115ConnectedStorage(input: {
         animeCid: provisioned.animeCid,
       };
     } catch (error) {
-      console.error(`[media-track] 115 directory provision failed (will use env fallback): ${String(error)}`);
+      console.error(`[media-track] 115 directory provision failed (will use root fallback): ${String(error)}`);
     }
   }
   await repository.upsertConnectedStorage({
@@ -2782,6 +2499,8 @@ export async function completePan115QrLogin(input: {
   // global setting + env so the legacy env path keeps working. Multi-user accounts
   // do NOT pollute the shared global cookie.
   if (accountId === DEFAULT_ACCOUNT_ID) {
+    // 115 直连移除后（2026-09-18）不再镜像 env：驱动器一律以 connected_storage
+    // 为准，global cookie setting 仅保留给历史迁移路径（migrateLegacyCookie）。
     await repository.setSetting(PAN115_COOKIE_KEY, result.cookie);
     await repository.setSetting(
       PAN115_META_KEY,
@@ -2791,8 +2510,6 @@ export async function completePan115QrLogin(input: {
         connectedAt: new Date().toISOString(),
       }),
     );
-    process.env.PAN115_COOKIE = result.cookie;
-    pan115CookieHydrated = true;
   }
   return { userName: result.userName, app: result.app };
 }

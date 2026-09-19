@@ -7,7 +7,6 @@ import { ActivityNavBadge } from "./activity-nav-badge";
 import { NotificationsNavBadge } from "./notifications-nav-badge";
 import { SettingsAttentionBadge } from "./settings-attention-badge";
 import { WorkspaceSwitcherLoader } from "./workspace-switcher-loader";
-import { AccountIdentityLoader } from "./account-identity-loader";
 
 export function AppSidebar({
   active,
@@ -40,14 +39,6 @@ export function AppSidebar({
           static shell, and so the client switcher's useSearchParams() is allowed. */}
       <Suspense fallback={null}>
         <WorkspaceSwitcherLoader />
-      </Suspense>
-
-      {/* Account identity — mobile top-bar copy (desktop keeps the footer one).
-          Single-user/demo → AccountIdentityLoader returns null → empty. */}
-      <Suspense fallback={null}>
-        <div className="sidebar-top-identity">
-          <AccountIdentityLoader />
-        </div>
       </Suspense>
 
       <nav aria-label="主导航">
@@ -100,11 +91,6 @@ export function AppSidebar({
       </nav>
 
       <div className="sidebar-footer">
-        {/* Account identity (multi-user only) — who am I + 改密码/登出/账号管理. In
-            Suspense so its DB read never blocks the shell. */}
-        <Suspense fallback={null}>
-          <AccountIdentityLoader />
-        </Suspense>
         <Link
           className={`nav-item nav-secondary ${active === "activity" ? "is-active" : ""}`}
           href={globalNavHref("/activity", activeStorageId)}

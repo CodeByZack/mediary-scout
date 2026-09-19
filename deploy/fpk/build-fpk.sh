@@ -63,10 +63,22 @@ FNPACK_BIN="${FNPACK_BIN:-fnpack}"
 command -v "${FNPACK_BIN}" >/dev/null 2>&1 || { echo "fnpack 不存在: ${FNPACK_BIN}（本机 /usr/local/bin/fnpack，CI 由 workflow 下载）" >&2; exit 1; }
 echo "==> fnpack: ${FNPACK_BIN}"
 
-# ---- 0.7 打包模式：FPK_MODE（release 正式版 | test 测试版）----
+# ---- 0.7 运行模式：FPK_RUNTIME（normal 真 LLM+真网盘 | fake stub+假网盘+真 TMDB 搜索 | demo 只读演示）----
+# fake 模式：stub LLM + 假网盘 + 真实 TMDB 搜索（免费、无需 key），零配置零费用
+# 跑通真实剧集全流程，不碰真实网盘。demo 模式：固定示例库 + 只读门禁 + 种子数据。
+# normal（默认）：全量真实配置。
+FPK_RUNTIME="${FPK_RUNTIME:-normal}"
+case "${FPK_RUNTIME}" in
+    normal|fake|demo) ;;
+    *) echo "FPK_RUNTIME 必须是 normal、fake 或 demo，收到: ${FPK_RUNTIME}" >&2; exit 1 ;;
+esac
+echo "==> fpk runtime: ${FPK_RUNTIME}"
+
+# ---- 0.8 打包模式：FPK_MODE（release 正式版 | test 测试版）----
 # test 模式 = 换 appname 装成独立应用（mediary-scout-dev）：独立数据目录
 # /vol1/@appdata/mediary-scout-dev、独立端口 3334，装/卸都不碰正式版数据，
 # 适合反复试装验证（尤其是 CI 产物），正式版一直能用。
+# appname 带 runtime 后缀：mediary-scout-dev-fake / -demo / 无后缀=normal
 FPK_MODE="${FPK_MODE:-release}"
 case "${FPK_MODE}" in
     release)
@@ -82,20 +94,12 @@ case "${FPK_MODE}" in
     *)
         echo "FPK_MODE 必须是 release 或 test，收到: ${FPK_MODE}" >&2; exit 1 ;;
 esac
+# 追加 runtime 后缀到 appname（normal 不加）
+if [ "${FPK_RUNTIME}" != "normal" ]; then
+    APPNAME="${APPNAME}-${FPK_RUNTIME}"
+    DISPLAY_NAME="${DISPLAY_NAME} (${FPK_RUNTIME})"
+fi
 echo "==> fpk mode: ${FPK_MODE} (appname=${APPNAME}, service_port=${SERVICE_PORT})"
-
-# ---- 0.8 运行模式：FPK_RUNTIME（live 真 LLM+真网盘 | fake stub+假网盘，免费跑通流程）----
-# fake 模式与 preview（3100 全 fake）一致：不设 MEDIA_TRACK_AGENT_ADAPTER →
-# workflow 默认 fake/stub 确定性脚本（不调 LLM）；不设 MEDIA_TRACK_STORAGE_ADAPTER →
-# 默认 FakeStorageExecutor（假文件，不碰真网盘）；补 MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark
-# 避免夸克候选被类型过滤滤光（同 preview 配置）。其余（真 PanSou 搜索、真 TMDB 元数据、
-# 改名/入库/标记）走同一套真实代码，零费用。live 模式全量写回正式 env（防残留污染）。
-FPK_RUNTIME="${FPK_RUNTIME:-live}"
-case "${FPK_RUNTIME}" in
-    live|fake) ;;
-    *) echo "FPK_RUNTIME 必须是 live 或 fake，收到: ${FPK_RUNTIME}" >&2; exit 1 ;;
-esac
-echo "==> fpk runtime: ${FPK_RUNTIME}"
 
 # ---- 1. 正式构建（tsc workflow + next build standalone，约 1 分钟）----
 echo "==> [1/3] npm run build:web ..."
@@ -220,26 +224,49 @@ else
 fi
 
 # ---- 2.9 cmd/main 运行时环境随 FPK_RUNTIME 改写 ----
-# fake：注释掉真 LLM/真网盘两行（不设即走 stub + FakeStorageExecutor），补 quark 默认盘；
-# live：全量写回正式 env（含删掉可能残留的 quark 行），与 2.7/2.8 同样"每次全量写回"防残留。
+# 统一设 MEDIA_TRACK_MODE，运行时由 instrumentation.ts 解析为具体 adapter/demo 变量。
+# ⚠️ 必须插在 `CMD="cd ..."` 行之前：cmd/main 的 `case $1 in ... esac` 在文件末尾，
+#    用 `echo >>` 追加会落在 esac 之后、bash 执行到 case 分支结束就退出，永不执行。
+#    （2026-09-18 线上踩过：fake 包真实转存 + MEDIA_TRACK_MODE=undefined 双症状同源。
+#     cmd/main 顶部旧 export MEDIA_TRACK_STORAGE_ADAPTER=115 被 shell 正常导出 →
+#     真实 115 转存；末尾追加的 MODE 永不执行 → resolver 读到 undefined → 默认 normal。）
 CMD_MAIN="${FPK_DIR}/cmd/main"
 if [ -f "${CMD_MAIN}" ]; then
-    if [ "${FPK_RUNTIME}" = "fake" ]; then
-        # 1) 注释掉 vercel-ai / 115 两行（幂等：已注释的跳过，防止重复加 #）
-        sed -i "s/^export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/# export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/" "${CMD_MAIN}"
-        sed -i "s/^export MEDIA_TRACK_STORAGE_ADAPTER=115/# export MEDIA_TRACK_STORAGE_ADAPTER=115/" "${CMD_MAIN}"
-        # 2) 确保 quark 默认盘存在（幂等：已有则跳过）
-        if ! grep -q "^export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark" "${CMD_MAIN}"; then
-            sed -i "s/^# export MEDIA_TRACK_STORAGE_ADAPTER=115.*/&\\nexport MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark        # fake 模式默认盘，避免夸克候选被滤光（同 preview）/" "${CMD_MAIN}"
-        fi
-        echo "    cmd/main 已改为 fake 运行模式（stub agent + fake 网盘 + quark 默认盘）"
-    else
-        # live：恢复正式 env（幂等）
-        sed -i "s/^# export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai/" "${CMD_MAIN}"
-        sed -i "s/^# export MEDIA_TRACK_STORAGE_ADAPTER=115/export MEDIA_TRACK_STORAGE_ADAPTER=115/" "${CMD_MAIN}"
-        sed -i "/^export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=quark/d" "${CMD_MAIN}"
-        echo "    cmd/main 已改为 live 运行模式（vercel-ai agent + 115 网盘）"
+    # 1) 删除所有旧的 adapter/demo 独立变量行 + 残留的 MODE/quark 行（无论在哪个位置）
+    sed -i '/^export MEDIA_TRACK_STORAGE_ADAPTER=/d' "${CMD_MAIN}"
+    sed -i '/^export MEDIA_TRACK_WORKFLOW_ADAPTER=/d' "${CMD_MAIN}"
+    sed -i '/^export MEDIA_TRACK_AGENT_ADAPTER=/d' "${CMD_MAIN}"
+    sed -i '/^export MEDIA_TRACK_SEARCH_PROVIDER=/d' "${CMD_MAIN}"
+    sed -i '/^export MEDIA_TRACK_DEMO_MODE=/d' "${CMD_MAIN}"
+    sed -i '/^export NEXT_PUBLIC_MEDIA_TRACK_DEMO_MODE=/d' "${CMD_MAIN}"
+    sed -i '/^export MEDIA_TRACK_DEMO_SEED=/d' "${CMD_MAIN}"
+    sed -i '/^export MEDIA_TRACK_DEFAULT_STORAGE_BRAND=/d' "${CMD_MAIN}"
+    sed -i '/^export MEDIA_TRACK_MODE=/d' "${CMD_MAIN}"
+    sed -i '/^export MEDIA_TRACK_LIBRARY_ROOT_DIR=/d' "${CMD_MAIN}"
+    # 注释掉的旧 adapter 行（如果有）
+    sed -i '/^# export MEDIA_TRACK_AGENT_ADAPTER=/d' "${CMD_MAIN}"
+    sed -i '/^# export MEDIA_TRACK_STORAGE_ADAPTER=/d' "${CMD_MAIN}"
+
+    # 2) 构造要插入的运行时变量块，插到 `CMD="cd` 之前（幂等：残留行已在 1 删净）。
+    #    只有 MEDIA_TRACK_MODE 一行：resolver 全部派生（adapter/search/demo）。
+    #    ⚠️ 不设 MEDIA_TRACK_DEFAULT_STORAGE_BRAND —— fake 模式存储是 FakeStorageExecutor
+    #    （品牌无关），driveProvider 仅作日志标签且有默认 "quark" 兜底，设了是纯噪声。
+    RUNTIME_BLOCK="export MEDIA_TRACK_MODE=${FPK_RUNTIME}"
+    # 测试版 + normal 运行时：网盘根目录名默认加 -dev 后缀，实测时一眼区分
+    # 是哪个包建的树（正式版=「Mediary Scout」，测试版=「Mediary Scout-dev」）。
+    # 用户在 .env / 部署配置里显式设置过则尊重其值（:- 兜底不覆盖）。
+    if [ "${FPK_MODE}" = "test" ] && [ "${FPK_RUNTIME}" = "normal" ]; then
+        RUNTIME_BLOCK="${RUNTIME_BLOCK}
+export MEDIA_TRACK_LIBRARY_ROOT_DIR=\${MEDIA_TRACK_LIBRARY_ROOT_DIR:-Mediary Scout-dev}"
     fi
+    awk -v block="${RUNTIME_BLOCK}" '
+        /^CMD="/ && !inserted {
+            print block
+            inserted = 1
+        }
+        { print }
+    ' "${CMD_MAIN}" > "${CMD_MAIN}.tmp" && mv "${CMD_MAIN}.tmp" "${CMD_MAIN}"
+    echo "    cmd/main 已改为 ${FPK_RUNTIME} 运行模式（MEDIA_TRACK_MODE 已插入 CMD 之前）"
 else
     echo "    cmd/main 不存在，跳过 runtime 改写"
 fi
@@ -260,13 +287,13 @@ if [ "${FPK_MODE}" = "test" ]; then
 else
     FPK_BASE="mediary-scout"
 fi
+# 追加 runtime 后缀到 FPK_BASE（normal 不加）
+if [ "${FPK_RUNTIME}" != "normal" ]; then
+    FPK_BASE="${FPK_BASE}-${FPK_RUNTIME}"
+fi
 # issue #29 用户拍板(十轮):产物名带版本号——mediary-scout-<VERSION>-<ARCH>.fpk,
 # 与 manifest version / package.json 同步(CI 传 tag 去 v 前缀;本地缺省读 package.json)。
-if [ "${FPK_RUNTIME}" = "fake" ]; then
-    FPK_NAME="${FPK_BASE}-${VERSION}-fake-${ARCH}.fpk"
-else
-    FPK_NAME="${FPK_BASE}-${VERSION}-${ARCH}.fpk"
-fi
+FPK_NAME="${FPK_BASE}-${VERSION}-${ARCH}.fpk"
 
 rm -rf "${DIST_DIR}"
 mkdir -p "${DIST_DIR}"

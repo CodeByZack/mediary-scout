@@ -171,7 +171,7 @@ docker compose --project-directory . -f deploy/docker/docker-compose.yml up -d  
 ## 想跑真实获取还需要
 
 - **AI 模型**(设置 → AI 模型):填一个 OpenAI 兼容的 `baseURL / apiKey / modelId`——agent 靠它决策。不填则获取流程无法规划。
-- **115 目录 CID**(`.env` 或环境变量):`TV_SHOWS_CID` / `MOVIES_CID` / `ANIME_CID` 等落盘父目录。
+- **115 写盘范围 CID**(`.env` 或环境变量):`MEDIA_TRACK_115_TEST_ROOT_CID` 或 `MEDIA_TRACK_115_WRITE_SCOPE_CIDS`(落盘安全阀,二选一必填)。
 
 ## 可选增强
 

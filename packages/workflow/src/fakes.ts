@@ -33,11 +33,27 @@ export interface TransferOutcome {
 export class FakeResourceProvider implements ResourceProvider {
   private readonly keywordResults: Record<string, CandidateFixture[]>;
   private readonly keywordErrors: Record<string, string>;
+  /** Catch-all for keywords NOT in `keywordResults`. A function receives the
+   *  keyword so the fallback candidates can carry the searched title (used by the
+   *  fake runtime mode: real TMDB search + fake candidates for ANY title, so the
+   *  whole acquire→transfer flow runs end-to-end without config). When unset,
+   *  unknown keywords yield zero candidates (existing test behavior). */
+  private readonly defaultKeywordResult:
+    | CandidateFixture
+    | ((keyword: string) => CandidateFixture | CandidateFixture[])
+    | undefined;
   private nextSnapshotNumber = 1;
 
-  constructor(input: { keywordResults: Record<string, CandidateFixture[]>; keywordErrors?: Record<string, string> }) {
+  constructor(input: {
+    keywordResults: Record<string, CandidateFixture[]>;
+    keywordErrors?: Record<string, string>;
+    defaultKeywordResult?:
+      | CandidateFixture
+      | ((keyword: string) => CandidateFixture | CandidateFixture[]);
+  }) {
     this.keywordResults = input.keywordResults;
     this.keywordErrors = input.keywordErrors ?? {};
+    this.defaultKeywordResult = input.defaultKeywordResult;
   }
 
   // `workflowRunId` is accepted for contract parity with real providers but does
@@ -52,7 +68,22 @@ export class FakeResourceProvider implements ResourceProvider {
 
     const snapshotId = `snapshot_${this.nextSnapshotNumber}`;
     this.nextSnapshotNumber += 1;
-    const fixtures = this.keywordResults[input.keyword] ?? [];
+    const configured = this.keywordResults[input.keyword];
+    let fixtures: CandidateFixture[];
+    if (configured !== undefined) {
+      fixtures = configured;
+    } else if (this.defaultKeywordResult !== undefined) {
+      // Catch-all: fabricate candidate(s) carrying the searched keyword as their
+      // title so the fake runtime can run the acquire→transfer flow for any real
+      // (TMDB-searched) title without real cloud-drive candidates.
+      const fallback =
+        typeof this.defaultKeywordResult === "function"
+          ? this.defaultKeywordResult(input.keyword)
+          : this.defaultKeywordResult;
+      fixtures = Array.isArray(fallback) ? fallback : [fallback];
+    } else {
+      fixtures = [];
+    }
     const candidates: ResourceCandidate[] = fixtures.map((fixture, index) => ({
       id: `${snapshotId}_candidate_${index + 1}`,
       snapshotId,
@@ -81,6 +112,12 @@ export class FakeStorageExecutor implements StorageExecutor {
    *  makes the fake drive usable for end-to-end previews of the rename flow
    *  without a real 115/quark cookie. Unset ⇒ unknown candidates fail (tests). */
   private readonly defaultTransferOutcome: TransferOutcome | undefined;
+  /** Movie-shaped fallback for the fake runtime mode: when a transfer targets a
+   *  staging dir under one of these roots (a MOVIE task's landing), the drive
+   *  answers with `movieTransferOutcome` (one film file) instead of the TV
+   *  multi-episode dump. Unset (all tests) ⇒ behavior is unchanged. */
+  private readonly movieStagingRoots: string[];
+  private readonly movieTransferOutcome: TransferOutcome | undefined;
   private readonly nestedDirectories: Set<string>;
   private nextDirectoryNumber = 1;
   private nextTransferNumber = 1;
@@ -93,6 +130,8 @@ export class FakeStorageExecutor implements StorageExecutor {
     directories?: Record<string, VerifiedFile[]>;
     transferOutcomes?: Record<string, TransferOutcome>;
     defaultTransferOutcome?: TransferOutcome;
+    movieStagingRoots?: string[];
+    movieTransferOutcome?: TransferOutcome;
     nestedDirectories?: Set<string>;
     packageTrees?: Record<string, FakePackageTreeFile[]>;
     unparsedFiles?: Record<string, UnparsedVideoFile[]>;
@@ -117,6 +156,8 @@ export class FakeStorageExecutor implements StorageExecutor {
     );
     this.transferOutcomes = cloneTransferOutcomes(input.transferOutcomes ?? {});
     this.defaultTransferOutcome = input.defaultTransferOutcome;
+    this.movieStagingRoots = input.movieStagingRoots ?? [];
+    this.movieTransferOutcome = input.movieTransferOutcome;
     this.nestedDirectories = new Set(input.nestedDirectories ?? []);
   }
 
@@ -191,7 +232,12 @@ export class FakeStorageExecutor implements StorageExecutor {
     directoryId: string;
     candidate: ResourceCandidate;
   }): Promise<TransferAttempt> {
+    // Fake-mode movie shape: a landing under a movie root gets the single-film
+    // outcome (TV dump would never pass the movie landing check). Candidate-keyed
+    // outcomes still win for explicit test fixtures on non-movie dirs.
+    const movieTarget = this.movieStagingRoots.some((root) => input.directoryId.startsWith(root));
     const outcome =
+      (movieTarget ? this.movieTransferOutcome : undefined) ??
       this.transferOutcomes[input.candidate.id] ??
       this.defaultTransferOutcome ?? {
         status: "failed",

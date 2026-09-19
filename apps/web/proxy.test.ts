@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { proxy } from "./proxy";
 import type { NextRequest } from "next/server";
 
@@ -11,23 +11,9 @@ import type { NextRequest } from "next/server";
  *  - 远程 + 无 session 却放行 → 用户看到空数据页而不是登录页（体验坏）
  *  - 局域网被误判成需登录 → 本地用户凭空多一道门（回归）
  *
- * 现行规则只有两个输入：是否 (多用户 || 远程)，以及有没有 session。
+ * 现行规则只有两个输入：是否远程，以及有没有 session。
  * proxy 不再读 `mt_auth_required`，「有没有设过密码」不参与任何门禁判定。
  */
-
-// 本套件断言的是单用户行为。必须显式关掉多用户开关：若被 runner 设置或从
-// 别的测试文件泄漏进来，proxy 会走「处处门禁」分支，断言就在悄悄测另一件事。
-const prevMultiUser = process.env.MEDIA_TRACK_MULTI_USER;
-beforeAll(() => {
-  delete process.env.MEDIA_TRACK_MULTI_USER;
-});
-afterAll(() => {
-  if (prevMultiUser !== undefined) {
-    process.env.MEDIA_TRACK_MULTI_USER = prevMultiUser;
-  } else {
-    delete process.env.MEDIA_TRACK_MULTI_USER;
-  }
-});
 
 const makeRequest = (opts: {
   path?: string;
@@ -114,19 +100,6 @@ describe("proxy gate — single-user mode (multi-user off)", () => {
   });
 });
 
-describe("proxy gate — multi-user mode", () => {
-  it("多用户：无 session 一律重定向，与来源和任何残留 cookie 无关", () => {
-    process.env.MEDIA_TRACK_MULTI_USER = "1";
-    try {
-      expect(redirectsToLogin(makeRequest({}))).toBe(true); // LAN 也要登录
-      expect(redirectsToLogin(makeRequest({ cf: true }))).toBe(true);
-      expect(redirectsToLogin(makeRequest({ staleAuthCookie: true }))).toBe(true);
-      expect(redirectsToLogin(makeRequest({ session: true }))).toBe(false);
-    } finally {
-      delete process.env.MEDIA_TRACK_MULTI_USER;
-    }
-  });
-});
 
 /**
  * Next 16 Server Actions CSRF 修复：反代把 x-forwarded-host 写成内网地址，与浏览器

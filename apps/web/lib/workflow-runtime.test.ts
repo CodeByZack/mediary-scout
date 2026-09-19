@@ -19,7 +19,6 @@ import {
   TMDB_BASE_URL_SETTING_KEY,
 } from "./workflow-runtime";
 
-
 function repoWith(value: string | null) {
   return { getSetting: async () => value };
 }
@@ -99,7 +98,7 @@ describe("acquireLlmPreflightError (点击获取时的 LLM 预检)", () => {
     expect(message).toBeNull();
   });
 
-  it("live (vercel-ai) + config from env (no DB) → null", async () => {
+  it("live (vercel-ai) + config in env only (no DB) → error (env fallback removed 2026-09-18)", async () => {
     const message = await acquireLlmPreflightError({
       settings: unconfigured,
       env: {
@@ -108,7 +107,7 @@ describe("acquireLlmPreflightError (点击获取时的 LLM 预检)", () => {
         AGENT_MODEL_ID: "env-model",
       } as unknown as NodeJS.ProcessEnv,
     });
-    expect(message).toBeNull();
+    expect(message).toContain("AI");
   });
 });
 
@@ -133,34 +132,28 @@ describe("getQualityPreference", () => {
 });
 
 describe("getTmdbAccesses", () => {
-  it("puts the user key first, then env token (no proxy fallback)", async () => {
-    const accesses = await getTmdbAccesses(
-      repoMap({ [TMDB_API_KEY_SETTING_KEY]: "userkey" }),
-      { TMDB_READ_TOKEN: "envkey" } as unknown as NodeJS.ProcessEnv,
-    );
-    expect(accesses.map((a) => a.readToken)).toEqual(["userkey", "envkey"]);
+  it("builds the access from the Settings-page key (direct TMDB default)", async () => {
+    const accesses = await getTmdbAccesses(repoMap({ [TMDB_API_KEY_SETTING_KEY]: "userkey" }));
+    expect(accesses.map((a) => a.readToken)).toEqual(["userkey"]);
     expect(accesses[0]?.baseURL).toBe("https://api.themoviedb.org/3");
   });
 
-  it("uses custom base URL from settings when provided", async () => {
+  it("uses the custom proxy base URL from settings when provided", async () => {
     const accesses = await getTmdbAccesses(
       repoMap({ [TMDB_API_KEY_SETTING_KEY]: "userkey", [TMDB_BASE_URL_SETTING_KEY]: "https://proxy.example" }),
-      {} as NodeJS.ProcessEnv,
     );
     expect(accesses.map((a) => a.readToken)).toEqual(["userkey"]);
     expect(accesses[0]?.baseURL).toBe("https://proxy.example");
   });
 
-  it("omits the user access when no key is set, keeping env only", async () => {
-    const accesses = await getTmdbAccesses(
-      repoMap({}),
-      { TMDB_READ_TOKEN: "envkey" } as unknown as NodeJS.ProcessEnv,
-    );
-    expect(accesses.map((a) => a.readToken)).toEqual(["envkey"]);
+  it("env TMDB_READ_TOKEN no longer feeds any access (#38, removed 2026-09-18)", async () => {
+    // env token channel deleted — an env var alone must NOT produce an access.
+    const accesses = await getTmdbAccesses(repoMap({}));
+    expect(accesses).toHaveLength(0);
   });
 
   it("returns empty array when nothing is configured", async () => {
-    const accesses = await getTmdbAccesses(repoMap({}), {} as NodeJS.ProcessEnv);
+    const accesses = await getTmdbAccesses(repoMap({}));
     expect(accesses).toHaveLength(0);
   });
 });
@@ -189,6 +182,12 @@ describe("getProwlarrConfig", () => {
 });
 
 describe("movieTargetFromTmdbId (demo provider mode — movie poster enrichment)", () => {
+  beforeEach(() => {
+    // 搜索源不再有独立变量：demo 模式（DEMO_MODE=1）走固定示例库，其余走真实 TMDB。
+    vi.stubEnv("MEDIA_TRACK_DEMO_MODE", "1");
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
   it("resolves a demo movie candidate carrying its poster", async () => {
     const target = await movieTargetFromTmdbId(1311031); // 我的僵尸女儿 — demo movie candidate
     expect(target?.title.type).toBe("movie");
@@ -537,12 +536,12 @@ describe("workerHasConfiguredDrive (C1: any account's drive counts)", () => {
     expect(await workerHasConfiguredDrive()).toBe(true);
   });
 
-  it("env PAN115_COOKIE set → true (legacy bootstrap)", async () => {
+  it("env PAN115_COOKIE alone → false (direct-connect removed 2026-09-18)", async () => {
     process.env.MEDIA_TRACK_STORAGE_ADAPTER = "115";
     process.env.PAN115_COOKIE = "UID=1;CID=2;SEID=3";
     vi.resetModules();
     const { workerHasConfiguredDrive } = await import("./workflow-runtime");
-    expect(await workerHasConfiguredDrive()).toBe(true);
+    expect(await workerHasConfiguredDrive()).toBe(false);
   });
 
   it("fresh deploy (adapter 115, no cookie, no drives) → false", async () => {
@@ -550,7 +549,7 @@ describe("workerHasConfiguredDrive (C1: any account's drive counts)", () => {
     expect(await rt.workerHasConfiguredDrive()).toBe(false);
   });
 
-  it("drive on a non-default account → true (multi-user must not starve the queue)", async () => {
+  it("drive on a non-default account → true (must not starve the queue)", async () => {
     const rt = await boot();
     const repo = rt.getWorkflowRepository();
     await repo.createAccount({
@@ -586,26 +585,22 @@ describe("workerHasConfiguredDrive (C1: any account's drive counts)", () => {
 });
 
 describe("requireAuthenticatedAccountId (C2: refuse acct_unauthenticated writes)", () => {
-  const prevMulti = process.env.MEDIA_TRACK_MULTI_USER;
 
   afterEach(() => {
-    if (prevMulti === undefined) delete process.env.MEDIA_TRACK_MULTI_USER;
-    else process.env.MEDIA_TRACK_MULTI_USER = prevMulti;
     vi.resetModules();
     vi.doUnmock("next/headers");
   });
 
   it("single-user → returns acct_default (unchanged)", async () => {
-    delete process.env.MEDIA_TRACK_MULTI_USER;
     vi.resetModules();
     const { requireAuthenticatedAccountId } = await import("./workflow-runtime");
     expect(await requireAuthenticatedAccountId()).toBe("acct_default");
   });
 
-  it("multi-user + no session cookie → throws UnauthenticatedAccountError", async () => {
-    process.env.MEDIA_TRACK_MULTI_USER = "1";
+  it("remote + no session cookie → throws UnauthenticatedAccountError", async () => {
     vi.resetModules();
     vi.doMock("next/headers", () => ({
+      headers: async () => new Headers({ "cf-ray": "x" }),
       cookies: async () => ({ get: () => undefined }),
     }));
     const { requireAuthenticatedAccountId, UnauthenticatedAccountError, UNAUTHENTICATED_ACCOUNT_ID, getCurrentAccountId } =
@@ -615,10 +610,10 @@ describe("requireAuthenticatedAccountId (C2: refuse acct_unauthenticated writes)
     await expect(requireAuthenticatedAccountId()).rejects.toThrow(/未登录/);
   });
 
-  it("queue/reserve write paths refuse multi-user unauthenticated as unsupported", async () => {
-    process.env.MEDIA_TRACK_MULTI_USER = "1";
+  it("queue/reserve write paths refuse remote unauthenticated as unsupported", async () => {
     vi.resetModules();
     vi.doMock("next/headers", () => ({
+      headers: async () => new Headers({ "cf-ray": "x" }),
       cookies: async () => ({ get: () => undefined }),
     }));
     const {

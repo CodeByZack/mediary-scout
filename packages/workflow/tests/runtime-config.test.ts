@@ -51,7 +51,9 @@ describe("docker-compose.yml web service config", () => {
     };
     const webEnv = compose.services.web.environment;
     expect(webEnv).toBeTruthy();
-    expect(webEnv.MEDIA_TRACK_AGENT_ADAPTER).toBeDefined();
+    // 统一运行模式：compose 只设 MEDIA_TRACK_MODE（normal），adapter/search/demo
+    // 由 instrumentation 的 runtime-mode resolver 派生。
+    expect(webEnv.MEDIA_TRACK_MODE).toBeDefined();
     expect(() => validateRuntimeConfig(webEnv)).not.toThrow();
   });
 });

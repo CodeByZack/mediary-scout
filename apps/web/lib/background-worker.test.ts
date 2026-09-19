@@ -54,7 +54,7 @@ describe("drainQueueOnce — the in-process queue drainer (one tick)", () => {
 
   // Fresh instance with no drive connected yet: the worker can't acquire anywhere,
   // so it must skip BOTH drain and sweep QUIETLY — not call them and let them throw
-  // "PAN115_COOKIE is required" every tick, which spammed the logs and made new users
+  // "115 网盘未连接" every tick, which spammed the logs and made new users
   // think the deploy was broken.
   it("skips drain AND sweep quietly when no drive is configured", async () => {
     const runNext = vi.fn(async () => ({ status: "idle" as const }));

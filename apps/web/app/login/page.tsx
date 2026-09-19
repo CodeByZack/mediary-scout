@@ -1,35 +1,19 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { HelpCircle, LoaderCircle } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 
 /**
- * §7 P1 login / register, with a context-aware CLAIM screen. Only reachable when
- * MEDIA_TRACK_MULTI_USER=1. On an UNCLAIMED instance (`/api/auth/bootstrap` →
- * needsClaim) the page becomes a claim screen: it registers the first user, which
- * adopts the seeded acct_default (keeping any existing library), and the copy makes
- * that explicit (接管 if a library already exists, otherwise 创建站主). Once claimed,
- * it's the normal login + open self-registration.
+ * 单用户登录 / 设置密码。
  *
- * 单用户 + 尚未设密码（`singleUser && passwordSet === false`）是**设置密码**屏。
- * 远程访问现在无条件需要 session（Cloudflare Access 已移除，未设密码不再等于开放），
- * 所以能走到这里的远程站主手上没有任何密码可输——必须就地设一个，否则被锁在外面。
- * 表单打 `POST /api/auth/password`：该端点在「还没有密码」时不要求认证
- * （见 app/api/auth/password/route.ts），设置成功后再登录换取 session。
+ * 远程访问无条件需要 session。未设密码的实例远程会被挡在这里，
+ * 页面上提供设置密码表单——设完密码再登录换取 session。
  */
 export default function LoginPage() {
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [whyOpen, setWhyOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
-  const [bootstrap, setBootstrap] = useState<{
-    needsClaim: boolean;
-    hasExistingLibrary: boolean;
-    singleUser?: boolean;
-    passwordSet?: boolean;
-  } | null>(null);
+  const [bootstrap, setBootstrap] = useState<{ passwordSet?: boolean } | null>(null);
 
   useEffect(() => {
     fetch("/api/auth/bootstrap")
@@ -38,15 +22,7 @@ export default function LoginPage() {
       .catch(() => setBootstrap(null));
   }, []);
 
-  const claiming = bootstrap?.needsClaim === true;
-  // 单用户实例只有 acct_default 一个账号：用户名对最终用户不可见，
-  // 只渲染密码框，且没有「创建账号」这回事。
-  const singleUser = bootstrap?.singleUser === true;
-  // 单用户且还没有密码 → 设置密码屏（而不是登录屏）。
-  const settingPassword = singleUser && bootstrap?.passwordSet === false;
-  // While unclaimed, only registration (→ adopt acct_default) is possible.
-  // 单用户永远是登录（只输密码），没有注册这条路。
-  const effectiveMode: "login" | "register" = singleUser ? "login" : claiming ? "register" : mode;
+  const settingPassword = bootstrap?.passwordSet === false;
 
   /** 首次设置访问密码，然后立刻用它登录换 session，最后回媒体库。 */
   const submitNewPassword = () => {
@@ -63,11 +39,10 @@ export default function LoginPage() {
         return;
       }
       // 设完密码，远程这条路仍然需要 session：顺手登录，免得用户再输一次。
-      // 登录失败（例如限流）也不算致命——密码已经设好，跳回首页会被引导到登录屏。
       await fetch("/api/auth/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ username: "", password }),
+        body: JSON.stringify({ password }),
       }).catch(() => undefined);
       window.location.href = "/";
     });
@@ -76,10 +51,10 @@ export default function LoginPage() {
   const submit = () => {
     setError(null);
     startTransition(async () => {
-      const res = await fetch(`/api/auth/${effectiveMode}`, {
+      const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ password }),
       });
       if (res.ok) {
         window.location.href = "/";
@@ -90,37 +65,11 @@ export default function LoginPage() {
     });
   };
 
-  const title = singleUser
-    ? bootstrap?.passwordSet
-      ? "输入密码"
-      : "设置访问密码"
-    : claiming
-      ? bootstrap?.hasExistingLibrary
-        ? "接管这台实例"
-        : "创建站主账号"
-      : mode === "login"
-        ? "登录"
-        : "创建账号";
-  const note = singleUser
-    ? bootstrap?.passwordSet
-      ? "这台实例已设置访问密码。局域网内无需登录，从外网访问需要输入密码。"
-      : "这台实例已开启外网访问，但还没有设置访问密码。任何人只要知道这个网址就能进来，看到你的媒体库、网盘凭据和全部设置。现在设一个密码把它锁上——局域网内依旧免登录。"
-    : claiming
-    ? bootstrap?.hasExistingLibrary
-      ? "这台实例已有媒体库。设置站主用户名 + 密码来接管它——你的库和网盘都会原样归你。"
-      : "你是第一个用户。这个账号将成为站主，拥有管理权限。"
-    : mode === "login"
-      ? "登录以访问你的媒体库"
-      : "创建一个本地账号开始使用";
-  const buttonText = settingPassword
-    ? "设置密码并进入"
-    : singleUser
-      ? "进入"
-      : claiming
-        ? "接管并进入"
-        : mode === "login"
-          ? "登录"
-          : "创建并登录";
+  const title = settingPassword ? "设置访问密码" : "输入密码";
+  const note = settingPassword
+    ? "这台实例已开启外网访问，但还没有设置访问密码。任何人只要知道这个网址就能进来，看到你的媒体库、网盘凭据和全部设置。现在设一个密码把它锁上——局域网内依旧免登录。"
+    : "这台实例已设置访问密码。局域网内无需登录，从外网访问需要输入密码。";
+  const buttonText = settingPassword ? "设置密码并进入" : "进入";
 
   return (
     <main style={{ maxWidth: 360, margin: "14vh auto", padding: "0 20px" }}>
@@ -142,29 +91,15 @@ export default function LoginPage() {
             }
           }}
         >
-          {singleUser ? null : (
-            <div className="setting-row" style={{ marginBottom: 10 }}>
-              <input
-                className="setting-control"
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                placeholder="用户名"
-                aria-label="用户名"
-                autoComplete="username"
-              />
-            </div>
-          )}
           <div className="setting-row" style={{ marginBottom: 14 }}>
             <input
               type="password"
               className="setting-control"
-              value={password}
+              value="password"
               onChange={(event) => setPassword(event.target.value)}
               placeholder={settingPassword ? "设置密码（至少 6 位）" : "密码"}
               aria-label={settingPassword ? "设置访问密码" : "密码"}
-              autoComplete={
-                settingPassword || effectiveMode === "register" ? "new-password" : "current-password"
-              }
+              autoComplete={settingPassword ? "new-password" : "current-password"}
             />
           </div>
           {error ? (
@@ -181,74 +116,6 @@ export default function LoginPage() {
             {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : buttonText}
           </button>
         </form>
-
-        {!claiming && !singleUser && mode === "register" ? (
-          <div style={{ marginTop: 14 }}>
-            <span
-              role="note"
-              tabIndex={0}
-              onMouseEnter={() => setWhyOpen(true)}
-              onMouseLeave={() => setWhyOpen(false)}
-              onFocus={() => setWhyOpen(true)}
-              onBlur={() => setWhyOpen(false)}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                fontSize: 12,
-                color: "var(--text-muted, #9a9a9a)",
-                cursor: "help",
-              }}
-            >
-              <HelpCircle size={13} aria-hidden />
-              为什么我需要创建账号？
-            </span>
-            {whyOpen ? (
-              <p
-                className="panel-note"
-                style={{
-                  marginTop: 8,
-                  textAlign: "left",
-                  lineHeight: 1.7,
-                  background: "rgba(255,255,255,0.04)",
-                  border: "1px solid var(--border, #2a2a2a)",
-                  borderRadius: 8,
-                  padding: "10px 12px",
-                }}
-              >
-                这个站点支持<strong>多人共用</strong>。注册账号后，你可以绑定<strong>自己的</strong> 115
-                网盘，拥有一份只属于你的媒体库——你的获取记录、收藏都与其他用户互不可见。和家人或朋友合用
-                同一个站点时，各自注册、各连各的 115 即可。
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-
-        {/* While unclaimed there is nobody to log in as, so hide the toggle.
-            Single-user has exactly one account, so registration is meaningless. */}
-        {!claiming && !singleUser ? (
-          <p className="panel-note" style={{ marginTop: 16 }}>
-            {mode === "login" ? "还没有账号？" : "已有账号？"}{" "}
-            <button
-              type="button"
-              onClick={() => {
-                setMode(mode === "login" ? "register" : "login");
-                setError(null);
-                setWhyOpen(false);
-              }}
-              style={{
-                background: "none",
-                border: "none",
-                color: "var(--accent, #1db954)",
-                cursor: "pointer",
-                padding: 0,
-                font: "inherit",
-              }}
-            >
-              {mode === "login" ? "创建账号" : "去登录"}
-            </button>
-          </p>
-        ) : null}
       </div>
     </main>
   );

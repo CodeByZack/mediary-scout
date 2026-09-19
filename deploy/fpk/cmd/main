@@ -37,11 +37,11 @@ export NODE_ENV=production
 export HOSTNAME=0.0.0.0
 export PORT="${TRIM_SERVICE_PORT:-3333}"          # manifest service_port=3333，避开 docker 3000 / preview 3100
 export MEDIA_TRACK_SQLITE_PATH="${TRIM_PKGVAR}/mediary.db"
-export MEDIA_TRACK_WORKFLOW_ADAPTER=pansou        # 官方源（so.252035.xyz），无需自建容器
-export MEDIA_TRACK_SEARCH_PROVIDER=tmdb
-export MEDIA_TRACK_AGENT_ADAPTER=vercel-ai        # pansou+115 必需，见 compose 注释
-export MEDIA_TRACK_STORAGE_ADAPTER=115            # 对齐旧正式配置；可在下方按需修改
-export MEDIA_TRACK_DEMO_SEED=0                    # 与 compose 一致：非演示环境也不种数据
+# 运行模式由 build-fpk.sh 在此行下方注入（插到 CMD 之前）：
+#   MEDIA_TRACK_MODE=normal|fake|demo
+# instrumentation.ts 启动时经 runtime-mode.ts 统一解析为
+#   STORAGE/WORKFLOW/AGENT_ADAPTER + DEMO_MODE/DEMO_SEED。
+# 勿再手写独立的 adapter/demo 变量（会与 MODE 解析结果冲突）。
 
 # 未设置（对齐 compose 的缺省/可选行为）：
 #   PANSOU_BASE_URL          —— 不设即用官方源默认值（设置页可改）

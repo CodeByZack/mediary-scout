@@ -12,25 +12,16 @@ import { getWorkflowRepository } from "../workflow-runtime";
 describe("getAgentApiToken", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete process.env.MEDIA_TRACK_AGENT_TOKEN;
   });
 
-  it("prefers the env token over the persisted value", async () => {
-    process.env.MEDIA_TRACK_AGENT_TOKEN = "env-token";
-    (getWorkflowRepository as ReturnType<typeof vi.fn>).mockReturnValue({
-      getSetting: vi.fn(async () => "db-token"),
-    });
-    expect(await getAgentApiToken()).toBe("env-token");
-  });
-
-  it("falls back to the persisted app_settings value when env is unset", async () => {
+  it("reads the persisted app_settings value", async () => {
     (getWorkflowRepository as ReturnType<typeof vi.fn>).mockReturnValue({
       getSetting: vi.fn(async () => "db-token"),
     });
     expect(await getAgentApiToken()).toBe("db-token");
   });
 
-  it("returns null when neither env nor DB has a token", async () => {
+  it("returns null when no token is stored", async () => {
     (getWorkflowRepository as ReturnType<typeof vi.fn>).mockReturnValue({
       getSetting: vi.fn(async () => null),
     });
@@ -38,20 +29,25 @@ describe("getAgentApiToken", () => {
   });
 
   it("trims and treats whitespace-only as absent", async () => {
-    process.env.MEDIA_TRACK_AGENT_TOKEN = "   ";
     (getWorkflowRepository as ReturnType<typeof vi.fn>).mockReturnValue({
       getSetting: vi.fn(async () => "  db-token  "),
     });
     expect(await getAgentApiToken()).toBe("db-token");
+  });
+
+  it("returns null for whitespace-only stored value", async () => {
+    (getWorkflowRepository as ReturnType<typeof vi.fn>).mockReturnValue({
+      getSetting: vi.fn(async () => "   "),
+    });
+    expect(await getAgentApiToken()).toBeNull();
   });
 });
 
 describe("verifyAgentApiToken", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env.MEDIA_TRACK_AGENT_TOKEN = "secret-token-12345678";
     (getWorkflowRepository as ReturnType<typeof vi.fn>).mockReturnValue({
-      getSetting: vi.fn(async () => null),
+      getSetting: vi.fn(async () => "secret-token-12345678"),
     });
   });
 
@@ -80,7 +76,9 @@ describe("verifyAgentApiToken", () => {
   });
 
   it("returns false when no token is configured", async () => {
-    delete process.env.MEDIA_TRACK_AGENT_TOKEN;
+    (getWorkflowRepository as ReturnType<typeof vi.fn>).mockReturnValue({
+      getSetting: vi.fn(async () => null),
+    });
     expect(await verifyAgentApiToken("Bearer anything")).toBe(false);
   });
 });

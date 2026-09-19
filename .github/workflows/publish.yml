@@ -1,0 +1,46 @@
+# 一键发版·下篇：merge 即发布。
+# main 上任何 push 都会检查：若 package.json 的 version 相对上一个 commit 发生了变化、
+# 且 git tag v<新版本> 尚不存在 → 自动在该 merge commit 上打 tag 并 push。
+# tag push 触发既有 build-fpk.yml（release 模式双架构）+ 其 release job
+# （fpk 挂 GitHub Release）。
+#
+# 这是 release.yml「人工合并」路线的自动续段：人只点 merge，剩下的无人值守。
+# 手动往 main 直推版本改动（如果哪天规则放开）同样被这里兜住。
+name: Publish (merge 后自动打 tag)
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          fetch-tags: true
+
+      - name: Tag on version bump
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "tag ${TAG} 已存在，无需动作。"
+            exit 0
+          fi
+          PREV_VERSION=$(git show HEAD^:package.json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).version))" 2>/dev/null || echo "")
+          if [ "${PREV_VERSION}" = "${VERSION}" ]; then
+            echo "::notice::version ${TAG} 未打过 tag 但本次提交也没改版本号——跳过（若确要补 tag，手动 git tag && push）"
+            exit 0
+          fi
+          git config user.name "release-bot[bot]"
+          git config user.email "release-bot[bot]@users.noreply.github.com"
+          git tag "${TAG}" HEAD
+          git push origin "${TAG}"
+          echo "→ ${TAG} 已打在 ${GITHUB_SHA:0:7}（版本 ${PREV_VERSION:-?} → ${VERSION}），build-fpk(release) 即将起跑"

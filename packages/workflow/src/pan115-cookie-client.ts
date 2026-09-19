@@ -55,7 +55,7 @@ export class Pan115CookieClient implements Pan115StorageApi {
   constructor(options: Pan115CookieClientOptions) {
     const cookie = normalizeCookie(options.cookie);
     if (!cookie) {
-      throw new Error("PAN115_COOKIE is required to create Pan115CookieClient");
+      throw new Error("cookie is required to create Pan115CookieClient");
     }
     this.cookie = cookie;
     this.fetchJson = options.fetchJson ?? defaultFetchJson;
@@ -323,16 +323,6 @@ export class Pan115CookieClient implements Pan115StorageApi {
       Accept: "application/json, text/plain, */*",
     };
   }
-}
-
-export function createPan115CookieClientFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): Pan115CookieClient {
-  const cookie = normalizeCookie(env["PAN115_COOKIE"]);
-  if (!cookie) {
-    throw new Error("PAN115_COOKIE is required to create Pan115CookieClient");
-  }
-  return new Pan115CookieClient({ cookie });
 }
 
 async function defaultFetchJson(url: string, init: Pan115HttpInit): Promise<unknown> {

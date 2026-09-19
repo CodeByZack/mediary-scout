@@ -12,10 +12,21 @@ import {
 
 export interface ProtectedPan115CookieStorageExecutorFromEnvOptions {
   env?: Record<string, string | undefined>;
+  /** The 115 auth cookie — explicit (from the DB connected_storage row).
+   *  env PAN115_COOKIE direct-connect was removed 2026-09-18. */
+  cookie?: string;
+  /** The drive's provisioned category dir CIDs (write scope) — from the DB
+   *  connected_storage row. env CID direct-connect was removed 2026-09-18.
+   *  Optional here only for the bootstrap/legacy-callers path (defaults []). */
+  writeScopeDirectoryIds?: string[];
+  /** Extra read-only dirs (deploy-level guard). */
+  protectedDirectoryIds?: string[];
   fetchJson?: Pan115FetchJson;
   apiGuard?: Pan115ApiGuard;
   apiGuardOptions?: Pan115ApiGuardOptions;
   listLimit?: number;
+  /** The drive's Movies dir cid (movie-leaf safety guard); from DB creds, not env. */
+  moviesDirectoryId?: string;
 }
 
 export function createProtectedPan115CookieStorageExecutorFromEnv(
@@ -23,7 +34,7 @@ export function createProtectedPan115CookieStorageExecutorFromEnv(
 ): Storage115Executor {
   const env = options.env ?? process.env;
   const clientOptions: Pan115CookieClientOptions = {
-    cookie: env["PAN115_COOKIE"] ?? "",
+    cookie: options.cookie ?? "",
   };
   if (options.fetchJson !== undefined) {
     clientOptions.fetchJson = options.fetchJson;
@@ -35,12 +46,19 @@ export function createProtectedPan115CookieStorageExecutorFromEnv(
   const executorOptions: Parameters<typeof createProtectedStorage115Executor>[0] = {
     api,
     env,
+    writeScopeDirectoryIds: options.writeScopeDirectoryIds ?? [],
   };
+  if (options.protectedDirectoryIds !== undefined) {
+    executorOptions.protectedDirectoryIds = options.protectedDirectoryIds;
+  }
   if (options.apiGuard !== undefined) {
     executorOptions.apiGuard = options.apiGuard;
   }
   if (options.apiGuardOptions !== undefined) {
     executorOptions.apiGuardOptions = options.apiGuardOptions;
+  }
+  if (options.moviesDirectoryId !== undefined) {
+    executorOptions.moviesDirectoryId = options.moviesDirectoryId;
   }
   return createProtectedStorage115Executor(executorOptions);
 }

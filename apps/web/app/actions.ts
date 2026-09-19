@@ -404,53 +404,6 @@ export interface PushSettingsActionResult {
   sentTo?: string[];
 }
 
-export async function savePushSettingsAction(
-  settings: Record<string, string>,
-): Promise<PushSettingsActionResult> {
-  assertNotDemo();
-  try {
-    const { getWorkflowRepository, getCurrentAccountId } = await import("../lib/workflow-runtime");
-    const repository = getWorkflowRepository();
-    const accountId = await getCurrentAccountId();
-
-    const keys = ["bark", "serverchan", "wecom", "webhook"];
-    for (const key of keys) {
-      const value = settings[key]?.trim();
-      // Only write channels the user actually typed into. An empty field means
-      // "leave unchanged" — the saved key stays masked and intact, never wiped.
-      // Per-account (the worker reads each notification's account push config via
-      // the scoped facade: account → global → env).
-      if (value) {
-        await repository.setAccountSetting(accountId, `push_${key}`, value);
-      }
-    }
-    
-    return { success: true };
-  } catch (error) {
-    return { success: false, message: `保存失败：${String(error)}` };
-  }
-}
-
-const PUSH_CHANNEL_KEYS = ["bark", "serverchan", "wecom", "webhook"] as const;
-
-/**
- * Wipe a saved push channel. Empty-on-save means "leave unchanged" (so a masked
- * key is never clobbered), which left no way to REMOVE a channel — this is that
- * affordance. Storing "" makes the channel read back as unconfigured.
- */
-export async function clearPushChannelAction(key: string): Promise<PushSettingsActionResult> {
-  assertNotDemo();
-  if (!(PUSH_CHANNEL_KEYS as readonly string[]).includes(key)) {
-    return { success: false, message: "未知的推送渠道" };
-  }
-  try {
-    const { getWorkflowRepository, getCurrentAccountId } = await import("../lib/workflow-runtime");
-    await getWorkflowRepository().setAccountSetting(await getCurrentAccountId(), `push_${key}`, "");
-    return { success: true };
-  } catch (error) {
-    return { success: false, message: `清除失败：${String(error)}` };
-  }
-}
 
 export async function saveDailySweepTimesAction(times: string[]): Promise<PushSettingsActionResult> {
   assertNotDemo();
@@ -945,62 +898,4 @@ export async function clearProwlarrConfigAction(): Promise<PushSettingsActionRes
   }
 }
 
-export async function testPushNotificationAction(
-  settings: Record<string, string>,
-): Promise<PushSettingsActionResult> {
-  assertNotDemo();
-  try {
-    const { sendPushNotifications } = await import("@media-track/workflow");
-    const { getAccountScopedSettings, getCurrentAccountId } = await import("../lib/workflow-runtime");
-
-    // Per-account: read THIS account's saved push config (account → global), and
-    // send through the same scoped source so the test matches real delivery.
-    const repository = getAccountScopedSettings(await getCurrentAccountId());
-    const configFromDb: Record<string, string> = {};
-    for (const key of ["bark", "serverchan", "wecom", "webhook"]) {
-      const dbValue = await repository.getSetting(`push_${key}`);
-      const formValue = settings[key]?.trim();
-      configFromDb[key] = formValue || dbValue || "";
-    }
-
-    const sentTo = await sendPushNotifications({
-      repository,
-      notification: {
-        id: "test_" + Date.now(),
-        workflowRunId: "test",
-        kind: "test",
-        title: "📢 Media Track 测试通知",
-        body: "如果你收到这条消息，说明推送渠道配置成功！",
-        createdAt: new Date().toISOString(),
-      },
-      overrideConfig: configFromDb,
-    });
-    
-    return { success: true, sentTo };
-  } catch (error) {
-    return { success: false, message: `测试失败：${String(error)}` };
-  }
-}
-
-/** Self-service password change (multi-user). Verifies the current password,
- *  rotates the hash, revokes all sessions (caller must re-login). */
-export async function changePasswordAction(
-  current: string,
-  next: string,
-): Promise<{ ok: boolean; error?: string }> {
-  assertNotDemo();
-  const { getCurrentAccountId, changeOwnPassword } = await import("../lib/workflow-runtime");
-  return changeOwnPassword(await getCurrentAccountId(), current, next);
-}
-
-/** Owner-only reset of another account's password. The owner check is enforced
- *  inside resetUserPassword (server-side, not just hidden UI). */
-export async function resetUserPasswordAction(
-  targetAccountId: string,
-  newPassword: string,
-): Promise<{ ok: boolean; error?: string }> {
-  assertNotDemo();
-  const { getCurrentAccountId, resetUserPassword } = await import("../lib/workflow-runtime");
-  return resetUserPassword(await getCurrentAccountId(), targetAccountId, newPassword);
-}
 
